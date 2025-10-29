@@ -20,7 +20,12 @@ pub fn build(b: *std.Build) void {
 
     const gl = @import("zigglgen").generateBindingsModule(b, .{
         .api = .gl,
+        .profile = .core,
         .version = .@"4.6",
+    });
+    const zm = b.dependency("zm", .{
+        .target = target,
+        .optimize = optimize,
     });
     const client = b.addExecutable(.{
         .name = "client",
@@ -31,9 +36,10 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(client);
     client.root_module.linkSystemLibrary("SDL3", .{});
     client.root_module.addImport("gl", gl);
+    client.root_module.addImport("zm", zm.module("zm"));
+    b.installArtifact(client);
 
     const run_step = b.step("run", "run the client");
     const run_client = b.addRunArtifact(client);
