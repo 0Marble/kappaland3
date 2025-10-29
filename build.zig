@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .optimize = optimize,
             .target = target,
-            .root_source_file = b.path("src/server_main.zig"),
+            .root_source_file = b.path("server/main.zig"),
         }),
     });
     b.installArtifact(server);
@@ -18,16 +18,35 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse true);
     server.root_module.addOptions("Options", options);
 
-    const run_step = b.step("run", "run the server");
-    const run_server = b.addRunArtifact(server);
-    run_step.dependOn(&run_server.step);
+    const gl = @import("zigglgen").generateBindingsModule(b, .{
+        .api = .gl,
+        .version = .@"4.6",
+    });
+    const client = b.addExecutable(.{
+        .name = "client",
+        .root_module = b.createModule(.{
+            .optimize = optimize,
+            .target = target,
+            .root_source_file = b.path("client/main.zig"),
+            .link_libc = true,
+        }),
+    });
+    b.installArtifact(client);
+    client.root_module.linkSystemLibrary("SDL3", .{});
+    client.root_module.addImport("gl", gl);
+
+    const run_step = b.step("run", "run the client");
+    const run_client = b.addRunArtifact(client);
+    run_step.dependOn(&run_client.step);
     if (b.args) |args| {
-        run_server.addArgs(args);
+        run_client.addArgs(args);
     }
 
     const test_step = b.step("test", "run all tests");
-    const test_artifact = b.addTest(.{ .root_module = server.root_module });
-    b.installArtifact(test_artifact);
-    const run_tests = b.addRunArtifact(test_artifact);
-    test_step.dependOn(&run_tests.step);
+    inline for (.{ server.root_module, client.root_module }) |mod| {
+        const test_artifact = b.addTest(.{ .root_module = mod });
+        b.installArtifact(test_artifact);
+        const run_tests = b.addRunArtifact(test_artifact);
+        test_step.dependOn(&run_tests.step);
+    }
 }
