@@ -1,5 +1,5 @@
 const c = @import("c.zig").c;
-const Log = @import("Log.zig");
+const Log = @import("libmine").Log;
 const gl = @import("gl");
 
 fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {

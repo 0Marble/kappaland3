@@ -1,7 +1,7 @@
 const std = @import("std");
 const gl = @import("gl");
 const gl_call = @import("util.zig").gl_call;
-const Log = @import("Log.zig");
+const Log = @import("libmine").Log;
 
 vao: gl.uint,
 vbo: gl.uint,

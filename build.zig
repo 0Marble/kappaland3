@@ -4,6 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const lib = b.addLibrary(.{
+        .name = "mine",
+        .root_module = b.createModule(.{
+            .optimize = optimize,
+            .target = target,
+            .root_source_file = b.path("lib/root.zig"),
+        }),
+    });
+    b.installArtifact(lib);
+    const options = b.addOptions();
+    options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse true);
+    lib.root_module.addOptions("Options", options);
+
     const server = b.addExecutable(.{
         .name = "server",
         .root_module = b.createModule(.{
@@ -12,11 +25,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("server/main.zig"),
         }),
     });
+    server.root_module.addImport("libmine", lib.root_module);
     b.installArtifact(server);
-
-    const options = b.addOptions();
-    options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse true);
-    server.root_module.addOptions("Options", options);
 
     const gl = @import("zigglgen").generateBindingsModule(b, .{
         .api = .gl,
@@ -42,6 +52,7 @@ pub fn build(b: *std.Build) void {
     client.root_module.linkSystemLibrary("SDL3", .{});
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
+    client.root_module.addImport("libmine", lib.root_module);
     b.installArtifact(client);
 
     const run_step = b.step("run", "run the client");
@@ -52,7 +63,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const test_step = b.step("test", "run all tests");
-    inline for (.{ server.root_module, client.root_module }) |mod| {
+    inline for (.{ server.root_module, client.root_module, lib.root_module }) |mod| {
         const test_artifact = b.addTest(.{ .root_module = mod });
         b.installArtifact(test_artifact);
         const run_tests = b.addRunArtifact(test_artifact);
