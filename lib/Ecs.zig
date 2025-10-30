@@ -47,7 +47,6 @@ pub const EId = u64;
 
 pub const Error = error{
     ComponentAlreadyDefined,
-    ComponentTypeMismatch,
 } || std.mem.Allocator.Error;
 
 const DecodedId = struct {
@@ -164,8 +163,8 @@ const ComponentStore = struct {
         if (self.freelist.pop()) |idx| {
             return self.get(idx);
         } else {
-            const idx = self.data.items.len / self.info.size;
-            _ = try self.data.addManyAsSlice(ecs.gpa, self.info.size);
+            const idx = self.length();
+            _ = try self.data.addManyAsSlice(ecs.gpa, self.info.size.size);
             return self.get(idx);
         }
     }
@@ -271,7 +270,7 @@ const ComponentSet = struct {
                 if (self.dense.items.len <= id or self.dense.items[id] == 0) {
                     return null;
                 } else {
-                    return self.dense.items[id];
+                    return self.dense.items[id] - 1;
                 }
             },
         }
@@ -299,7 +298,11 @@ const ComponentSet = struct {
             },
             .dense => |id| {
                 if (self.dense.items.len <= id) {
-                    try self.dense.appendNTimes(ecs.gpa, 0, ecs.dense_components.items.len - self.dense.items.len);
+                    try self.dense.appendNTimes(
+                        ecs.gpa,
+                        0,
+                        ecs.dense_components.items.len - self.dense.items.len,
+                    );
                 }
                 self.dense.items[id] = idx + 1;
             },
@@ -434,6 +437,8 @@ pub fn deinit(self: *Self) void {
     self.entities.deinit(self.gpa);
     self.systems.deinit(self.gpa);
     self.component_names.deinit(self.gpa);
+    for (self.dense_components.items) |*s| s.deinit(self.gpa);
+    for (self.sparse_components.items) |*s| s.deinit(self.gpa);
     self.dense_components.deinit(self.gpa);
     self.sparse_components.deinit(self.gpa);
 }
@@ -464,7 +469,7 @@ pub fn register_component(
         break :blk info;
     } else blk: {
         const info = ComponentInfo{
-            .kind = ComponentKind.init(self.sparse_components.items.len, false),
+            .kind = ComponentKind.init(self.dense_components.items.len, false),
             .body_type = @typeInfo(Body),
             .size = .init(@sizeOf(Body), @alignOf(Body)),
             .name = static_name,
@@ -550,13 +555,20 @@ pub fn add_component(
     };
 
     if (Options.ecs_typecheck) {
-        std.debug.assert(T == store.info.body_type);
+        if (@typeInfo(T) != store.info.body_type) {
+            std.debug.panic("Ecs@{*}: failed to typecheck component {f}, expected {}, got {}", .{
+                self,
+                kind,
+                store.info.body_type,
+                std.meta.activeTag(@typeInfo(T)),
+            });
+        }
     }
 
     const ref = try store.add(self);
-    @memcpy(ref.data, std.mem.toBytes(body));
+    @memcpy(ref.data, std.mem.asBytes(&body));
     ref.parent.* = eid;
-    e.components.add(self, kind, ref.idx);
+    try e.components.add(self, kind, ref.idx);
 }
 
 pub fn remove_component(self: *Self, eid: EId, kind: ComponentKind) void {
@@ -588,7 +600,7 @@ pub fn has_component(self: *Self, eid: EId, kind: ComponentKind) bool {
     return e.components.get(self, kind) != null;
 }
 
-pub fn get_component(self: *Self, eid: EId, comptime T: type, kind: ComponentKind) ?T {
+pub fn get_component(self: *Self, eid: EId, comptime T: type, kind: ComponentKind) ?*T {
     const decoded = DecodedId.decode(eid);
     if (Options.ecs_logging) {
         Log.log(.debug, "Ecs@{*}: get component {f} of entity {f}", .{ self, kind, decoded });
@@ -604,14 +616,125 @@ pub fn get_component(self: *Self, eid: EId, comptime T: type, kind: ComponentKin
     const ref = store.get(idx);
 
     if (Options.ecs_typecheck) {
-        std.debug.assert(T == store.info.body_type);
-        std.debug.assert(ref.parent.* == eid);
+        if (@typeInfo(T) != store.info.body_type) {
+            std.debug.panic("Ecs@{*}: failed to typecheck component {f}, expected {}, got {}", .{
+                self,
+                kind,
+                store.info.body_type,
+                std.meta.activeTag(@typeInfo(T)),
+            });
+        }
+        if (ref.parent.* != eid) {
+            std.debug.panic("Ecs@{*}: component {f}@{d} parent mismatch: expected {f}, got {f}", .{
+                self,
+                kind,
+                ref.idx,
+                DecodedId.decode(ref.parent.*),
+                DecodedId.decode(eid),
+            });
+        }
     }
 
-    return std.mem.bytesAsValue(T, ref.data);
+    return @ptrCast(@alignCast(ref.data));
 }
 
-test "Creation" {
+pub fn is_alive(self: *Self, eid: EId) bool {
+    const decoded = DecodedId.decode(eid);
+    const e = &self.entities.entities.items[decoded.index.as_index()];
+    return e.alive and e.eid == eid;
+}
+
+test "Ecs.init" {
     var ecs = Ecs.init(std.testing.allocator);
     defer ecs.deinit();
+}
+
+test "Ecs.register_component" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const pos = try ecs.register_component("Position", @Vector(3, f32), false);
+    const vel = try ecs.register_component("Velocity", @Vector(3, f32), false);
+    const name = try ecs.register_component("Name", []const u8, false);
+    const player_tag = try ecs.register_component("PlayerTag", void, true);
+    try std.testing.expectEqual(1024, @intFromEnum(pos));
+    try std.testing.expectEqual(1025, @intFromEnum(vel));
+    try std.testing.expectEqual(1026, @intFromEnum(name));
+    try std.testing.expectEqual((1 << 63) + 1, @intFromEnum(player_tag));
+}
+
+test "Ecs.spawn" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const Vec3f = @Vector(3, f32);
+    const pos = try ecs.register_component("Position", Vec3f, false);
+    const vel = try ecs.register_component("Velocity", Vec3f, false);
+    const name = try ecs.register_component("Name", []const u8, false);
+    const player_tag = try ecs.register_component("PlayerTag", void, true);
+
+    const player = try ecs.spawn();
+    try ecs.add_component(player, Vec3f, pos, .{ 0, 10, 0 });
+    try ecs.add_component(player, Vec3f, vel, .{ 0, 1, 0 });
+    try ecs.add_component(player, []const u8, name, "Player");
+    try ecs.add_component(player, void, player_tag, {});
+
+    const zombie = try ecs.spawn();
+    try ecs.add_component(zombie, Vec3f, pos, .{ 10, 10, 10 });
+    try ecs.add_component(zombie, Vec3f, vel, .{ -10, 0, -10 });
+    try ecs.add_component(zombie, []const u8, name, "Zombie");
+
+    const ground = try ecs.spawn();
+    try ecs.add_component(ground, Vec3f, pos, .{ 0, 0, 0 });
+
+    try std.testing.expectEqual(.{ 0, 10, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+    try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, vel).?.*);
+    try std.testing.expectEqualStrings("Player", ecs.get_component(player, []const u8, name).?.*);
+    try std.testing.expect(ecs.has_component(player, player_tag));
+
+    try std.testing.expectEqual(.{ 10, 10, 10 }, ecs.get_component(zombie, Vec3f, pos).?.*);
+    try std.testing.expectEqual(.{ -10, 0, -10 }, ecs.get_component(zombie, Vec3f, vel).?.*);
+    try std.testing.expectEqualStrings("Zombie", ecs.get_component(zombie, []const u8, name).?.*);
+    try std.testing.expect(!ecs.has_component(zombie, player_tag));
+
+    try std.testing.expectEqual(.{ 0, 0, 0 }, ecs.get_component(ground, Vec3f, pos).?.*);
+    try std.testing.expectEqual(null, ecs.get_component(ground, Vec3f, vel));
+    try std.testing.expectEqual(null, ecs.get_component(ground, []const u8, name));
+    try std.testing.expect(!ecs.has_component(ground, player_tag));
+}
+
+test "Ecs.kill" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const Vec3f = @Vector(3, f32);
+    const pos = try ecs.register_component("Position", Vec3f, false);
+    const vel = try ecs.register_component("Velocity", Vec3f, false);
+    const name = try ecs.register_component("Name", []const u8, false);
+    const player_tag = try ecs.register_component("PlayerTag", void, true);
+
+    const zombie = try ecs.spawn();
+    try ecs.add_component(zombie, Vec3f, pos, .{ 10, 10, 10 });
+    try ecs.add_component(zombie, Vec3f, vel, .{ -10, 0, -10 });
+    try ecs.add_component(zombie, []const u8, name, "Zombie");
+    ecs.kill(zombie);
+
+    const player = try ecs.spawn();
+    try std.testing.expectEqual(DecodedId.decode(zombie).index, DecodedId.decode(player).index);
+    try std.testing.expectEqual(
+        DecodedId.decode(zombie).generation + 1,
+        DecodedId.decode(player).generation,
+    );
+    try std.testing.expect(ecs.is_alive(player));
+    try std.testing.expect(!ecs.is_alive(zombie));
+
+    try ecs.add_component(player, Vec3f, pos, .{ 0, 10, 0 });
+    try ecs.add_component(player, Vec3f, vel, .{ 0, 1, 0 });
+    try ecs.add_component(player, []const u8, name, "Player");
+    try ecs.add_component(player, void, player_tag, {});
+
+    try std.testing.expectEqual(.{ 0, 10, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+    try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, vel).?.*);
+    try std.testing.expectEqualStrings("Player", ecs.get_component(player, []const u8, name).?.*);
+    try std.testing.expect(ecs.has_component(player, player_tag));
 }
