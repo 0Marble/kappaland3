@@ -1,6 +1,7 @@
 const std = @import("std");
 const StringStore = @import("StringStore.zig");
 const Options = @import("Options");
+const Queue = @import("queue.zig").Queue;
 const Log = @import("Log.zig");
 
 pub const EntityRef = u64;
@@ -9,13 +10,36 @@ pub const ComponentRef = u64;
 
 pub const Error = error{
     ComponentAlreadyDefined,
+    SystemOrderLoop,
+    SystemAlreadyDefined,
 } || std.mem.Allocator.Error;
 
+const DecodedSystemRef = union(enum) {
+    const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
+
+    reserved: enum(u8) { invalid = 0, _ },
+    index: u64,
+
+    pub fn decode(ref: SystemRef) DecodedSystemRef {
+        if (ref < OFFSET) {
+            return .{ .reserved = @enumFromInt(ref) };
+        } else {
+            return .{ .index = ref - OFFSET };
+        }
+    }
+    pub fn encode(self: DecodedSystemRef) SystemRef {
+        switch (self) {
+            .reserved => |x| return @intFromEnum(x),
+            .index => |x| return x + OFFSET,
+        }
+    }
+};
+
 const DecodedComponentRef = union(enum) {
-    const DENSE_OFFSET = std.math.maxInt(@typeInfo(@FieldType(DecodedComponentRef, "reserved")).@"enum".tag_type) + 1;
+    const DENSE_OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
     const SPARSE_OFFSET = (1 << 63) + 1;
 
-    reserved: enum(u8) { invalid, _ },
+    reserved: enum(u8) { invalid = 0, _ },
     dense: u64,
     sparse: u64,
 
@@ -131,7 +155,7 @@ const ComponentStore = struct {
         if (self.freelist.pop()) |idx| {
             return self.get(idx);
         } else {
-            const idx = self.length();
+            const idx = self.parents.items.len;
             _ = try self.data.addManyAsSlice(ecs.gpa, self.info.body_size);
             _ = try self.parents.addOne(ecs.gpa);
             return self.get(idx);
@@ -144,8 +168,8 @@ const ComponentStore = struct {
         data: []u8,
     };
 
-    pub fn length(self: *ComponentStore) usize {
-        return self.parents.items.len;
+    pub fn count(self: *ComponentStore) usize {
+        return self.parents.items.len - self.freelist.items.len;
     }
 
     pub fn get(self: *ComponentStore, idx: usize) Ref {
@@ -162,33 +186,46 @@ const ComponentStore = struct {
 const SystemStore = struct {
     systems: std.ArrayListUnmanaged(*System),
     edge_freelist: std.ArrayListUnmanaged(*Edge),
-    system_freelist: std.ArrayListUnmanaged(*System),
+    system_freelist: std.ArrayListUnmanaged(SystemRef),
     arena: std.heap.ArenaAllocator,
+    names: StringStore,
+    stack: std.ArrayListUnmanaged(*System),
+    queue: Queue(*System),
 
     const System = struct {
+        id: SystemRef,
         name: []const u8,
+        requirements: ?*Edge,
+        status: u8,
+
         data: *anyopaque,
-        vtable: *const VTable,
+        callback: *const fn (data: *anyopaque, ecs: *Ecs, eid: EntityRef) void,
         query: []const ComponentRef,
 
-        run_before: ?*Edge,
-        run_after: ?*Edge,
+        const ALIVE_BIT: u8 = 0x01;
+        const VISITED_BIT: u8 = 0x02;
+        const COMPLETE_BIT: u8 = 0x04;
+        const WORKING_BIT: u8 = 0x08;
 
-        const VTable = struct {
-            callback: *const fn (data: *anyopaque, ecs: *Ecs, eid: EntityRef) void,
-        };
+        pub inline fn run(self: *System, ecs: *Ecs, eid: EntityRef) void {
+            self.callback(self.data, ecs, eid);
+        }
     };
+
     const Edge = struct {
         sys: *System,
-        next: *Edge,
+        next: ?*Edge,
     };
 
     pub fn init(gpa: std.mem.Allocator) SystemStore {
         return .{
+            .names = .init(gpa),
             .systems = .empty,
             .system_freelist = .empty,
             .edge_freelist = .empty,
             .arena = .init(gpa),
+            .stack = .empty,
+            .queue = .empty,
         };
     }
 
@@ -196,7 +233,175 @@ const SystemStore = struct {
         self.systems.deinit(gpa);
         self.system_freelist.deinit(gpa);
         self.edge_freelist.deinit(gpa);
+        self.stack.deinit(self.arena.allocator());
+        self.queue.deinit(self.arena.allocator());
+        self.names.deinit(gpa);
         self.arena.deinit();
+    }
+
+    pub fn get(self: *SystemStore, ref: SystemRef) *System {
+        return self.systems.items[DecodedSystemRef.decode(ref).index];
+    }
+
+    pub fn add(self: *SystemStore, name: []const u8, query: []const ComponentRef, ecs: *Ecs) !*System {
+        const static_query = try self.arena.allocator().dupe(ComponentRef, query);
+        if (self.names.contains(name)) {
+            return Error.SystemAlreadyDefined;
+        }
+        const static_name = try self.names.ensure_stored(ecs.gpa, name);
+
+        if (self.system_freelist.pop()) |old| {
+            const sys: *System = self.systems.items[old];
+            sys.id = old;
+            sys.status = System.ALIVE_BIT;
+            sys.name = static_name;
+            sys.query = static_query;
+            sys.requirements = null;
+
+            return sys;
+        } else {
+            const sys: *System = try self.arena.allocator().create(System);
+            sys.id = (DecodedSystemRef{ .index = self.systems.items.len }).encode();
+            sys.status = System.ALIVE_BIT;
+            sys.name = static_name;
+            sys.query = static_query;
+            sys.requirements = null;
+
+            try self.systems.append(ecs.gpa, sys);
+
+            return sys;
+        }
+    }
+
+    pub fn remove(self: *SystemStore, ecs: *Ecs, ref: SystemRef) void {
+        const s = self.get(ref);
+        s.status &= ~System.ALIVE_BIT;
+
+        self.system_freelist.append(ecs.gpa, ref) catch |err| {
+            Log.log(.warn, "Ecs@{*}: failed to add System to the freelist: {}", .{err});
+        };
+
+        var cur = s.requirements;
+        while (cur) |n| {
+            cur = n.next;
+            self.edge_freelist.append(ecs.gpa, n) catch |err| {
+                Log.log(.warn, "Ecs@{*}: failed to add Edge to the freelist: {}", .{err});
+            };
+        }
+    }
+
+    pub fn eval_order(self: *SystemStore, before: SystemRef, after: SystemRef) !void {
+        const a = self.get(before);
+        const b = self.get(after);
+
+        var cur = b.requirements;
+        while (cur) |n| {
+            cur = n.next;
+            if (n.sys == a) return;
+        }
+
+        if (try self.reachable(a, b)) return Error.SystemOrderLoop;
+        for (self.systems.items) |s| s.status &= ~System.VISITED_BIT;
+
+        const edge = if (self.edge_freelist.pop()) |old| old else try self.arena.allocator().create(Edge);
+        edge.sys = a;
+        edge.next = b.requirements;
+        b.requirements = edge;
+    }
+
+    fn reachable(self: *SystemStore, start: *System, target: *System) !bool {
+        const alloc = self.arena.allocator();
+        self.stack.clearRetainingCapacity();
+        start.status |= System.VISITED_BIT;
+        try self.stack.append(alloc, start);
+
+        while (self.stack.pop()) |node| {
+            if (node == target) return true;
+            var edge = node.requirements;
+            while (edge) |e| {
+                edge = e.next;
+                if (e.sys.status & System.VISITED_BIT == 0) {
+                    e.sys.status |= System.VISITED_BIT;
+                    try self.stack.append(alloc, e.sys);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    pub fn eval(self: *SystemStore, ecs: *Ecs) !void {
+        const alloc = self.arena.allocator();
+        self.queue.clear();
+
+        for (self.systems.items) |sys| {
+            if (sys.status & System.ALIVE_BIT == 0) continue;
+            if (sys.status & System.COMPLETE_BIT != 0) continue;
+            std.debug.assert(sys.status & System.WORKING_BIT == 0);
+
+            try self.queue.push(alloc, sys);
+            sys.status |= System.WORKING_BIT;
+
+            while (self.queue.pop()) |cur| {
+                var all_complete = true;
+                var edge = cur.requirements;
+                while (edge) |e| {
+                    edge = e.next;
+                    const next = e.sys;
+                    if (next.status & System.COMPLETE_BIT != 0) {
+                        continue;
+                    }
+
+                    all_complete = false;
+                    if (next.status & System.WORKING_BIT == 0) {
+                        next.status |= System.WORKING_BIT;
+                        try self.queue.push(alloc, next);
+                    }
+                }
+
+                if (all_complete) {
+                    cur.status |= System.COMPLETE_BIT;
+                    cur.status &= ~System.WORKING_BIT;
+                    self.force_eval(ecs, cur.id);
+                } else {
+                    try self.queue.push(alloc, cur);
+                }
+            }
+        }
+
+        for (self.systems.items) |s| s.status &= ~System.COMPLETE_BIT;
+    }
+
+    fn force_eval(self: *SystemStore, ecs: *Ecs, ref: SystemRef) void {
+        const sys = self.get(ref);
+        if (sys.query.len == 0) {
+            for (ecs.entities.entities.items) |e| {
+                if (e.alive) sys.run(ecs, e.eid);
+            }
+        } else {
+            var start_store: *ComponentStore = undefined;
+            var start_count: usize = std.math.maxInt(usize);
+            for (sys.query) |kind| {
+                const store = switch (DecodedComponentRef.decode(kind)) {
+                    .reserved => std.debug.panic("Ecs@{*}: access invalid component", .{self}),
+                    .sparse => |x| &ecs.sparse_components.items[x],
+                    .dense => |x| &ecs.dense_components.items[x],
+                };
+                if (store.count() < start_count) {
+                    start_count = store.count();
+                    start_store = store;
+                }
+            }
+
+            outer: for (start_store.parents.items) |parent| {
+                if (DecodedEntityRef.decode(parent).index == .none) continue;
+                for (sys.query) |kind| {
+                    if (kind == start_store.info.kind) continue;
+                    if (!ecs.has_component(parent, kind)) continue :outer;
+                }
+                sys.run(ecs, parent);
+            }
+        }
     }
 };
 
@@ -673,6 +878,42 @@ pub fn iterate_components(self: *Self, eid: EntityRef) ComponentIter {
     return .{ .inner = e.components.iter(self) };
 }
 
+pub fn register_system(
+    self: *Self,
+    comptime Ctx: type,
+    name: []const u8,
+    query: []const ComponentRef,
+    ctx: Ctx,
+    callback: *const fn (ctx: Ctx, ecs: *Ecs, eid: EntityRef) void,
+) Error!SystemRef {
+    const sys = try self.systems.add(name, query, self);
+    if (@typeInfo(Ctx) == .pointer) {
+        sys.data = @ptrCast(ctx);
+        sys.callback = @ptrCast(callback);
+    } else {
+        const Data = struct { Ctx, @TypeOf(callback) };
+        const ptr = try self.systems.arena.allocator().create(Data);
+        ptr.* = .{ ctx, callback };
+        sys.data = @ptrCast(ptr);
+        sys.callback = struct {
+            fn do_callback(data: *anyopaque, ecs: *Ecs, eid: EntityRef) void {
+                const this: *Data = @ptrCast(@alignCast(data));
+                @call(.auto, this[1], .{ this[0], ecs, eid });
+            }
+        }.do_callback;
+    }
+
+    return sys.id;
+}
+
+pub fn ensure_eval_order(self: *Self, before: SystemRef, after: SystemRef) Error!void {
+    try self.systems.eval_order(before, after);
+}
+
+pub fn evaluate(self: *Self) Error!void {
+    try self.systems.eval(self);
+}
+
 test "Ecs.init" {
     var ecs = Ecs.init(std.testing.allocator);
     defer ecs.deinit();
@@ -789,4 +1030,113 @@ test "Ecs.remove_component" {
     try std.testing.expectEqual(null, ecs.get_component(player, Vec3f, vel));
     try std.testing.expectEqualStrings("Player", ecs.get_component(player, []const u8, name).?.*);
     try std.testing.expect(ecs.has_component(player, player_tag));
+}
+
+test "Ecs.register_system" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const Ctx = struct {
+        pub fn do_stuff(_: @This(), _: *Ecs, _: EntityRef) void {}
+    };
+    const system = try ecs.register_system(Ctx, "DummySystem", &.{}, Ctx{}, Ctx.do_stuff);
+    _ = system;
+}
+
+test "Ecs.ensure_eval_order" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const Ctx = struct {
+        pub fn do_stuff(_: @This(), _: *Ecs, _: EntityRef) void {}
+    };
+    const a = try ecs.register_system(Ctx, "DummySystem1", &.{}, Ctx{}, Ctx.do_stuff);
+    const b = try ecs.register_system(Ctx, "DummySystem2", &.{}, Ctx{}, Ctx.do_stuff);
+    try ecs.ensure_eval_order(a, b);
+    try std.testing.expectError(Error.SystemOrderLoop, ecs.ensure_eval_order(b, a));
+}
+
+test "Ecs.evaluate single" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+    const Vec3f = @Vector(3, f32);
+    const pos = try ecs.register_component("Position", Vec3f, false);
+    const vel = try ecs.register_component("Velocity", Vec3f, false);
+
+    const player = try ecs.spawn();
+    try ecs.add_component(player, Vec3f, pos, .{ 0, 0, 0 });
+    try ecs.add_component(player, Vec3f, vel, .{ 0, 1, 0 });
+    const zombie = try ecs.spawn();
+    try ecs.add_component(zombie, Vec3f, pos, .{ 0, 0, -1 });
+    try ecs.add_component(zombie, Vec3f, vel, .{ 0, 0, 1 });
+
+    const PhysicsCtx = struct {
+        dt: f32,
+        pos_component: ComponentRef,
+        vel_component: ComponentRef,
+
+        pub fn apply_physics(self: *@This(), e: *Ecs, eid: EntityRef) void {
+            const x = e.get_component(eid, Vec3f, self.pos_component).?;
+            const v = e.get_component(eid, Vec3f, self.vel_component).?.*;
+            x.* = @mulAdd(Vec3f, v, @splat(self.dt), x.*);
+        }
+    };
+
+    var ctx = PhysicsCtx{ .dt = 1.0, .pos_component = pos, .vel_component = vel };
+    const physics = try ecs.register_system(*PhysicsCtx, "Physics", &.{ pos, vel }, &ctx, PhysicsCtx.apply_physics);
+    _ = physics;
+
+    try ecs.evaluate();
+
+    try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+    try std.testing.expectEqual(.{ 0, 0, 0 }, ecs.get_component(zombie, Vec3f, pos).?.*);
+}
+
+test "Ecs.evaluate multiple" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+    const Ctx = struct {
+        was_ran: bool = false,
+        start: usize = 0,
+        end: usize = 0,
+        envocation_count: usize = 0,
+
+        var step: usize = 0;
+
+        fn system(self: *@This(), _: *Ecs, _: EntityRef) void {
+            if (!self.was_ran) {
+                self.was_ran = true;
+                self.start = step;
+            }
+            self.envocation_count += 1;
+            self.end = step;
+            step += 1;
+        }
+    };
+
+    const entity_count = 10;
+    for (0..entity_count) |_| _ = try ecs.spawn();
+
+    var a = Ctx{};
+    var b = Ctx{};
+    var c = Ctx{};
+
+    const a_sys = try ecs.register_system(*Ctx, "A", &.{}, &a, Ctx.system);
+    const b_sys = try ecs.register_system(*Ctx, "B", &.{}, &b, Ctx.system);
+    const c_sys = try ecs.register_system(*Ctx, "C", &.{}, &c, Ctx.system);
+
+    try ecs.ensure_eval_order(a_sys, c_sys);
+    try ecs.ensure_eval_order(b_sys, c_sys);
+    try ecs.evaluate();
+
+    try std.testing.expect(a.was_ran);
+    try std.testing.expect(b.was_ran);
+    try std.testing.expect(c.was_ran);
+
+    try std.testing.expectEqual(entity_count, a.envocation_count);
+    try std.testing.expectEqual(entity_count, b.envocation_count);
+    try std.testing.expectEqual(entity_count, c.envocation_count);
+
+    try std.testing.expect(a.end < c.start);
+    try std.testing.expect(b.end < c.start);
 }
