@@ -22,37 +22,59 @@ pub fn init(fov: f32, aspect: f32) Camera {
 }
 
 pub fn move_forward(self: *Camera, amt: f32) void {
-    const dir: @Vector(3, f32) = .{
-        -@sin(self.angles[1]),
+    const dir = @Vector(3, f32){
+        @sin(-self.angles[1]),
         0,
-        @cos(self.angles[1]),
+        -@cos(-self.angles[1]),
     };
     self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.mat_changed = true;
 }
 
-pub fn move_horiz(self: *Camera, amt: f32) void {
-    const dir: @Vector(3, f32) = .{
-        @cos(self.angles[1]),
+pub fn move_right(self: *Camera, amt: f32) void {
+    const dir = @Vector(3, f32){
+        @cos(-self.angles[1]),
         0,
-        @sin(self.angles[1]),
+        @sin(-self.angles[1]),
     };
     self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.mat_changed = true;
 }
 
-pub fn move_vert(self: *Camera, amt: f32) void {
-    const dir: @Vector(3, f32) = .{ 0, 1, 0 };
+pub fn move_up(self: *Camera, amt: f32) void {
+    const dir = @Vector(3, f32){ 0, 1, 0 };
     self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.mat_changed = true;
 }
 
-pub fn turn_horiz(self: *Camera, amt: f32) void {
-    self.angles[1] += amt;
+pub fn turn_right(self: *Camera, amt: f32) void {
+    self.angles[1] -= amt;
+    self.mat_changed = true;
 }
 
-pub fn turn_vert(self: *Camera, amt: f32) void {
-    self.angles[0] += amt;
+pub fn turn_up(self: *Camera, amt: f32) void {
+    self.angles[0] -= amt;
+    self.mat_changed = true;
+}
+
+pub fn update_fov(self: *Camera, fov: f32) void {
+    self.fov = fov;
+    self.mat_changed = true;
+}
+pub fn update_aspect(self: *Camera, aspect: f32) void {
+    self.aspect = aspect;
+    self.mat_changed = true;
 }
 
 pub fn as_mat(self: *Camera) zm.Mat4f {
-    if (!self.mat_changed) return self.cached_mat;
+    if (self.mat_changed) {
+        const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
+        const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
+        const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
+        const proj = zm.Mat4f.perspective(self.fov, self.aspect, 0.1, 100.0);
+        const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
+        self.cached_mat = proj.multiply(view);
+        self.mat_changed = false;
+    }
     return self.cached_mat;
 }

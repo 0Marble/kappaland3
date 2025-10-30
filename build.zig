@@ -36,6 +36,9 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    if (b.option(bool, "llvm", "Build with llvm") orelse false) {
+        client.use_llvm = true;
+    }
     client.root_module.linkSystemLibrary("SDL3", .{});
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
