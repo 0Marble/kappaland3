@@ -54,6 +54,9 @@ pub fn build(b: *std.Build) void {
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
     client.root_module.addImport("libmine", lib.root_module);
+    client.root_module.addImport("HelloScene", b.createModule(.{
+        .root_source_file = b.path("assets/HelloScene.zon"),
+    }));
     b.installArtifact(client);
 
     const run_step = b.step("run", "run the client");

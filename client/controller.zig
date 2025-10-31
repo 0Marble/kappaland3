@@ -10,6 +10,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         ctx: *Ctx,
         eid: Ecs.EntityRef,
         cmd_binds: std.AutoHashMapUnmanaged(Command, CommandBind),
+
         keydown_binds: std.AutoArrayHashMapUnmanaged(c.SDL_Scancode, std.ArrayListUnmanaged(Command)),
 
         var controller_tag: Ecs.ComponentRef = 0;

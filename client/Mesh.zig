@@ -40,19 +40,6 @@ pub fn init(
     ));
     Log.log(.debug, "Allocated ELEMENT_ARRAY_BUFFER: size: {d}", .{inds.len * @sizeOf(Idx)});
 
-    const ti = @typeInfo(Vert);
-    switch (ti) {
-        .@"struct" => |s| {
-            if (s.layout != .@"packed") {
-                @compileError("Vert struct should be packed");
-            }
-        },
-        else => @compileError("Vert should be a packed struct"),
-    }
-    if (comptime !std.meta.hasMethod(Vert, "setup_attribs")) {
-        @compileError("Vert struct should have a method 'setup_attribs'");
-    }
-
     try Vert.setup_attribs();
 
     self.index_count = @intCast(inds.len);

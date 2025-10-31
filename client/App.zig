@@ -5,14 +5,11 @@ const sdl_call = util.sdl_call;
 const gl_call = util.gl_call;
 const Log = @import("libmine").Log;
 const gl = @import("gl");
-pub const Camera = @import("Camera.zig");
-pub const Mesh = @import("Mesh.zig");
-pub const Shader = @import("Shader.zig");
-pub const ShaderSource = @import("ShaderSource.zig");
 pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
 const Keys = @import("Keys.zig");
 const Ecs = @import("libmine").Ecs;
+const TestScene = @import("TestScene.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -25,6 +22,8 @@ static_memory: std.heap.ArenaAllocator,
 
 frame_data: FrameData,
 game: GameState,
+
+scene: TestScene,
 
 const App = @This();
 var ok = false;
@@ -91,6 +90,7 @@ fn init_memory() !void {
 fn init_gamestate() !void {
     app.frame_data = .{};
     try app.game.init();
+    app.scene = try .init();
 }
 
 fn init_sdl() !void {
@@ -125,6 +125,7 @@ pub fn deinit() void {
     if (!ok) return;
 
     app.game.deinit();
+    app.scene.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -169,6 +170,7 @@ pub fn run() !void {
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         try app.game.update();
+        try app.scene.draw(app.game.camera.as_mat());
 
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
@@ -192,6 +194,8 @@ fn handle_events() !bool {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {
                 gl.Viewport(0, 0, evt.window.data1, evt.window.data2);
+                game_state().camera.update_aspect(@as(f32, @floatFromInt(evt.window.data1)) /
+                    @as(f32, @floatFromInt(evt.window.data2)));
             },
             c.SDL_EVENT_KEY_DOWN => {
                 try key_state().on_keydown(evt.key.scancode);
