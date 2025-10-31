@@ -3,7 +3,7 @@ const zm = @import("zm");
 const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
 const App = @import("App.zig");
-const Controller = @import("Controller.zig");
+const Controller = @import("controller.zig").Controller(@This(), Controls);
 
 angles: @Vector(2, f32),
 pos: @Vector(3, f32),
@@ -32,26 +32,25 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .pos = @splat(0),
         .mat_changed = true,
         .cached_mat = .zero(),
-        .controller = .init,
+        .controller = try .init(self),
     };
-    try self.controller.attatch(Camera, self);
-    try self.controller.bind_key(c.SDL_SCANCODE_W, Controls, .front);
-    try self.controller.bind_key(c.SDL_SCANCODE_A, Controls, .left);
-    try self.controller.bind_key(c.SDL_SCANCODE_S, Controls, .back);
-    try self.controller.bind_key(c.SDL_SCANCODE_D, Controls, .right);
-    try self.controller.bind_key(c.SDL_SCANCODE_SPACE, Controls, .up);
-    try self.controller.bind_key(c.SDL_SCANCODE_LSHIFT, Controls, .down);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_W, .front);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_A, .left);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_S, .back);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_D, .right);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_SPACE, .up);
+    try self.controller.bind_keydown(c.SDL_SCANCODE_LSHIFT, .down);
 
-    try self.controller.on_keydown(Camera, Controls, .front, Camera.move_forward);
-    try self.controller.on_keydown(Camera, Controls, .back, Camera.move_forward);
-    try self.controller.on_keydown(Camera, Controls, .left, Camera.move_right);
-    try self.controller.on_keydown(Camera, Controls, .right, Camera.move_right);
-    try self.controller.on_keydown(Camera, Controls, .up, Camera.move_up);
-    try self.controller.on_keydown(Camera, Controls, .down, Camera.move_up);
+    try self.controller.bind_command(.front, .{ .keydown = Camera.move_forward });
+    try self.controller.bind_command(.back, .{ .keydown = Camera.move_forward });
+    try self.controller.bind_command(.left, .{ .keydown = Camera.move_right });
+    try self.controller.bind_command(.right, .{ .keydown = Camera.move_right });
+    try self.controller.bind_command(.up, .{ .keydown = Camera.move_up });
+    try self.controller.bind_command(.down, .{ .keydown = Camera.move_up });
 }
 
 pub fn deinit(self: *Camera) void {
-    self.controller.detatch();
+    self.controller.deinit();
 }
 
 pub fn move_forward(self: *Camera, key: Controls) void {

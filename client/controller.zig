@@ -49,10 +49,16 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         pub fn unbind_keydown(self: *Self, scancode: c.SDL_Scancode, cmd: Command) void {
             const entry = try self.keydown_binds.getOrPutValue(App.gpa(), scancode, .empty);
             const idx = std.mem.indexOfScalar(Command, entry.value_ptr.items, cmd) orelse return;
+            Log.log(.debug, "{*}: unbind scancode {d} from command {}", .{ self, scancode, cmd });
+
             _ = entry.value_ptr.swapRemove(idx);
+            if (entry.value_ptr.items.len == 0) {
+                try App.ecs().remove_component(self.eid, try App.key_state().get_keydown_component(scancode));
+            }
         }
 
         pub fn bind_keydown(self: *Self, scancode: c.SDL_Scancode, cmd: Command) !void {
+            Log.log(.debug, "{*}: bind scancode {d} to command {}", .{ self, scancode, cmd });
             const entry = try self.keydown_binds.getOrPutValue(App.gpa(), scancode, .empty);
             try entry.value_ptr.append(App.gpa(), cmd);
 
@@ -63,7 +69,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
                     try App.key_state().get_keydown_component(scancode),
                     .{
                         .data = @ptrCast(self),
-                        .on_keydown = @ptrCast(on_keydown),
+                        .on_keydown = @ptrCast(&on_keydown),
                     },
                 );
             }
@@ -76,6 +82,14 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
 
         pub fn deinit(self: *Self) void {
             App.ecs().kill(self.eid);
+            for (self.cmd_binds.values()) |*arr| {
+                arr.deinit(App.gpa());
+            }
+            for (self.keydown_binds.values()) |*arr| {
+                arr.deinit(App.gpa());
+            }
+            self.cmd_binds.deinit(App.gpa());
+            self.keydown_binds.deinit(App.gpa());
         }
     };
 }
