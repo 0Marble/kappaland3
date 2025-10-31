@@ -9,7 +9,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
     return struct {
         ctx: *Ctx,
         eid: Ecs.EntityRef,
-        cmd_binds: std.AutoArrayHashMapUnmanaged(Command, std.ArrayListUnmanaged(CommandBind)),
+        cmd_binds: std.AutoHashMapUnmanaged(Command, CommandBind),
         keydown_binds: std.AutoArrayHashMapUnmanaged(c.SDL_Scancode, std.ArrayListUnmanaged(Command)),
 
         var controller_tag: Ecs.ComponentRef = 0;
@@ -39,10 +39,8 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         fn on_keydown(self: *Self, code: c.SDL_Scancode) void {
             const cmds = self.keydown_binds.get(code).?;
             for (cmds.items) |cmd| {
-                const binds = self.cmd_binds.get(cmd).?;
-                for (binds.items) |bind| {
-                    if (bind == .keydown) bind.keydown(self.ctx, cmd);
-                }
+                const bind = self.cmd_binds.get(cmd).?;
+                if (bind == .keydown) bind.keydown(self.ctx, cmd);
             }
         }
 
@@ -76,15 +74,11 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         }
 
         pub fn bind_command(self: *Self, cmd: Command, bind: CommandBind) !void {
-            const entry = try self.cmd_binds.getOrPutValue(App.gpa(), cmd, .empty);
-            try entry.value_ptr.append(App.gpa(), bind);
+            _ = try self.cmd_binds.getOrPutValue(App.gpa(), cmd, bind);
         }
 
         pub fn deinit(self: *Self) void {
             App.ecs().kill(self.eid);
-            for (self.cmd_binds.values()) |*arr| {
-                arr.deinit(App.gpa());
-            }
             for (self.keydown_binds.values()) |*arr| {
                 arr.deinit(App.gpa());
             }
