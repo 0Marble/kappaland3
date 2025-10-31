@@ -15,6 +15,15 @@ mat_changed: bool,
 cached_mat: zm.Mat4f,
 
 const Camera = @This();
+const Controls = enum(u32) {
+    front,
+    back,
+    left,
+    right,
+    up,
+    down,
+};
+
 pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     self.* = .{
         .aspect = aspect,
@@ -26,40 +35,54 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .controller = .init,
     };
     try self.controller.attatch(Camera, self);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_W, Camera.move_forward);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_S, Camera.move_forward);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_A, Camera.move_right);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_D, Camera.move_right);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_SPACE, Camera.move_up);
-    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_LSHIFT, Camera.move_up);
+    try self.controller.bind_key(c.SDL_SCANCODE_W, Controls, .front);
+    try self.controller.bind_key(c.SDL_SCANCODE_A, Controls, .left);
+    try self.controller.bind_key(c.SDL_SCANCODE_S, Controls, .back);
+    try self.controller.bind_key(c.SDL_SCANCODE_D, Controls, .right);
+    try self.controller.bind_key(c.SDL_SCANCODE_SPACE, Controls, .up);
+    try self.controller.bind_key(c.SDL_SCANCODE_LSHIFT, Controls, .down);
+
+    try self.controller.on_keydown(Camera, Controls, .front, Camera.move_forward);
+    try self.controller.on_keydown(Camera, Controls, .back, Camera.move_forward);
+    try self.controller.on_keydown(Camera, Controls, .left, Camera.move_right);
+    try self.controller.on_keydown(Camera, Controls, .right, Camera.move_right);
+    try self.controller.on_keydown(Camera, Controls, .up, Camera.move_up);
+    try self.controller.on_keydown(Camera, Controls, .down, Camera.move_up);
 }
 
-pub fn move_forward(self: *Camera, key: c.SDL_Scancode) void {
-    const amt = if (key == c.SDL_SCANCODE_W) App.frametime() * 0.01 else -App.frametime() * 0.01;
+pub fn deinit(self: *Camera) void {
+    self.controller.detatch();
+}
+
+pub fn move_forward(self: *Camera, key: Controls) void {
+    const amt = App.frametime() * 0.01;
+    const mul = if (key == .front) amt else -amt;
     const dir = @Vector(3, f32){
         @sin(-self.angles[1]),
         0,
         -@cos(-self.angles[1]),
     };
-    self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
     self.mat_changed = true;
 }
 
-pub fn move_right(self: *Camera, key: c.SDL_Scancode) void {
-    const amt = if (key == c.SDL_SCANCODE_D) App.frametime() * 0.01 else -App.frametime() * 0.01;
+pub fn move_right(self: *Camera, key: Controls) void {
+    const amt = App.frametime() * 0.01;
+    const mul = if (key == .right) amt else -amt;
     const dir = @Vector(3, f32){
         @cos(-self.angles[1]),
         0,
         @sin(-self.angles[1]),
     };
-    self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
     self.mat_changed = true;
 }
 
-pub fn move_up(self: *Camera, key: c.SDL_Scancode) void {
-    const amt = if (key == c.SDL_SCANCODE_SPACE) App.frametime() * 0.01 else -App.frametime() * 0.01;
+pub fn move_up(self: *Camera, key: Controls) void {
+    const amt = App.frametime() * 0.01;
+    const mul = if (key == .up) amt else -amt;
     const dir = @Vector(3, f32){ 0, 1, 0 };
-    self.pos += dir * @as(@Vector(3, f32), @splat(amt));
+    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
     self.mat_changed = true;
 }
 

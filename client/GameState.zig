@@ -19,8 +19,9 @@ pub fn init(self: *GameState) !void {
 }
 
 pub fn deinit(self: *GameState) void {
-    self.ecs.deinit();
+    self.camera.deinit();
     self.keys.deinit();
+    self.ecs.deinit();
 }
 
 pub fn on_frame_start(self: *GameState) !void {
