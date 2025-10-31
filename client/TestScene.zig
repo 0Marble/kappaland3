@@ -8,7 +8,6 @@ const gl = @import("gl");
 const zm = @import("zm");
 
 mesh: [Scene.objects.len]Mesh,
-mat: [Scene.objects.len]zm.Mat4f,
 shader: Shader,
 
 const Vert = struct {
@@ -49,16 +48,9 @@ pub fn init() !Self {
     var self: Self = .{
         .mesh = undefined,
         .shader = try .init(&sources),
-        .mat = undefined,
     };
 
     inline for (Scene.objects, 0..) |obj, i| {
-        const x, const y, const z, const w = obj.transform.rotation;
-        const quat = zm.Quaternionf.init(x, y, z, w);
-        self.mat[i] = zm.Mat4f.translationVec3(obj.transform.translation)
-            .multiply(zm.Mat4f.fromQuaternion(quat)
-            .multiply(zm.Mat4f.scalingVec3(obj.transform.scale)));
-
         const verts = comptime blk: {
             var verts = std.mem.zeroes([obj.verts.len]Vert);
             for (obj.verts, 0..) |v, j| {
@@ -87,10 +79,15 @@ pub fn draw(self: *Self, vp_matrix: zm.Mat4f) !void {
             const kind = @field(Scene.uniform_types, uniform);
             try self.shader.set(uniform, data, kind);
         }
-        const mvp = vp_matrix.multiply(self.mat[i]);
+        const x, const y, const z, const w = obj.transform.rotation;
+        const quat = zm.Quaternionf.init(x, y, z, w);
+        const model = zm.Mat4f.translationVec3(obj.transform.translation)
+            .multiply(zm.Mat4f.fromQuaternion(quat))
+            .multiply(zm.Mat4f.scalingVec3(obj.transform.scale));
+        const mvp = vp_matrix.multiply(model);
         try self.shader.set_mat4("u_mvp", mvp);
-        try self.shader.set_mat4("u_model", self.mat[i]);
-        try self.shader.set_mat4("u_transp_inv_model", self.mat[i].inverse().transpose());
+        try self.shader.set_mat4("u_model", model);
+        try self.shader.set_mat4("u_transp_inv_model", model.inverse().transpose());
         try self.mesh[i].draw(gl.TRIANGLES);
     }
 }

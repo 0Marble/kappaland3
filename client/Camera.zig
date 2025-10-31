@@ -1,9 +1,11 @@
 const std = @import("std");
 const zm = @import("zm");
-const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
 const App = @import("App.zig");
 const Controller = @import("controller.zig").Controller(@This(), Controls);
+const Scancode = @import("Keys.zig").Scancode;
+const c = @import("c.zig").c;
+const Keys = @import("Keys.zig");
 
 angles: @Vector(2, f32),
 pos: @Vector(3, f32),
@@ -22,6 +24,7 @@ const Controls = enum(u32) {
     right,
     up,
     down,
+    move,
 };
 
 pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
@@ -32,67 +35,67 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .pos = @splat(0),
         .mat_changed = true,
         .cached_mat = .zero(),
-        .controller = try .init(self),
+        .controller = undefined,
     };
-    try self.controller.bind_keydown(c.SDL_SCANCODE_W, .front);
-    try self.controller.bind_keydown(c.SDL_SCANCODE_A, .left);
-    try self.controller.bind_keydown(c.SDL_SCANCODE_S, .back);
-    try self.controller.bind_keydown(c.SDL_SCANCODE_D, .right);
-    try self.controller.bind_keydown(c.SDL_SCANCODE_SPACE, .up);
-    try self.controller.bind_keydown(c.SDL_SCANCODE_LSHIFT, .down);
+    try self.controller.init(self);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_W), .front);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_A), .left);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_S), .back);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_D), .right);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_SPACE), .up);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LSHIFT), .down);
 
-    try self.controller.bind_command(.front, .{ .keydown = Camera.move_forward });
-    try self.controller.bind_command(.back, .{ .keydown = Camera.move_forward });
-    try self.controller.bind_command(.left, .{ .keydown = Camera.move_right });
-    try self.controller.bind_command(.right, .{ .keydown = Camera.move_right });
-    try self.controller.bind_command(.up, .{ .keydown = Camera.move_up });
-    try self.controller.bind_command(.down, .{ .keydown = Camera.move_up });
+    try self.controller.bind_command(.front, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.back, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.left, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.right, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.up, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.down, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.move, .{ .mouse_move = Camera.look_around });
 }
 
 pub fn deinit(self: *Camera) void {
     self.controller.deinit();
 }
 
-pub fn move_forward(self: *Camera, key: Controls) void {
-    const amt = App.frametime() * 0.01;
-    const mul = if (key == .front) amt else -amt;
-    const dir = @Vector(3, f32){
-        @sin(-self.angles[1]),
-        0,
-        -@cos(-self.angles[1]),
+pub fn move(self: *Camera, cmd: Controls) void {
+    const dir: @Vector(3, f32) = switch (cmd) {
+        .front => .{
+            @sin(-self.angles[1]),
+            0,
+            -@cos(-self.angles[1]),
+        },
+        .back => .{
+            -@sin(-self.angles[1]),
+            0,
+            @cos(-self.angles[1]),
+        },
+        .right => .{
+            @cos(-self.angles[1]),
+            0,
+            @sin(-self.angles[1]),
+        },
+        .left => .{
+            -@cos(-self.angles[1]),
+            0,
+            -@sin(-self.angles[1]),
+        },
+        .up => .{ 0, 1, 0 },
+        .down => .{ 0, -1, 0 },
+        else => unreachable,
     };
-    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
-    self.mat_changed = true;
-}
-
-pub fn move_right(self: *Camera, key: Controls) void {
     const amt = App.frametime() * 0.01;
-    const mul = if (key == .right) amt else -amt;
-    const dir = @Vector(3, f32){
-        @cos(-self.angles[1]),
-        0,
-        @sin(-self.angles[1]),
-    };
-    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
+    self.pos = @mulAdd(@Vector(3, f32), dir, @splat(amt), self.pos);
     self.mat_changed = true;
 }
 
-pub fn move_up(self: *Camera, key: Controls) void {
-    const amt = App.frametime() * 0.01;
-    const mul = if (key == .up) amt else -amt;
-    const dir = @Vector(3, f32){ 0, 1, 0 };
-    self.pos += dir * @as(@Vector(3, f32), @splat(mul));
-    self.mat_changed = true;
-}
-
-pub fn turn_right(self: *Camera, amt: f32) void {
-    self.angles[1] -= amt;
-    self.mat_changed = true;
-}
-
-pub fn turn_up(self: *Camera, amt: f32) void {
-    self.angles[0] -= amt;
-    self.mat_changed = true;
+pub fn look_around(self: *Camera, _: Controls, m: Keys.OnMouseMove.Move) void {
+    if (App.key_state().is_mouse_down(.middle)) {
+        const amt = App.frametime() * 0.001;
+        self.angles[0] -= m.dy * amt;
+        self.angles[1] -= m.dx * amt;
+        self.mat_changed = true;
+    }
 }
 
 pub fn update_fov(self: *Camera, fov: f32) void {

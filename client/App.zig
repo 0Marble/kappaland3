@@ -198,10 +198,21 @@ fn handle_events() !bool {
                     @as(f32, @floatFromInt(evt.window.data2)));
             },
             c.SDL_EVENT_KEY_DOWN => {
-                try key_state().on_keydown(evt.key.scancode);
+                try key_state().on_keydown(.from_sdl(evt.key.scancode));
             },
             c.SDL_EVENT_KEY_UP => {
-                try key_state().on_keyup(evt.key.scancode);
+                try key_state().on_keyup(.from_sdl(evt.key.scancode));
+            },
+            c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                key_state().on_mouse_down(.from_sdl(evt.button.button));
+                key_state().on_mouse_motion(evt.button.x, evt.button.y);
+            },
+            c.SDL_EVENT_MOUSE_BUTTON_UP => {
+                key_state().on_mouse_up(.from_sdl(evt.button.button));
+                key_state().on_mouse_motion(evt.button.x, evt.button.y);
+            },
+            c.SDL_EVENT_MOUSE_MOTION => {
+                key_state().on_mouse_motion(evt.motion.x, evt.motion.y);
             },
             else => {},
         }
