@@ -1,16 +1,15 @@
 const std = @import("std");
 const zm = @import("zm");
-const Ecs = @import("libmine").Ecs;
-const Keys = @import("Keys.zig");
-const App = @import("App.zig");
 const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
+const App = @import("App.zig");
+const Controller = @import("Controller.zig");
 
 angles: @Vector(2, f32),
 pos: @Vector(3, f32),
 fov: f32,
 aspect: f32,
-eid: Ecs.EntityRef = 0,
+controller: Controller,
 
 mat_changed: bool,
 cached_mat: zm.Mat4f,
@@ -24,33 +23,15 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .pos = @splat(0),
         .mat_changed = true,
         .cached_mat = .zero(),
+        .controller = .init,
     };
-    const ecs = &App.game_state().ecs;
-    self.eid = try ecs.spawn();
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_W), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_forward),
-    });
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_S), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_forward),
-    });
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_A), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_right),
-    });
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_D), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_right),
-    });
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_SPACE), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_up),
-    });
-    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_LSHIFT), .{
-        .data = self,
-        .on_keydown = @ptrCast(&Camera.move_up),
-    });
+    try self.controller.attatch(Camera, self);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_W, Camera.move_forward);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_S, Camera.move_forward);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_A, Camera.move_right);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_D, Camera.move_right);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_SPACE, Camera.move_up);
+    try self.controller.bind_keydown(Camera, c.SDL_SCANCODE_LSHIFT, Camera.move_up);
 }
 
 pub fn move_forward(self: *Camera, key: c.SDL_Scancode) void {
