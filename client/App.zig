@@ -9,9 +9,10 @@ pub const Camera = @import("Camera.zig");
 pub const Mesh = @import("Mesh.zig");
 pub const Shader = @import("Shader.zig");
 pub const ShaderSource = @import("ShaderSource.zig");
-const GameState = @import("GameState.zig");
+pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
 const Keys = @import("Keys.zig");
+const Ecs = @import("libmine").Ecs;
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -207,4 +208,8 @@ fn handle_events() !bool {
 
 pub fn frametime() f32 {
     return @floatFromInt(app.frame_data.frame_end_time - app.frame_data.frame_start_time);
+}
+
+pub fn ecs() *Ecs {
+    return &game_state().ecs;
 }

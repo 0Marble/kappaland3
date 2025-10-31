@@ -1187,3 +1187,16 @@ test "Ecs.evaluate multiple" {
     try std.testing.expect(a.end < c.start);
     try std.testing.expect(b.end < c.start);
 }
+
+test "Ecs.add_component replacement" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const Vec3f = @Vector(3, f32);
+    const pos = try ecs.register_component("Position", Vec3f, false);
+    const player = try ecs.spawn();
+    try ecs.add_component(player, Vec3f, pos, .{ 0, 0, 0 });
+    try std.testing.expectEqual(.{ 0, 0, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+    try ecs.add_component(player, Vec3f, pos, .{ 0, 1, 0 });
+    try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+}
