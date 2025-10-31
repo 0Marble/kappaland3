@@ -208,6 +208,7 @@ const SystemStore = struct {
         const VISITED_BIT: u8 = 0x02;
         const COMPLETE_BIT: u8 = 0x04;
         const WORKING_BIT: u8 = 0x08;
+        const DISABLED_BIT: u8 = 0x10;
 
         pub inline fn run(self: *System, ecs: *Ecs, eid: EntityRef) void {
             self.callback(self.data, ecs, eid);
@@ -339,6 +340,7 @@ const SystemStore = struct {
         for (self.systems.items) |sys| {
             if (sys.status & System.ALIVE_BIT == 0) continue;
             if (sys.status & System.COMPLETE_BIT != 0) continue;
+            if (sys.status & System.DISABLED_BIT != 0) continue;
             std.debug.assert(sys.status & System.WORKING_BIT == 0);
 
             try self.queue.push(alloc, sys);
@@ -350,7 +352,7 @@ const SystemStore = struct {
                 while (edge) |e| {
                     edge = e.next;
                     const next = e.sys;
-                    if (next.status & System.COMPLETE_BIT != 0) {
+                    if (next.status & System.COMPLETE_BIT != 0 or next.status & System.DISABLED_BIT != 0) {
                         continue;
                     }
 
@@ -376,6 +378,8 @@ const SystemStore = struct {
 
     fn force_eval(self: *SystemStore, ecs: *Ecs, ref: SystemRef) void {
         const sys = self.get(ref);
+        if (sys.status & System.DISABLED_BIT != 0) return;
+
         if (sys.query.len == 0) {
             for (ecs.entities.entities.items) |e| {
                 if (e.alive) sys.run(ecs, e.eid);
@@ -699,13 +703,11 @@ pub fn register_component(
         break :blk info;
     };
 
-    if (Options.ecs_logging) {
-        Log.log(
-            .debug,
-            "Ecs@{*}: Registered new component: \"{s}\", kind: {}",
-            .{ self, name, DecodedComponentRef.decode(info.kind) },
-        );
-    }
+    Log.log(
+        .debug,
+        "Ecs@{*}: Registered new component: \"{s}\", kind: {}",
+        .{ self, name, DecodedComponentRef.decode(info.kind) },
+    );
 
     return info.kind;
 }
@@ -939,6 +941,16 @@ pub fn register_system(
     }
 
     return sys.id;
+}
+
+pub fn disable_system(self: *Self, sys: SystemRef) void {
+    const s = self.systems.get(sys);
+    s.status |= SystemStore.System.DISABLED_BIT;
+}
+
+pub fn enable_system(self: *Self, sys: SystemRef) void {
+    const s = self.systems.get(sys);
+    s.status &= ~SystemStore.System.DISABLED_BIT;
 }
 
 pub fn ensure_eval_order(self: *Self, before: SystemRef, after: SystemRef) Error!void {

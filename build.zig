@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
     const options = b.addOptions();
-    options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse true);
+    options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse false);
     options.addOption(bool, "ecs_typecheck", b.option(bool, "ecs_typecheck", "Enable runtime type checking in the ecs") orelse true);
     lib.root_module.addOptions("Options", options);
 

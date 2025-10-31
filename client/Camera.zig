@@ -1,17 +1,23 @@
 const std = @import("std");
 const zm = @import("zm");
+const Ecs = @import("libmine").Ecs;
+const Keys = @import("Keys.zig");
+const App = @import("App.zig");
+const c = @import("c.zig").c;
+const Log = @import("libmine").Log;
 
 angles: @Vector(2, f32),
 pos: @Vector(3, f32),
 fov: f32,
 aspect: f32,
+eid: Ecs.EntityRef = 0,
 
 mat_changed: bool,
 cached_mat: zm.Mat4f,
 
 const Camera = @This();
-pub fn init(fov: f32, aspect: f32) Camera {
-    return .{
+pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
+    self.* = .{
         .aspect = aspect,
         .fov = fov,
         .angles = @splat(0),
@@ -19,9 +25,36 @@ pub fn init(fov: f32, aspect: f32) Camera {
         .mat_changed = true,
         .cached_mat = .zero(),
     };
+    const ecs = &App.game_state().ecs;
+    self.eid = try ecs.spawn();
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_W), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_forward),
+    });
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_S), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_forward),
+    });
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_A), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_right),
+    });
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_D), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_right),
+    });
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_SPACE), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_up),
+    });
+    try ecs.add_component(self.eid, Keys.KeydownComponent, try App.key_state().get_keydown_component(c.SDL_SCANCODE_LSHIFT), .{
+        .data = self,
+        .on_keydown = @ptrCast(&Camera.move_up),
+    });
 }
 
-pub fn move_forward(self: *Camera, amt: f32) void {
+pub fn move_forward(self: *Camera, key: c.SDL_Scancode) void {
+    const amt = if (key == c.SDL_SCANCODE_W) App.frametime() * 0.01 else -App.frametime() * 0.01;
     const dir = @Vector(3, f32){
         @sin(-self.angles[1]),
         0,
@@ -31,7 +64,8 @@ pub fn move_forward(self: *Camera, amt: f32) void {
     self.mat_changed = true;
 }
 
-pub fn move_right(self: *Camera, amt: f32) void {
+pub fn move_right(self: *Camera, key: c.SDL_Scancode) void {
+    const amt = if (key == c.SDL_SCANCODE_D) App.frametime() * 0.01 else -App.frametime() * 0.01;
     const dir = @Vector(3, f32){
         @cos(-self.angles[1]),
         0,
@@ -41,7 +75,8 @@ pub fn move_right(self: *Camera, amt: f32) void {
     self.mat_changed = true;
 }
 
-pub fn move_up(self: *Camera, amt: f32) void {
+pub fn move_up(self: *Camera, key: c.SDL_Scancode) void {
+    const amt = if (key == c.SDL_SCANCODE_SPACE) App.frametime() * 0.01 else -App.frametime() * 0.01;
     const dir = @Vector(3, f32){ 0, 1, 0 };
     self.pos += dir * @as(@Vector(3, f32), @splat(amt));
     self.mat_changed = true;

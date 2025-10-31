@@ -9,8 +9,9 @@ pub const Camera = @import("Camera.zig");
 pub const Mesh = @import("Mesh.zig");
 pub const Shader = @import("Shader.zig");
 pub const ShaderSource = @import("ShaderSource.zig");
+const GameState = @import("GameState.zig");
 const zm = @import("zm");
-const Ecs = @import("libmine").Ecs;
+const Keys = @import("Keys.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -22,8 +23,7 @@ frame_memory: std.heap.ArenaAllocator,
 static_memory: std.heap.ArenaAllocator,
 
 frame_data: FrameData,
-
-ecs: Ecs,
+game: GameState,
 
 const App = @This();
 var ok = false;
@@ -37,7 +37,7 @@ const FrameData = struct {
     frame_end_time: i64 = 0,
     this_frame_start: i64 = 0,
 
-    fn start_frame(self: *FrameData) void {
+    fn on_frame_start(self: *FrameData) void {
         self.this_frame_start = std.time.milliTimestamp();
 
         if (self.this_frame_start >= self.last_fps_measurement_time + 1000) {
@@ -56,7 +56,7 @@ const FrameData = struct {
         }
     }
 
-    fn end_frame(self: *FrameData) void {
+    fn on_frame_end(self: *FrameData) void {
         self.frame_start_time = self.this_frame_start;
         self.frame_end_time = std.time.milliTimestamp();
         self.cur_frame += 1;
@@ -71,12 +71,11 @@ pub fn init() !void {
     app = try debug_alloc.allocator().create(App);
     @memset(std.mem.asBytes(app), 0xbc);
     app.main_alloc = debug_alloc;
-    app.frame_data = .{};
 
     try init_memory();
     try init_sdl();
     try init_gl();
-    app.ecs = .init(gpa());
+    try init_gamestate();
 
     Log.log(.debug, "Started the client", .{});
     ok = true;
@@ -86,6 +85,11 @@ fn init_memory() !void {
     app.temp_memory = .init(gpa());
     app.frame_memory = .init(gpa());
     app.static_memory = .init(gpa());
+}
+
+fn init_gamestate() !void {
+    app.frame_data = .{};
+    try app.game.init();
 }
 
 fn init_sdl() !void {
@@ -119,7 +123,7 @@ fn init_gl() !void {
 pub fn deinit() void {
     if (!ok) return;
 
-    app.ecs.deinit();
+    app.game.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -137,6 +141,10 @@ pub fn deinit() void {
     ok = false;
 }
 
+pub fn game_state() *GameState {
+    return &app.game;
+}
+
 pub fn gpa() std.mem.Allocator {
     return app.main_alloc.allocator();
 }
@@ -152,19 +160,27 @@ pub fn frame_alloc() std.mem.Allocator {
 
 pub fn run() !void {
     while (true) {
-        app.frame_data.start_frame();
-
-        _ = app.frame_memory.reset(.{ .retain_capacity = {} });
-
+        app.frame_data.on_frame_start();
         if (!try handle_events()) break;
+
+        try app.game.on_frame_start();
+
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        try app.game.update();
 
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
         }
 
-        app.frame_data.end_frame();
+        try app.game.on_frame_end();
+        app.frame_data.on_frame_end();
+        _ = app.frame_memory.reset(.{ .retain_capacity = {} });
     }
+}
+
+pub fn key_state() *Keys {
+    return &game_state().keys;
 }
 
 fn handle_events() !bool {
@@ -176,9 +192,19 @@ fn handle_events() !bool {
             c.SDL_EVENT_WINDOW_RESIZED => {
                 gl.Viewport(0, 0, evt.window.data1, evt.window.data2);
             },
+            c.SDL_EVENT_KEY_DOWN => {
+                try key_state().on_keydown(evt.key.scancode);
+            },
+            c.SDL_EVENT_KEY_UP => {
+                try key_state().on_keyup(evt.key.scancode);
+            },
             else => {},
         }
     }
 
     return running;
+}
+
+pub fn frametime() f32 {
+    return @floatFromInt(app.frame_data.frame_end_time - app.frame_data.frame_start_time);
 }
