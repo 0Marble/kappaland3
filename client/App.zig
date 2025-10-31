@@ -9,7 +9,7 @@ pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
 const Keys = @import("Keys.zig");
 const Ecs = @import("libmine").Ecs;
-const TestScene = @import("TestScene.zig");
+const World = @import("World.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -23,7 +23,7 @@ static_memory: std.heap.ArenaAllocator,
 frame_data: FrameData,
 game: GameState,
 
-scene: TestScene,
+world: World,
 
 const App = @This();
 var ok = false;
@@ -90,7 +90,7 @@ fn init_memory() !void {
 fn init_gamestate() !void {
     app.frame_data = .{};
     try app.game.init();
-    app.scene = try .init();
+    app.world = try .init();
 }
 
 fn init_sdl() !void {
@@ -118,6 +118,9 @@ fn init_gl() !void {
     gl.makeProcTableCurrent(&app.gl_procs);
     try gl_call(gl.Enable(gl.DEPTH_TEST));
     try gl_call(gl.Enable(gl.MULTISAMPLE));
+    try gl_call(gl.FrontFace(gl.CW));
+    try gl_call(gl.Enable(gl.CULL_FACE));
+    try gl_call(gl.Enable(gl.DEPTH_TEST));
     Log.log(.debug, "Initialized OpenGL", .{});
 }
 
@@ -125,7 +128,7 @@ pub fn deinit() void {
     if (!ok) return;
 
     app.game.deinit();
-    app.scene.deinit();
+    app.world.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -161,6 +164,7 @@ pub fn frame_alloc() std.mem.Allocator {
 }
 
 pub fn run() !void {
+    try gl_call(gl.ClearColor(0.4, 0.4, 0.4, 1.0));
     while (true) {
         app.frame_data.on_frame_start();
         if (!try handle_events()) break;
@@ -170,7 +174,7 @@ pub fn run() !void {
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         try app.game.update();
-        try app.scene.draw(app.game.camera.as_mat());
+        try app.world.draw();
 
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
