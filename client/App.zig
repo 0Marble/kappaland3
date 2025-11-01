@@ -100,12 +100,20 @@ fn init_sdl() !void {
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, gl.info.version_major));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, gl.info.version_minor));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
-    try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG));
+    try sdl_call(c.SDL_GL_SetAttribute(
+        c.SDL_GL_CONTEXT_FLAGS,
+        c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG,
+    ));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
     Log.log(.debug, "Set OpenGL attributes", .{});
 
-    app.win = try sdl_call(c.SDL_CreateWindow("Client", 640, 480, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_OPENGL));
+    app.win = try sdl_call(c.SDL_CreateWindow(
+        "Client",
+        640,
+        480,
+        c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_OPENGL,
+    ));
     Log.log(.debug, "Created SDL Window", .{});
     Log.log(.debug, "Initialized SDL", .{});
 }
@@ -122,7 +130,37 @@ fn init_gl() !void {
     try gl_call(gl.Enable(gl.DEPTH_TEST));
     try gl_call(gl.ClipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE));
     try gl_call(gl.DepthFunc(gl.GREATER));
+
+    var flags: u32 = 0;
+    try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
+    if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {
+        Log.log(.warn, "Could not enable OpenGL debug output!", .{});
+    } else {
+        try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
+        try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
+        try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
+        Log.log(.debug, "Enabled OpenGL debug output", .{});
+    }
+
     Log.log(.debug, "Initialized OpenGL", .{});
+}
+
+fn gl_debug_callback(
+    source: gl.@"enum",
+    typ: gl.@"enum",
+    id: u32,
+    severity: gl.@"enum",
+    size: i32,
+    msg: [*:0]const u8,
+    _: ?*const anyopaque,
+) callconv(.c) void {
+    var msg_slice: [:0]const u8 = undefined;
+    msg_slice.ptr = msg;
+    msg_slice.len = @intCast(size);
+
+    Log.log(.warn, "--------", .{});
+    Log.log(.warn, "{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
+    Log.log(.warn, "--------", .{});
 }
 
 pub fn deinit() void {
@@ -185,6 +223,8 @@ pub fn run() !void {
 
         try app.game.on_frame_end();
         app.frame_data.on_frame_end();
+        try app.world.process_one_chunk();
+
         _ = app.frame_memory.reset(.{ .retain_capacity = {} });
     }
 }
