@@ -1,11 +1,12 @@
 const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
-const App = @import("App.zig");
 const std = @import("std");
 const gl = @import("gl");
 const zm = @import("zm");
 const gl_call = @import("util.zig").gl_call;
 const Shader = @import("Shader.zig");
+const App = @import("App.zig");
+const Options = @import("ClientOptions");
 
 const CHUNK_SIZE = 16;
 
@@ -21,10 +22,18 @@ const BlockId = enum(u32) {
 
 const vert =
     \\#version 460 core
-    \\layout (location = 0) in uint vert_data; // nnnxxxxx|000yyyyy|000zzzzz|texture
+    \\layout (location = 0) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
+    \\                                            // per instance
     \\layout (std140, binding = 1) buffer Chunk {
     \\  ivec3 chunk_coords[];
     \\};
+++ (if (Options.chunk_debug_buffer)
+    \\layout (std430, binding = 2) buffer Debug { 
+    \\  uint debug_vertex_ids[];
+    \\};
+    \\
+else
+    "") ++
     \\uniform mat4 u_vp;
     \\
     \\out vec3 frag_norm;
@@ -32,12 +41,12 @@ const vert =
     \\out vec3 frag_pos;
     \\
     \\vec3 normals[6] = {
-    \\  vec3(0, 0, 1),
-    \\  vec3(0, 0, -1),
-    \\  vec3(1, 0, 0),
-    \\  vec3(-1, 0, 0),
-    \\  vec3(0, 1, 0),
-    \\  vec3(0, -1, 0)
+    \\  vec3(0, 0, 1),  // front
+    \\  vec3(0, 0, -1), // back
+    \\  vec3(1, 0, 0),  // right
+    \\  vec3(-1, 0, 0), // left
+    \\  vec3(0, 1, 0),  // top
+    \\  vec3(0, -1, 0), // bottom
     \\};
     \\vec3 colors[4] = {
     \\  vec3(0, 0, 0),
@@ -45,23 +54,23 @@ const vert =
     \\  vec3(0.4,0.2,0),
     \\  vec3(0.1,0.4,0.1),
     \\};
-    \\
-    \\uvec3 dummy_pos() {
-    \\  uint i = gl_VertexID / 4;
-    \\  uint x = i / 256;
-    \\  uint y = i % 16;
-    \\  uint z = (i / 16) % 16;
-    \\  uvec3 quad[4] = {uvec3(0,1,1), uvec3(0,1,0), uvec3(1,1,0), uvec3(1,1,1)};
-    \\  return quad[gl_VertexID % 4] + uvec3(x,y,z);
-    \\}
+    \\vec3 faces[6][4] = {
+    \\  {vec3(0,0,1),vec3(0,1,1),vec3(1,1,1),vec3(1,0,1)}, 
+    \\  {vec3(1,0,0),vec3(1,1,0),vec3(0,1,0),vec3(0,0,0)}, 
+    \\  {vec3(1,0,1),vec3(1,1,1),vec3(1,1,0),vec3(1,0,0)}, 
+    \\  {vec3(0,0,0),vec3(0,1,0),vec3(0,1,1),vec3(0,0,1)}, 
+    \\  {vec3(0,1,1),vec3(0,1,0),vec3(1,1,0),vec3(1,1,1)}, 
+    \\  {vec3(1,0,1),vec3(1,0,0),vec3(0,0,0),vec3(0,0,1)},
+    \\};
     \\
     \\void main() {
-    \\  uint n = (vert_data & uint(0xE0000000)) >> 29;
-    \\  uint x = (vert_data & uint(0x1F000000)) >> 24;
-    \\  uint y = (vert_data & uint(0x001F0000)) >> 16;
-    \\  uint z = (vert_data & uint(0x00001F00)) >> 8;
+    \\  uint x = (vert_data & uint(0xF0000000)) >> 28;
+    \\  uint y = (vert_data & uint(0x0F000000)) >> 24;
+    \\  uint z = (vert_data & uint(0x00F00000)) >> 20;
+    \\  uint n = (vert_data & uint(0x000F0000)) >> 16;
+    \\  uint p = (vert_data & uint(0x0000FF00)) >> 8;
     \\  uint t = (vert_data & uint(0x000000FF)) >> 0;
-    \\  frag_pos = vec3(x,y,z) + 16 * vec3(chunk_coords[gl_DrawID]);
+    \\  frag_pos = vec3(x,y,z) + faces[n][gl_VertexID] + 16 * vec3(chunk_coords[gl_DrawID]);
     \\  frag_color = vec3(x,y,z)/16;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
@@ -96,10 +105,11 @@ chunks: []Chunk,
 shader: Shader,
 
 vao: gl.uint,
-verts_vbo: gl.uint,
-verts_ibo: gl.uint,
+ibo: gl.uint,
+face_data_buffer: gl.uint,
 chunk_coords_ssbo: gl.uint,
 indirect_buffer: gl.uint,
+debug_buffer: if (Options.chunk_debug_buffer) gl.uint else void,
 
 const World = @This();
 pub fn init() !World {
@@ -122,8 +132,7 @@ const Indirect = extern struct {
 fn init_buffers(self: *World) !void {
     const indirect = try App.frame_alloc().alloc(Indirect, self.chunks.len);
     const chunk_coords = try App.frame_alloc().alloc(i32, 4 * self.chunks.len);
-    var total_vertex_count: usize = 0;
-    var total_index_count: usize = 0;
+    var total_face_count: usize = 0;
 
     for (0..self.chunks.len) |i| {
         const chunk = &self.chunks[i];
@@ -132,19 +141,20 @@ fn init_buffers(self: *World) !void {
         chunk_coords[4 * i + 2] = chunk.z;
         chunk_coords[4 * i + 3] = 0;
         indirect[i] = .{
-            .count = @intCast(chunk.inds.items.len),
-            .instance_count = 1,
-            .base_instance = 0,
-            .first_index = @intCast(total_index_count),
-            .base_vertex = @intCast(total_vertex_count),
+            .count = 6,
+            .instance_count = @intCast(chunk.face_data.items.len),
+            .base_instance = @intCast(total_face_count),
+            .first_index = 0,
+            .base_vertex = 0,
         };
-        total_vertex_count += self.chunks[i].verts.items.len;
-        total_index_count += self.chunks[i].inds.items.len;
+        total_face_count += self.chunks[i].face_data.items.len;
 
         Log.log(.debug, "{*}: Chunk[{d}] {*}:", .{ self, i, &self.chunks[i] });
         Log.log(.debug, "\tPrimitive count: {d}", .{indirect[i].count});
+        Log.log(.debug, "\tInstance count: {d}", .{indirect[i].instance_count});
         Log.log(.debug, "\tIndex start: {d}", .{indirect[i].first_index});
         Log.log(.debug, "\tIndex offset: +{d}", .{indirect[i].base_vertex});
+        Log.log(.debug, "\tBase instance: {d}", .{indirect[i].base_instance});
         Log.log(.debug, "\tChunk coordinates: {}", .{.{
             chunk_coords[4 * i + 0],
             chunk_coords[4 * i + 1],
@@ -153,28 +163,33 @@ fn init_buffers(self: *World) !void {
     }
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.verts_vbo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.verts_ibo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.face_data_buffer)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.ibo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_coords_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
+    if (Options.chunk_debug_buffer) {
+        try gl_call(gl.GenBuffers(1, @ptrCast(&self.debug_buffer)));
+    }
 
     try gl_call(gl.BindVertexArray(self.vao));
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.verts_vbo));
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.face_data_buffer));
     try gl_call(gl.BufferData(
         gl.ARRAY_BUFFER,
-        @intCast(total_vertex_count * @sizeOf(u32)),
+        @intCast(total_face_count * @sizeOf(u32)),
         null,
         gl.STATIC_DRAW,
     ));
-    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.verts_ibo));
+    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.ibo));
+    const inds = [_]u8{ 0, 1, 2, 0, 2, 3 };
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
-        @intCast(total_index_count * @sizeOf(u32)),
-        null,
+        @intCast(6 * @sizeOf(u8)),
+        &inds,
         gl.STATIC_DRAW,
     ));
     try gl_call(gl.EnableVertexAttribArray(0));
     try gl_call(gl.VertexAttribIPointer(0, 1, gl.UNSIGNED_INT, @sizeOf(u32), 0));
+    try gl_call(gl.VertexAttribDivisor(0, 1));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
     try gl_call(gl.BufferData(
@@ -185,6 +200,17 @@ fn init_buffers(self: *World) !void {
     ));
     try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, self.chunk_coords_ssbo));
 
+    if (Options.chunk_debug_buffer) {
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.debug_buffer));
+        try gl_call(gl.BufferStorage(
+            gl.SHADER_STORAGE_BUFFER,
+            DEBUG_SIZE * @sizeOf(u32),
+            null,
+            gl.MAP_READ_BIT | gl.MAP_COHERENT_BIT | gl.MAP_PERSISTENT_BIT,
+        ));
+        try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, self.debug_buffer));
+    }
+
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.BufferData(
         gl.DRAW_INDIRECT_BUFFER,
@@ -194,22 +220,14 @@ fn init_buffers(self: *World) !void {
     ));
 
     var vert_offset: usize = 0;
-    var inds_offset: usize = 0;
     for (0..self.chunks.len) |i| {
         try gl_call(gl.BufferSubData(
             gl.ARRAY_BUFFER,
             @intCast(vert_offset * @sizeOf(u32)),
-            @intCast(self.chunks[i].verts.items.len * @sizeOf(u32)),
-            @ptrCast(self.chunks[i].verts.items),
+            @intCast(self.chunks[i].face_data.items.len * @sizeOf(u32)),
+            @ptrCast(self.chunks[i].face_data.items),
         ));
-        vert_offset += self.chunks[i].verts.items.len;
-        try gl_call(gl.BufferSubData(
-            gl.ELEMENT_ARRAY_BUFFER,
-            @intCast(inds_offset * @sizeOf(u32)),
-            @intCast(self.chunks[i].inds.items.len * @sizeOf(u32)),
-            @ptrCast(self.chunks[i].inds.items),
-        ));
-        inds_offset += self.chunks[i].inds.items.len;
+        vert_offset += self.chunks[i].face_data.items.len;
     }
 
     try gl_call(gl.BindVertexArray(0));
@@ -219,20 +237,21 @@ fn init_buffers(self: *World) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 }
 
+const DIM = 8;
+const HEIGHT = 8;
+const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 fn init_chunks(self: *World) !void {
     Log.log(.debug, "Generating world...", .{});
-    const dim = 16;
-    const height = 5;
-    const chunk_count = dim * dim * height;
+    const chunk_count = DIM * DIM * HEIGHT;
     self.chunks = try App.gpa().alloc(Chunk, chunk_count);
-    for (0..dim) |i| {
-        for (0..dim) |j| {
-            for (0..height) |k| {
-                const idx = i * dim * height + j * height + k;
+    for (0..DIM) |i| {
+        for (0..DIM) |j| {
+            for (0..HEIGHT) |k| {
+                const idx = i * DIM * HEIGHT + j * HEIGHT + k;
                 const x: i32 = @intCast(i);
                 const y: i32 = @intCast(k);
                 const z: i32 = @intCast(j);
-                try self.chunks[idx].init(x - dim / 2, y - height + 1, z - dim / 2);
+                try self.chunks[idx].init(x - DIM / 2, y - HEIGHT + 1, z - DIM / 2);
             }
         }
     }
@@ -241,9 +260,12 @@ fn init_chunks(self: *World) !void {
 
 pub fn deinit(self: *World) void {
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_coords_ssbo));
-    gl.DeleteBuffers(1, @ptrCast(&self.verts_vbo));
-    gl.DeleteBuffers(1, @ptrCast(&self.verts_ibo));
+    gl.DeleteBuffers(1, @ptrCast(&self.face_data_buffer));
+    gl.DeleteBuffers(1, @ptrCast(&self.ibo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buffer));
+    if (Options.chunk_debug_buffer) {
+        gl.DeleteBuffers(1, @ptrCast(&self.debug_buffer));
+    }
     gl.DeleteVertexArrays(1, @ptrCast(&self.vao));
 
     self.shader.deinit();
@@ -260,13 +282,26 @@ pub fn draw(self: *World) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
-        gl.UNSIGNED_INT,
+        gl.UNSIGNED_BYTE,
         0,
         @intCast(self.chunks.len),
         0,
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
+
+    if (Options.chunk_debug_buffer and App.current_frame() == 0) {
+        try gl_call(gl.Finish());
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.debug_buffer));
+        const ptr: [*]const u32 = @ptrCast(@alignCast((try gl_call(gl.MapBuffer(
+            gl.SHADER_STORAGE_BUFFER,
+            gl.READ_ONLY,
+        ))).?));
+        var debug = std.mem.zeroes([DEBUG_SIZE]u32);
+        @memcpy(&debug, ptr);
+        _ = try gl_call(gl.UnmapBuffer(gl.SHADER_STORAGE_BUFFER));
+        Log.log(.debug, "{any}", .{debug[0..100]});
+    }
 }
 
 fn init_shader(self: *World) !void {
@@ -295,7 +330,7 @@ pub const Chunk = struct {
     z: i32,
 
     blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]BlockId,
-    verts: std.ArrayListUnmanaged(u32),
+    face_data: std.ArrayListUnmanaged(u32),
     inds: std.ArrayListUnmanaged(u32),
 
     const I_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
@@ -309,74 +344,26 @@ pub const Chunk = struct {
                     const b = self.blocks[i * I_OFFSET + j * J_OFFSET + k * K_OFFSET];
                     if (b == .air) continue;
 
-                    const top_visible = if (k + 1 == CHUNK_SIZE)
-                        true
-                    else
-                        self.blocks[i * I_OFFSET + j * J_OFFSET + (k + 1) * K_OFFSET] == .air;
-                    const bot_visible = if (k == 0)
-                        true
-                    else
-                        self.blocks[i * I_OFFSET + j * J_OFFSET + (k - 1) * K_OFFSET] == .air;
-                    const front_visible = if (j + 1 == CHUNK_SIZE)
-                        true
-                    else
-                        self.blocks[i * I_OFFSET + (j + 1) * J_OFFSET + k * K_OFFSET] == .air;
-                    const back_visible = if (j == 0)
-                        true
-                    else
-                        self.blocks[i * I_OFFSET + (j - 1) * J_OFFSET + k * K_OFFSET] == .air;
-                    const right_visible = if (i + 1 == CHUNK_SIZE)
-                        true
-                    else
-                        self.blocks[(i + 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air;
-                    const left_visible = if (i == 0)
-                        true
-                    else
-                        self.blocks[(i - 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air;
-
-                    if (top_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 1, .top, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 0, .top, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 0, .top, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 1, .top, b));
+                    if (k + 1 == CHUNK_SIZE or self.blocks[i * I_OFFSET + j * J_OFFSET + (k + 1) * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .top, b));
                     }
-                    if (front_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 1, .front, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 1, .front, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 1, .front, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 1, .front, b));
+                    if (j + 1 == CHUNK_SIZE or self.blocks[i * I_OFFSET + (j + 1) * J_OFFSET + k * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .front, b));
                     }
-                    if (back_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 0, .back, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 0, .back, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 0, .back, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 0, .back, b));
+                    if (i + 1 == CHUNK_SIZE or self.blocks[(i + 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .right, b));
                     }
-                    if (bot_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 1, .bot, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 0, .bot, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 0, .bot, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 1, .bot, b));
+                    if (k == 0 or self.blocks[i * I_OFFSET + j * J_OFFSET + (k - 1) * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .bot, b));
                     }
-                    if (left_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 0, .left, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 0, .left, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 1, j + 1, .left, b));
-                        try self.verts.append(App.gpa(), pack(i + 0, k + 0, j + 1, .left, b));
+                    if (j == 0 or self.blocks[i * I_OFFSET + (j - 1) * J_OFFSET + k * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .back, b));
                     }
-                    if (right_visible) {
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 1, .right, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 1, .right, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 1, j + 0, .right, b));
-                        try self.verts.append(App.gpa(), pack(i + 1, k + 0, j + 0, .right, b));
+                    if (i == 0 or self.blocks[(i - 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air) {
+                        try self.face_data.append(App.gpa(), pack(i, k, j, .left, b));
                     }
                 }
             }
-        }
-
-        for (0..self.verts.items.len / 4) |i| {
-            const j: u32 = @as(u32, @intCast(i)) * 4;
-            try self.inds.appendSlice(App.gpa(), &.{ j + 0, j + 1, j + 2, j + 0, j + 2, j + 3 });
         }
     }
 
@@ -384,10 +371,12 @@ pub const Chunk = struct {
     fn pack(x: usize, y: usize, z: usize, face: Face, block: BlockId) u32 {
         var res: u32 = 0;
 
-        res |= @as(u32, @intFromEnum(face)) << 29;
-        res |= @as(u32, @intCast(x)) << 24;
-        res |= @as(u32, @intCast(y)) << 16;
-        res |= @as(u32, @intCast(z)) << 8;
+        res |= @as(u32, @intCast(x)) << 28;
+        res |= @as(u32, @intCast(y)) << 24;
+        res |= @as(u32, @intCast(z)) << 20;
+        res |= @as(u32, @intFromEnum(face)) << 16;
+
+        res |= @as(u32, @intCast(0xC3)) << 8;
         res |= @as(u32, @intFromEnum(block));
 
         return res;
@@ -403,7 +392,7 @@ pub const Chunk = struct {
 
     pub fn init(self: *Chunk, x: i32, y: i32, z: i32) !void {
         self.* = .{
-            .verts = .empty,
+            .face_data = .empty,
             .inds = .empty,
             .x = x,
             .y = y,
@@ -413,11 +402,7 @@ pub const Chunk = struct {
         self.dummy_generate();
         try self.build_mesh();
         // const b: BlockId = if (@rem(x + y + z, 2) == 0) .dirt else .stone;
-        // try self.verts.append(App.gpa(), pack(0, 1, 16, .top, b));
-        // try self.verts.append(App.gpa(), pack(0, 1, 0, .top, b));
-        // try self.verts.append(App.gpa(), pack(16, 1, 0, .top, b));
-        // try self.verts.append(App.gpa(), pack(16, 1, 16, .top, b));
-        // try self.inds.appendSlice(App.gpa(), &.{ 0, 1, 2, 0, 2, 3 });
+        // try self.face_data.append(App.gpa(), pack(0, 0, 0, .top, b));
     }
 
     fn dummy_generate(self: *Chunk) void {
@@ -447,7 +432,7 @@ pub const Chunk = struct {
     }
 
     pub fn deinit(self: *Chunk) void {
-        self.verts.deinit(App.gpa());
+        self.face_data.deinit(App.gpa());
         self.inds.deinit(App.gpa());
     }
 };

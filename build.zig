@@ -13,10 +13,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(lib);
-    const options = b.addOptions();
-    options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse false);
-    options.addOption(bool, "ecs_typecheck", b.option(bool, "ecs_typecheck", "Enable runtime type checking in the ecs") orelse true);
-    lib.root_module.addOptions("Options", options);
+    const lib_options = b.addOptions();
+    lib_options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse false);
+    lib_options.addOption(bool, "ecs_typecheck", b.option(bool, "ecs_typecheck", "Enable runtime type checking in the ecs") orelse true);
+    lib.root_module.addOptions("Options", lib_options);
 
     const server = b.addExecutable(.{
         .name = "server",
@@ -58,6 +58,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("assets/HelloScene.zon"),
     }));
     b.installArtifact(client);
+    const client_options = b.addOptions();
+    client_options.addOption(bool, "chunk_debug_buffer", b.option(bool, "chunk_debug_buffer", "Enable debug buffer in the chunk shader") orelse false);
+    client.root_module.addOptions("ClientOptions", client_options);
 
     const run_step = b.step("run", "run the client");
     const run_client = b.addRunArtifact(client);

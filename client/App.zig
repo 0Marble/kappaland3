@@ -235,3 +235,7 @@ pub fn frametime() f32 {
 pub fn ecs() *Ecs {
     return &game_state().ecs;
 }
+
+pub fn current_frame() u64 {
+    return app.frame_data.cur_frame;
+}
