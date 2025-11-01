@@ -11,44 +11,50 @@ const Block = @import("Block");
 const GpuAlloc = @import("GpuAlloc.zig");
 
 const CHUNK_SIZE = 16;
+const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
+const EXPECTED_LOADED_CHUNKS_COUNT = 512;
+const DIM = 16;
+const HEIGHT = 3;
+const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
+const VERT_DATA_LOCATION = 0;
+const CHUNK_DATA_LOCATION = 1;
+const DEBUG_DATA_LOCATION = 2;
+const BLOCK_DATA_LOCATION = 3;
 
-pub const BlockStore = struct {};
-
-const BlockId = enum(u32) {
-    air = 0,
-    stone = 1,
-    dirt = 2,
-    grass = 3,
-    _,
-};
-
-const vert =
+const VERT =
     \\#version 460 core
-    \\#define BLOCK_FACE_COUNT 
-++ std.fmt.comptimePrint("{d}", .{Block.faces.len}) ++ "\n" ++
-    \\#define VERTS_PER_FACE 
-++ std.fmt.comptimePrint("{d}", .{Block.faces[0].len}) ++ "\n" ++
     \\
-    \\layout (location = 0) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
+++ std.fmt.comptimePrint("#define BLOCK_FACE_COUNT {d}\n", .{Block.faces.len}) ++
+    \\
+++ std.fmt.comptimePrint("#define VERTS_PER_FACE {d}\n", .{Block.faces[0].len}) ++
+    \\
+++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION {d}\n", .{VERT_DATA_LOCATION}) ++
+    \\
+++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_LOCATION}) ++
+    \\
+++ std.fmt.comptimePrint("#define DEBUG_DATA_LOCATION {d}\n", .{DEBUG_DATA_LOCATION}) ++
+    \\
+++ std.fmt.comptimePrint("#define BLOCK_DATA_LOCATION {d}\n", .{BLOCK_DATA_LOCATION}) ++
+    \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
     \\                                            // per instance
     \\uniform mat4 u_vp;
     \\
     \\out vec3 frag_norm;
     \\out vec3 frag_color;
     \\out vec3 frag_pos;
-    \\layout (std430, binding = 1) buffer Chunk {
+    \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
     \\  ivec3 chunk_coords[];
     \\};
     \\
 ++ (if (Options.chunk_debug_buffer)
-    \\layout (std430, binding = 2) buffer Debug { 
+    \\layout (std430, binding = DEBUG_DATA_LOCATION) buffer Debug { 
     \\  uint debug_vertex_ids[];
     \\};
     \\
 else
     "") ++
     \\
-    \\layout(std140, binding = 3) uniform Block {
+    \\layout(std140, binding = BLOCK_DATA_LOCATION) uniform Block {
     \\  vec3 normals[BLOCK_FACE_COUNT];
     \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE];
     \\};
@@ -65,7 +71,7 @@ else
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
 ;
-const frag =
+const FRAG =
     \\#version 460 core
     \\
     \\uniform vec3 u_ambient;
@@ -103,19 +109,11 @@ pub fn init() !World {
     var self: World = undefined;
     try self.storage.init();
     try self.init_shader();
-    try self.init_common_buffers();
+    try self.init_buffers();
     try self.init_chunks();
 
     return self;
 }
-
-const Indirect = extern struct {
-    count: u32,
-    instance_count: u32,
-    first_index: u32,
-    base_vertex: i32,
-    base_instance: u32,
-};
 
 const raw_faces: []const u8 = blk: {
     const faces_count = Block.faces.len;
@@ -140,7 +138,7 @@ const raw_faces: []const u8 = blk: {
     break :blk @ptrCast(&(normals_data ++ faces_data));
 };
 
-fn init_common_buffers(self: *World) !void {
+fn init_buffers(self: *World) !void {
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
@@ -160,9 +158,9 @@ fn init_common_buffers(self: *World) !void {
     ));
 
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.storage.faces.buffer));
-    try gl_call(gl.EnableVertexAttribArray(0));
-    try gl_call(gl.VertexAttribIPointer(0, 1, gl.UNSIGNED_INT, @sizeOf(u32), 0));
-    try gl_call(gl.VertexAttribDivisor(0, 1));
+    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION));
+    try gl_call(gl.VertexAttribIPointer(VERT_DATA_LOCATION, 1, gl.UNSIGNED_INT, @sizeOf(u32), 0));
+    try gl_call(gl.VertexAttribDivisor(VERT_DATA_LOCATION, 1));
 
     if (Options.chunk_debug_buffer) {
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.debug_buffer));
@@ -172,7 +170,7 @@ fn init_common_buffers(self: *World) !void {
             null,
             gl.MAP_READ_BIT | gl.MAP_COHERENT_BIT | gl.MAP_PERSISTENT_BIT,
         ));
-        try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, self.debug_buffer));
+        try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, DEBUG_DATA_LOCATION, self.debug_buffer));
     }
 
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
@@ -182,7 +180,11 @@ fn init_common_buffers(self: *World) !void {
         raw_faces.ptr,
         0,
     ));
-    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, 3, self.block_ubo));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_LOCATION, self.block_ubo));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.storage.chunk_coords_ssbo));
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_LOCATION, self.storage.chunk_coords_ssbo));
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
@@ -191,9 +193,6 @@ fn init_common_buffers(self: *World) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 }
 
-const DIM = 16;
-const HEIGHT = 8;
-const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 fn init_chunks(self: *World) !void {
     for (0..DIM) |i| {
         for (0..DIM) |j| {
@@ -234,15 +233,15 @@ pub fn draw(self: *World) !void {
     try self.shader.set_mat4("u_vp", vp);
 
     try gl_call(gl.BindVertexArray(self.vao));
-    // try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
-    // try gl_call(gl.MultiDrawElementsIndirect(
-    //     gl.TRIANGLES,
-    //     @field(gl, Block.index_type),
-    //     0,
-    //     @intCast(self.chunks.len),
-    //     0,
-    // ));
-    // try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.storage.indirect_buffer));
+    try gl_call(gl.MultiDrawElementsIndirect(
+        gl.TRIANGLES,
+        @field(gl, Block.index_type),
+        0,
+        @intCast(self.storage.active_chunks_count()),
+        0,
+    ));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
 
     if (Options.chunk_debug_buffer and App.current_frame() == 0) {
@@ -259,20 +258,21 @@ pub fn draw(self: *World) !void {
     }
 }
 
-pub fn process_one_chunk(self: *World) !void {
-    try self.storage.process_one();
+pub fn process_chunks(self: *World) !void {
+    _ = try self.storage.process_one();
+    try self.storage.regenerate_indirect();
 }
 
 fn init_shader(self: *World) !void {
     var sources: [2]Shader.Source = .{
         .{
             .kind = gl.VERTEX_SHADER,
-            .sources = &.{vert},
+            .sources = &.{VERT},
             .name = "chunk_vert",
         },
         .{
             .kind = gl.FRAGMENT_SHADER,
-            .sources = &.{frag},
+            .sources = &.{FRAG},
             .name = "chunk_frag",
         },
     };
@@ -283,6 +283,14 @@ fn init_shader(self: *World) !void {
     try self.shader.set_vec3("u_light_color", .{ 1, 1, 0.9 });
 }
 
+const BlockId = enum(u32) {
+    air = 0,
+    stone = 1,
+    dirt = 2,
+    grass = 3,
+    _,
+};
+
 pub const Chunk = struct {
     coords: ChunkCoord,
     handle: GpuAlloc.Handle,
@@ -290,6 +298,7 @@ pub const Chunk = struct {
     blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]BlockId,
     face_data: std.ArrayListUnmanaged(u32),
     callbacks: std.ArrayListUnmanaged(ChunkCallback),
+    active_chunk_index: usize,
 
     const I_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
     const J_OFFSET = CHUNK_SIZE;
@@ -356,6 +365,7 @@ pub const Chunk = struct {
             .callbacks = .empty,
             .stage = .ungenerated,
             .handle = .invalid,
+            .active_chunk_index = 0,
         };
     }
 
@@ -407,25 +417,56 @@ pub const ChunkCallback = struct {
     }
 };
 
+const Indirect = extern struct {
+    count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    base_instance: u32,
+};
+
 const ChunkStorage = struct {
     faces: GpuAlloc,
     indirect_buffer: gl.uint,
     chunk_coords_ssbo: gl.uint,
+    allocated_chunks_count: usize,
 
     chunk_worklist: std.ArrayListUnmanaged(*Chunk),
     active_chunks: std.AutoArrayHashMapUnmanaged(ChunkCoord, *Chunk),
     freelist: std.ArrayListUnmanaged(*Chunk),
+    active_list_changed: bool,
 
     pub fn init(self: *ChunkStorage) !void {
-        const initial_size = 16 * 1024 * 1024;
         self.* = ChunkStorage{
-            .faces = try .init(App.gpa(), initial_size, gl.STREAM_DRAW),
+            .faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW),
             .indirect_buffer = 0,
             .chunk_coords_ssbo = 0,
             .chunk_worklist = .empty,
             .active_chunks = .empty,
             .freelist = .empty,
+            .active_list_changed = false,
+            .allocated_chunks_count = EXPECTED_LOADED_CHUNKS_COUNT,
         };
+
+        try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
+        try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
+        try gl_call(gl.BufferData(
+            gl.DRAW_INDIRECT_BUFFER,
+            @intCast(EXPECTED_LOADED_CHUNKS_COUNT * @sizeOf(Indirect)),
+            null,
+            gl.STREAM_DRAW,
+        ));
+        try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+
+        try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_coords_ssbo)));
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
+        try gl_call(gl.BufferData(
+            gl.SHADER_STORAGE_BUFFER,
+            @intCast(EXPECTED_LOADED_CHUNKS_COUNT * @sizeOf(u32) * 4),
+            null,
+            gl.STREAM_DRAW,
+        ));
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     }
 
     pub fn request_chunk(self: *ChunkStorage, coords: ChunkCoord, callback: ?ChunkCallback) !void {
@@ -449,7 +490,64 @@ const ChunkStorage = struct {
         }
     }
 
-    pub fn process_one(self: *ChunkStorage) !void {
+    fn regenerate_indirect(self: *ChunkStorage) !void {
+        if (!self.active_list_changed) return;
+        self.active_list_changed = false;
+
+        const count = self.active_chunks.values().len;
+        const indirect = try App.frame_alloc().alloc(Indirect, count);
+        const coords = try App.frame_alloc().alloc(i32, 4 * count);
+        for (self.active_chunks.values()) |chunk| {
+            const range = self.faces.get_range(chunk.handle).?;
+            indirect[chunk.active_chunk_index] = Indirect{
+                .count = 6,
+                .instance_count = @intCast(chunk.face_data.items.len),
+                .base_instance = @intCast(@divExact(range.offset, 4)),
+                .base_vertex = 0,
+                .first_index = 0,
+            };
+            coords[4 * chunk.active_chunk_index + 0] = chunk.coords.x;
+            coords[4 * chunk.active_chunk_index + 1] = chunk.coords.y;
+            coords[4 * chunk.active_chunk_index + 2] = chunk.coords.z;
+        }
+
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
+        try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
+
+        if (self.allocated_chunks_count < count) {
+            self.allocated_chunks_count = count * 2;
+            try gl_call(gl.BufferData(
+                gl.SHADER_STORAGE_BUFFER,
+                @intCast(self.allocated_chunks_count * @sizeOf(i32) * 4),
+                null,
+                gl.STREAM_DRAW,
+            ));
+            try gl_call(gl.BufferData(
+                gl.DRAW_INDIRECT_BUFFER,
+                @intCast(self.allocated_chunks_count * @sizeOf(Indirect)),
+                null,
+                gl.STREAM_DRAW,
+            ));
+        }
+
+        try gl_call(gl.BufferSubData(
+            gl.SHADER_STORAGE_BUFFER,
+            0,
+            @intCast(coords.len * @sizeOf(i32)),
+            @ptrCast(coords),
+        ));
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
+
+        try gl_call(gl.BufferSubData(
+            gl.DRAW_INDIRECT_BUFFER,
+            0,
+            @intCast(indirect.len * @sizeOf(Indirect)),
+            @ptrCast(indirect),
+        ));
+        try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+    }
+
+    pub fn process_one(self: *ChunkStorage) !bool {
         while (self.chunk_worklist.pop()) |chunk| {
             switch (chunk.stage) {
                 .dead => continue,
@@ -460,7 +558,7 @@ const ChunkStorage = struct {
                     for (chunk.callbacks.items) |cb| {
                         cb.do(chunk);
                     }
-                    return;
+                    return true;
                 },
                 .waiting_for_mesh => {
                     try chunk.build_mesh();
@@ -469,7 +567,7 @@ const ChunkStorage = struct {
                     for (chunk.callbacks.items) |cb| {
                         cb.do(chunk);
                     }
-                    return;
+                    return true;
                 },
                 .waiting_for_upload => {
                     try self.upload(chunk);
@@ -478,14 +576,21 @@ const ChunkStorage = struct {
                         cb.do(chunk);
                     }
                     try self.active_chunks.put(App.gpa(), chunk.coords, chunk);
-                    return;
+                    chunk.active_chunk_index = self.active_chunks.values().len - 1;
+                    self.active_list_changed = true;
+                    return true;
                 },
                 else => {
-                    Log.log(.warn, "{*}: dropping an '{}' chunk {*} in the worklist", .{ self, chunk.stage, chunk });
+                    Log.log(
+                        .warn,
+                        "{*}: dropping an unexpected stage-'{}' chunk {*} in the worklist",
+                        .{ self, chunk.stage, chunk },
+                    );
                     continue;
                 },
             }
         }
+        return false;
     }
 
     pub fn deinit(self: *ChunkStorage) void {
@@ -506,11 +611,11 @@ const ChunkStorage = struct {
         const actual_size = chunk.face_data.items.len * @sizeOf(u32);
         const requested_size = @max(chunk.recommended_gpu_allocation_size(), actual_size);
         if (chunk.handle == .invalid) {
-            chunk.handle = try self.faces.alloc(requested_size);
+            chunk.handle = try self.faces.alloc(requested_size, .@"4");
         } else {
             const range = self.faces.get_range(chunk.handle).?;
             try gl_call(gl.InvalidateBufferSubData(self.faces.buffer, range.offset, range.size));
-            chunk.handle = try self.faces.realloc(chunk.handle, requested_size);
+            chunk.handle = try self.faces.realloc(chunk.handle, requested_size, .@"4");
         }
 
         const range = self.faces.get_range(chunk.handle).?;
@@ -530,4 +635,8 @@ const ChunkStorage = struct {
         waiting_for_upload,
         active,
     };
+
+    fn active_chunks_count(self: *ChunkStorage) usize {
+        return self.active_chunks.count();
+    }
 };

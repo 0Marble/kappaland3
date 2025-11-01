@@ -63,17 +63,22 @@ fn alloc_success(self: *GpuAlloc, size: usize, handle: Handle) Handle {
     return handle;
 }
 
-pub fn alloc(self: *GpuAlloc, size: usize) !Handle {
+pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle {
     var first_idx: ?usize = null;
     while (self.freelist.pop()) |idx| {
         if (first_idx == idx) {
             try self.freelist.push(self.gpa, idx);
-            break;
+            break; // checked all free entries
         }
 
         if (first_idx == null) first_idx = idx;
 
         const entry = &self.entries.items[idx];
+        if (!alignment.check(entry.start)) {
+            try self.freelist.push(self.gpa, idx);
+            continue;
+        }
+
         const available_size = if (idx + 1 < self.entries.items.len)
             self.entries.items[idx + 1].start - entry.start
         else
@@ -88,40 +93,12 @@ pub fn alloc(self: *GpuAlloc, size: usize) !Handle {
 
     while (true) {
         const start = if (self.entries.getLastOrNull()) |end|
-            end.start + end.used_size
+            alignment.forward(end.start + end.used_size)
         else
             0;
 
         if (start + size >= self.length) {
-            const new_length = if (self.length == 0)
-                self.initial_length
-            else
-                self.length * 2;
-
-            if (!builtin.is_test) {
-                if (self.length != 0) {
-                    var new_buffer: gl.uint = 0;
-                    try gl_call(gl.CreateBuffers(1, @ptrCast(&new_buffer)));
-                    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, new_buffer));
-                    try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
-                    try gl_call(gl.CopyBufferSubData(
-                        gl.COPY_READ_BUFFER,
-                        gl.ARRAY_BUFFER,
-                        0,
-                        0,
-                        @intCast(self.length),
-                    ));
-                    try gl_call(gl.DeleteBuffers(1, @ptrCast(&self.buffer)));
-                    self.buffer = new_buffer;
-                } else {
-                    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
-                    try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
-                }
-            }
-            self.length = new_length;
-            if (Options.gpu_alloc_log) {
-                Log.log(.debug, "{*}: Allocated {d} bytes on the GPU", .{ self, self.length });
-            }
+            try self.full_realloc();
         } else {
             const entry = try self.entries.addOne(self.gpa);
             entry.start = start;
@@ -131,11 +108,49 @@ pub fn alloc(self: *GpuAlloc, size: usize) !Handle {
     }
 }
 
-pub fn realloc(self: *GpuAlloc, handle: Handle, new_size: usize) !Handle {
+fn full_realloc(self: *GpuAlloc) !void {
+    const new_length = if (self.length == 0)
+        self.initial_length
+    else
+        self.length * 2;
+
+    if (!builtin.is_test) {
+        if (self.length != 0) {
+            var new_buffer: gl.uint = 0;
+            try gl_call(gl.CreateBuffers(1, @ptrCast(&new_buffer)));
+            try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, new_buffer));
+            try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
+            try gl_call(gl.CopyBufferSubData(
+                gl.COPY_READ_BUFFER,
+                gl.ARRAY_BUFFER,
+                0,
+                0,
+                @intCast(self.length),
+            ));
+            try gl_call(gl.DeleteBuffers(1, @ptrCast(&self.buffer)));
+            self.buffer = new_buffer;
+        } else {
+            try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
+            try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
+        }
+    }
+    self.length = new_length;
+    if (Options.gpu_alloc_log) {
+        Log.log(.debug, "{*}: Allocated {d} bytes on the GPU", .{ self, self.length });
+    }
+}
+
+pub fn realloc(
+    self: *GpuAlloc,
+    handle: Handle,
+    new_size: usize,
+    alignment: std.mem.Alignment, // warning: has to be compatible with the original alignment!
+) !Handle {
     if (!handle.is_index()) return .invalid;
     const idx = handle.to_index();
     if (idx >= self.entries.items.len) return .invalid;
     const entry = &self.entries.items[idx];
+    std.debug.assert(alignment.check(entry.start));
 
     const available_size = if (idx + 1 < self.entries.items.len)
         self.entries.items[idx + 1].start - entry.start
@@ -150,7 +165,7 @@ pub fn realloc(self: *GpuAlloc, handle: Handle, new_size: usize) !Handle {
 
         return handle;
     } else {
-        const new_handle = try self.alloc(new_size);
+        const new_handle = try self.alloc(new_size, alignment);
 
         if (!builtin.is_test) {
             try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));

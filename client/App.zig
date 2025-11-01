@@ -223,7 +223,7 @@ pub fn run() !void {
 
         try app.game.on_frame_end();
         app.frame_data.on_frame_end();
-        try app.world.process_one_chunk();
+        try app.world.process_chunks();
 
         _ = app.frame_memory.reset(.{ .retain_capacity = {} });
     }
