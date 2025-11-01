@@ -113,7 +113,15 @@ pub fn as_mat(self: *Camera) zm.Mat4f {
         const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
         const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
         const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
-        const proj = zm.Mat4f.perspective(self.fov, self.aspect, 0.1, 1000.0);
+        // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
+        const f = 1.0 / @tan(self.fov * 0.5);
+        const g = f / self.aspect;
+        const proj = zm.Mat4f{ .data = .{
+            g, 0, 0,  0,
+            0, f, 0,  0,
+            0, 0, 0,  1,
+            0, 0, -1, 0,
+        } };
         const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
         self.cached_mat = proj.multiply(view);
         self.mat_changed = false;

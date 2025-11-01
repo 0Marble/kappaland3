@@ -61,6 +61,7 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "run the client");
     const run_client = b.addRunArtifact(client);
+    run_step.dependOn(b.getInstallStep());
     run_step.dependOn(&run_client.step);
     if (b.args) |args| {
         run_client.addArgs(args);

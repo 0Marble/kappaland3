@@ -116,11 +116,12 @@ fn init_gl() !void {
     try sdl_call(c.SDL_GL_MakeCurrent(app.win, app.gl_ctx));
     try sdl_call(app.gl_procs.init(&c.SDL_GL_GetProcAddress));
     gl.makeProcTableCurrent(&app.gl_procs);
-    try gl_call(gl.Enable(gl.DEPTH_TEST));
     try gl_call(gl.Enable(gl.MULTISAMPLE));
-    try gl_call(gl.FrontFace(gl.CW));
     try gl_call(gl.Enable(gl.CULL_FACE));
+    try gl_call(gl.FrontFace(gl.CW));
     try gl_call(gl.Enable(gl.DEPTH_TEST));
+    try gl_call(gl.ClipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE));
+    try gl_call(gl.DepthFunc(gl.GREATER));
     Log.log(.debug, "Initialized OpenGL", .{});
 }
 
@@ -165,6 +166,8 @@ pub fn frame_alloc() std.mem.Allocator {
 
 pub fn run() !void {
     try gl_call(gl.ClearColor(0.4, 0.4, 0.4, 1.0));
+    try gl_call(gl.ClearDepth(0.0));
+
     while (true) {
         app.frame_data.on_frame_start();
         if (!try handle_events()) break;

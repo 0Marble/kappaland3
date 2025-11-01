@@ -221,7 +221,7 @@ fn init_buffers(self: *World) !void {
 
 fn init_chunks(self: *World) !void {
     Log.log(.debug, "Generating world...", .{});
-    const dim = 32;
+    const dim = 16;
     const height = 5;
     const chunk_count = dim * dim * height;
     self.chunks = try App.gpa().alloc(Chunk, chunk_count);
@@ -418,13 +418,6 @@ pub const Chunk = struct {
         // try self.verts.append(App.gpa(), pack(16, 1, 0, .top, b));
         // try self.verts.append(App.gpa(), pack(16, 1, 16, .top, b));
         // try self.inds.appendSlice(App.gpa(), &.{ 0, 1, 2, 0, 2, 3 });
-
-        Log.log(.debug, "{*}: generated at {}, verts: {d}, inds: {d}", .{
-            self,
-            .{ self.x, self.y, self.z },
-            self.verts.items.len,
-            self.inds.items.len,
-        });
     }
 
     fn dummy_generate(self: *Chunk) void {
