@@ -84,7 +84,8 @@ pub fn move(self: *Camera, cmd: Controls) void {
         .down => .{ 0, -1, 0 },
         else => unreachable,
     };
-    const amt = App.frametime() * 0.01;
+    const speed: f32 = if (App.key_state().is_key_down(.from_sdl(c.SDL_SCANCODE_LCTRL))) 0.05 else 0.01;
+    const amt = App.frametime() * speed;
     self.pos = @mulAdd(@Vector(3, f32), dir, @splat(amt), self.pos);
     self.mat_changed = true;
 }
@@ -112,7 +113,7 @@ pub fn as_mat(self: *Camera) zm.Mat4f {
         const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
         const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
         const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
-        const proj = zm.Mat4f.perspective(self.fov, self.aspect, 0.1, 100.0);
+        const proj = zm.Mat4f.perspective(self.fov, self.aspect, 0.1, 1000.0);
         const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
         self.cached_mat = proj.multiply(view);
         self.mat_changed = false;
