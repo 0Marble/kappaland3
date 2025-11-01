@@ -61,9 +61,8 @@ const vert =
     \\  uint y = (vert_data & uint(0x001F0000)) >> 16;
     \\  uint z = (vert_data & uint(0x00001F00)) >> 8;
     \\  uint t = (vert_data & uint(0x000000FF)) >> 0;
-    \\  frag_pos = vec3(x,y,z) + 16.0 * vec3(chunk_coords[gl_DrawID]);
-    \\  if (gl_DrawID >= 498) frag_color = vec3(1,0,1);
-    \\  else frag_color = vec3(x,y,z)/16;
+    \\  frag_pos = vec3(x,y,z) + 16 * vec3(chunk_coords[gl_DrawID]);
+    \\  frag_color = vec3(x,y,z)/16;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
@@ -100,9 +99,7 @@ vao: gl.uint,
 verts_vbo: gl.uint,
 verts_ibo: gl.uint,
 chunk_coords_ssbo: gl.uint,
-counts: []i32,
-index_position_offsets: []usize,
-index_value_offsets: []i32,
+indirect_buffer: gl.uint,
 
 const World = @This();
 pub fn init() !World {
@@ -114,23 +111,52 @@ pub fn init() !World {
     return self;
 }
 
+const Indirect = extern struct {
+    count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    base_instance: u32,
+};
+
 fn init_buffers(self: *World) !void {
-    self.counts = try App.gpa().alloc(i32, self.chunks.len);
-    self.index_position_offsets = try App.gpa().alloc(usize, self.chunks.len);
-    self.index_value_offsets = try App.gpa().alloc(i32, self.chunks.len);
-    var total_vertex_count: i32 = 0;
+    const indirect = try App.frame_alloc().alloc(Indirect, self.chunks.len);
+    const chunk_coords = try App.frame_alloc().alloc(i32, 4 * self.chunks.len);
+    var total_vertex_count: usize = 0;
     var total_index_count: usize = 0;
+
     for (0..self.chunks.len) |i| {
-        self.counts[i] = @intCast(self.chunks[i].inds.items.len);
-        self.index_value_offsets[i] = total_vertex_count;
-        total_vertex_count += @intCast(self.chunks[i].verts.items.len);
-        self.index_position_offsets[i] = total_index_count * @sizeOf(u32);
+        const chunk = &self.chunks[i];
+        chunk_coords[4 * i + 0] = chunk.x;
+        chunk_coords[4 * i + 1] = chunk.y;
+        chunk_coords[4 * i + 2] = chunk.z;
+        chunk_coords[4 * i + 3] = 0;
+        indirect[i] = .{
+            .count = @intCast(chunk.inds.items.len),
+            .instance_count = 1,
+            .base_instance = 0,
+            .first_index = @intCast(total_index_count),
+            .base_vertex = @intCast(total_vertex_count),
+        };
+        total_vertex_count += self.chunks[i].verts.items.len;
         total_index_count += self.chunks[i].inds.items.len;
+
+        Log.log(.debug, "{*}: Chunk[{d}] {*}:", .{ self, i, &self.chunks[i] });
+        Log.log(.debug, "\tPrimitive count: {d}", .{indirect[i].count});
+        Log.log(.debug, "\tIndex start: {d}", .{indirect[i].first_index});
+        Log.log(.debug, "\tIndex offset: +{d}", .{indirect[i].base_vertex});
+        Log.log(.debug, "\tChunk coordinates: {}", .{.{
+            chunk_coords[4 * i + 0],
+            chunk_coords[4 * i + 1],
+            chunk_coords[4 * i + 2],
+        }});
     }
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.verts_vbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.verts_ibo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_coords_ssbo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
 
     try gl_call(gl.BindVertexArray(self.vao));
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.verts_vbo));
@@ -149,6 +175,23 @@ fn init_buffers(self: *World) !void {
     ));
     try gl_call(gl.EnableVertexAttribArray(0));
     try gl_call(gl.VertexAttribIPointer(0, 1, gl.UNSIGNED_INT, @sizeOf(u32), 0));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(chunk_coords.len * @sizeOf(i32)),
+        @ptrCast(chunk_coords),
+        gl.STATIC_DRAW,
+    ));
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, self.chunk_coords_ssbo));
+
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
+    try gl_call(gl.BufferData(
+        gl.DRAW_INDIRECT_BUFFER,
+        @intCast(indirect.len * @sizeOf(Indirect)),
+        @ptrCast(indirect),
+        gl.STATIC_DRAW,
+    ));
 
     var vert_offset: usize = 0;
     var inds_offset: usize = 0;
@@ -169,46 +212,17 @@ fn init_buffers(self: *World) !void {
         inds_offset += self.chunks[i].inds.items.len;
     }
 
-    var chunk_coords = try App.frame_alloc().alloc(i32, 4 * self.chunks.len);
-    for (0..self.chunks.len) |i| {
-        chunk_coords[4 * i + 0] = self.chunks[i].x;
-        chunk_coords[4 * i + 1] = self.chunks[i].y;
-        chunk_coords[4 * i + 2] = self.chunks[i].z;
-        chunk_coords[4 * i + 3] = 0;
-    }
-
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_coords_ssbo)));
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
-    try gl_call(gl.BufferData(
-        gl.SHADER_STORAGE_BUFFER,
-        @intCast(chunk_coords.len * @sizeOf(i32)),
-        @ptrCast(chunk_coords),
-        gl.STATIC_DRAW,
-    ));
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, self.chunk_coords_ssbo));
-
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
-
-    for (0..self.chunks.len) |i| {
-        Log.log(.debug, "{*}: Chunk[{d}] {*}:", .{ self, i, &self.chunks[i] });
-        Log.log(.debug, "\tPrimitive count: {d}", .{self.counts[i]});
-        Log.log(.debug, "\tIndex position: {d}", .{self.index_position_offsets[i]});
-        Log.log(.debug, "\tIndex offset: {d}", .{self.index_value_offsets[i]});
-        Log.log(.debug, "\tChunk coordinates: {}", .{.{
-            chunk_coords[4 * i + 0],
-            chunk_coords[4 * i + 1],
-            chunk_coords[4 * i + 2],
-        }});
-    }
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 }
 
 fn init_chunks(self: *World) !void {
     Log.log(.debug, "Generating world...", .{});
-    const dim = 8;
-    const height = 8;
+    const dim = 32;
+    const height = 5;
     const chunk_count = dim * dim * height;
     self.chunks = try App.gpa().alloc(Chunk, chunk_count);
     for (0..dim) |i| {
@@ -229,14 +243,12 @@ pub fn deinit(self: *World) void {
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_coords_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.verts_vbo));
     gl.DeleteBuffers(1, @ptrCast(&self.verts_ibo));
+    gl.DeleteBuffers(1, @ptrCast(&self.indirect_buffer));
     gl.DeleteVertexArrays(1, @ptrCast(&self.vao));
 
     self.shader.deinit();
     for (self.chunks) |*c| c.deinit();
     App.gpa().free(self.chunks);
-    App.gpa().free(self.index_position_offsets);
-    App.gpa().free(self.index_value_offsets);
-    App.gpa().free(self.counts);
 }
 
 pub fn draw(self: *World) !void {
@@ -245,14 +257,15 @@ pub fn draw(self: *World) !void {
     try self.shader.set_mat4("u_vp", vp);
 
     try gl_call(gl.BindVertexArray(self.vao));
-    try gl_call(gl.MultiDrawElementsBaseVertex(
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
+    try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
-        self.counts.ptr,
         gl.UNSIGNED_INT,
-        self.index_position_offsets.ptr,
+        0,
         @intCast(self.chunks.len),
-        self.index_value_offsets.ptr,
+        0,
     ));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
 }
 
@@ -399,6 +412,12 @@ pub const Chunk = struct {
         };
         self.dummy_generate();
         try self.build_mesh();
+        // const b: BlockId = if (@rem(x + y + z, 2) == 0) .dirt else .stone;
+        // try self.verts.append(App.gpa(), pack(0, 1, 16, .top, b));
+        // try self.verts.append(App.gpa(), pack(0, 1, 0, .top, b));
+        // try self.verts.append(App.gpa(), pack(16, 1, 0, .top, b));
+        // try self.verts.append(App.gpa(), pack(16, 1, 16, .top, b));
+        // try self.inds.appendSlice(App.gpa(), &.{ 0, 1, 2, 0, 2, 3 });
 
         Log.log(.debug, "{*}: generated at {}, verts: {d}, inds: {d}", .{
             self,
@@ -413,7 +432,7 @@ pub const Chunk = struct {
         if (self.y > 0) {
             return;
         } else if (self.y < 0) {
-            @memset(self.blocks[0 .. CHUNK_SIZE * CHUNK_SIZE * 4], .stone);
+            @memset(&self.blocks, .stone);
             return;
         }
 
