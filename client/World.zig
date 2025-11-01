@@ -14,7 +14,7 @@ const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
 const DIM = 16;
-const HEIGHT = 3;
+const HEIGHT = 8;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_LOCATION = 1;
@@ -259,7 +259,9 @@ pub fn draw(self: *World) !void {
 }
 
 pub fn process_chunks(self: *World) !void {
-    _ = try self.storage.process_one();
+    for (0..100) |_| {
+        _ = try self.storage.process_one();
+    }
     try self.storage.regenerate_indirect();
 }
 
@@ -374,28 +376,44 @@ pub const Chunk = struct {
         return 16 * 16 * 4 * @sizeOf(u32);
     }
 
-    fn dummy_generate(self: *Chunk) void {
-        @memset(&self.blocks, .air);
-        if (self.coords.y > 0) {
-            return;
-        } else if (self.coords.y < 0) {
-            @memset(&self.blocks, .stone);
-            return;
-        }
-
-        const scale = std.math.pi / 16.0;
+    fn generate_grid(self: *Chunk) void {
         for (0..CHUNK_SIZE) |i| {
             for (0..CHUNK_SIZE) |j| {
-                const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
-                const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(j)));
-                const top: usize = @intFromFloat((@sin(x * scale) + @cos(z * scale)) * 3 + 8);
+                for (0..CHUNK_SIZE) |k| {
+                    const x: i32 = (self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
+                    const z: i32 = (self.coords.z * CHUNK_SIZE + @as(i32, @intCast(j)));
+                    const y: i32 = (self.coords.y * CHUNK_SIZE + @as(i32, @intCast(k)));
+                    const idx = i * I_OFFSET + j * J_OFFSET + k * K_OFFSET;
+                    if (@rem(x + y + z, 2) == 0) {
+                        self.blocks[idx] = .air;
+                    } else {
+                        self.blocks[idx] = .stone;
+                    }
+                }
+            }
+        }
+    }
 
-                const offset = i * I_OFFSET + j * J_OFFSET;
-                self.blocks[offset + top * K_OFFSET] = .grass;
-                const dirt_start = if (top >= 4) top - 4 else 0;
-                for (top + 1..CHUNK_SIZE) |k| self.blocks[offset + k * K_OFFSET] = .air;
-                for (dirt_start..top) |k| self.blocks[offset + k * K_OFFSET] = .dirt;
-                for (0..dirt_start) |k| self.blocks[offset + k * K_OFFSET] = .stone;
+    fn generate(self: *Chunk) void {
+        self.generate_balls();
+    }
+
+    fn generate_balls(self: *Chunk) void {
+        const scale = std.math.pi / 8.0;
+        for (0..CHUNK_SIZE) |i| {
+            for (0..CHUNK_SIZE) |j| {
+                for (0..CHUNK_SIZE) |k| {
+                    const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
+                    const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(j)));
+                    const y: f32 = @floatFromInt(self.coords.y * CHUNK_SIZE + @as(i32, @intCast(k)));
+                    const idx = i * I_OFFSET + j * J_OFFSET + k * K_OFFSET;
+                    const w = @abs(@sin(x * scale) + @cos(z * scale) + @sin(y * scale));
+                    if (w < 3 * 0.4) {
+                        self.blocks[idx] = .air;
+                    } else {
+                        self.blocks[idx] = .stone;
+                    }
+                }
             }
         }
     }
@@ -497,6 +515,7 @@ const ChunkStorage = struct {
         const count = self.active_chunks.values().len;
         const indirect = try App.frame_alloc().alloc(Indirect, count);
         const coords = try App.frame_alloc().alloc(i32, 4 * count);
+        var total_primitives: usize = 0;
         for (self.active_chunks.values()) |chunk| {
             const range = self.faces.get_range(chunk.handle).?;
             indirect[chunk.active_chunk_index] = Indirect{
@@ -509,6 +528,7 @@ const ChunkStorage = struct {
             coords[4 * chunk.active_chunk_index + 0] = chunk.coords.x;
             coords[4 * chunk.active_chunk_index + 1] = chunk.coords.y;
             coords[4 * chunk.active_chunk_index + 2] = chunk.coords.z;
+            total_primitives += 3 * chunk.face_data.items.len;
         }
 
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
@@ -545,6 +565,8 @@ const ChunkStorage = struct {
             @ptrCast(indirect),
         ));
         try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+
+        Log.log(.debug, "Drawing {d} triangles", .{total_primitives});
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {
@@ -552,7 +574,7 @@ const ChunkStorage = struct {
             switch (chunk.stage) {
                 .dead => continue,
                 .ungenerated => {
-                    chunk.dummy_generate();
+                    chunk.generate();
                     chunk.stage = .waiting_for_mesh;
                     try self.chunk_worklist.append(App.gpa(), chunk);
                     for (chunk.callbacks.items) |cb| {
@@ -617,6 +639,9 @@ const ChunkStorage = struct {
             try gl_call(gl.InvalidateBufferSubData(self.faces.buffer, range.offset, range.size));
             chunk.handle = try self.faces.realloc(chunk.handle, requested_size, .@"4");
         }
+        if (actual_size == 0) {
+            return;
+        }
 
         const range = self.faces.get_range(chunk.handle).?;
         try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
@@ -626,6 +651,7 @@ const ChunkStorage = struct {
             range.size,
             chunk.face_data.items.ptr,
         ));
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     }
 
     const Stage = enum {

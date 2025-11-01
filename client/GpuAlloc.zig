@@ -118,6 +118,7 @@ fn full_realloc(self: *GpuAlloc) !void {
         if (self.length != 0) {
             var new_buffer: gl.uint = 0;
             try gl_call(gl.CreateBuffers(1, @ptrCast(&new_buffer)));
+            try gl_call(gl.BindBuffer(gl.COPY_READ_BUFFER, self.buffer));
             try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, new_buffer));
             try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
             try gl_call(gl.CopyBufferSubData(
@@ -135,9 +136,7 @@ fn full_realloc(self: *GpuAlloc) !void {
         }
     }
     self.length = new_length;
-    if (Options.gpu_alloc_log) {
-        Log.log(.debug, "{*}: Allocated {d} bytes on the GPU", .{ self, self.length });
-    }
+    Log.log(.debug, "{*}: Allocated {d} bytes on the GPU", .{ self, self.length });
 }
 
 pub fn realloc(
