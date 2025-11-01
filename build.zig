@@ -62,8 +62,13 @@ pub fn build(b: *std.Build) void {
     client_options.addOption(bool, "chunk_debug_buffer", b.option(bool, "chunk_debug_buffer", "Enable debug buffer in the chunk shader") orelse false);
     client.root_module.addOptions("ClientOptions", client_options);
 
+    const run_client = if (b.option(bool, "mangohud", "Enable mangohud") orelse true) blk: {
+        const cmd = b.addSystemCommand(&.{"mangohud"});
+        cmd.addFileArg(client.getEmittedBin());
+        break :blk cmd;
+    } else b.addRunArtifact(client);
+
     const run_step = b.step("run", "run the client");
-    const run_client = b.addRunArtifact(client);
     run_step.dependOn(b.getInstallStep());
     run_step.dependOn(&run_client.step);
     if (b.args) |args| {

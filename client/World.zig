@@ -238,7 +238,7 @@ fn init_buffers(self: *World) !void {
 }
 
 const DIM = 8;
-const HEIGHT = 8;
+const HEIGHT = 2;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 fn init_chunks(self: *World) !void {
     Log.log(.debug, "Generating world...", .{});
