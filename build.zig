@@ -57,6 +57,9 @@ pub fn build(b: *std.Build) void {
     client.root_module.addImport("HelloScene", b.createModule(.{
         .root_source_file = b.path("assets/HelloScene.zon"),
     }));
+    client.root_module.addImport("Block", b.createModule(.{
+        .root_source_file = b.path("assets/Block.zon"),
+    }));
     b.installArtifact(client);
     const client_options = b.addOptions();
     client_options.addOption(bool, "chunk_debug_buffer", b.option(bool, "chunk_debug_buffer", "Enable debug buffer in the chunk shader") orelse false);

@@ -7,6 +7,7 @@ const gl_call = @import("util.zig").gl_call;
 const Shader = @import("Shader.zig");
 const App = @import("App.zig");
 const Options = @import("ClientOptions");
+const Block = @import("Block");
 
 const CHUNK_SIZE = 16;
 
@@ -22,11 +23,22 @@ const BlockId = enum(u32) {
 
 const vert =
     \\#version 460 core
+    \\#define BLOCK_FACE_COUNT 
+++ std.fmt.comptimePrint("{d}", .{Block.faces.len}) ++ "\n" ++
+    \\#define VERTS_PER_FACE 
+++ std.fmt.comptimePrint("{d}", .{Block.faces[0].len}) ++ "\n" ++
+    \\
     \\layout (location = 0) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
     \\                                            // per instance
-    \\layout (std140, binding = 1) buffer Chunk {
+    \\uniform mat4 u_vp;
+    \\
+    \\out vec3 frag_norm;
+    \\out vec3 frag_color;
+    \\out vec3 frag_pos;
+    \\layout (std430, binding = 1) buffer Chunk {
     \\  ivec3 chunk_coords[];
     \\};
+    \\
 ++ (if (Options.chunk_debug_buffer)
     \\layout (std430, binding = 2) buffer Debug { 
     \\  uint debug_vertex_ids[];
@@ -34,33 +46,10 @@ const vert =
     \\
 else
     "") ++
-    \\uniform mat4 u_vp;
     \\
-    \\out vec3 frag_norm;
-    \\out vec3 frag_color;
-    \\out vec3 frag_pos;
-    \\
-    \\vec3 normals[6] = {
-    \\  vec3(0, 0, 1),  // front
-    \\  vec3(0, 0, -1), // back
-    \\  vec3(1, 0, 0),  // right
-    \\  vec3(-1, 0, 0), // left
-    \\  vec3(0, 1, 0),  // top
-    \\  vec3(0, -1, 0), // bottom
-    \\};
-    \\vec3 colors[4] = {
-    \\  vec3(0, 0, 0),
-    \\  vec3(0.2,0.2,0.2),
-    \\  vec3(0.4,0.2,0),
-    \\  vec3(0.1,0.4,0.1),
-    \\};
-    \\vec3 faces[6][4] = {
-    \\  {vec3(0,0,1),vec3(0,1,1),vec3(1,1,1),vec3(1,0,1)}, 
-    \\  {vec3(1,0,0),vec3(1,1,0),vec3(0,1,0),vec3(0,0,0)}, 
-    \\  {vec3(1,0,1),vec3(1,1,1),vec3(1,1,0),vec3(1,0,0)}, 
-    \\  {vec3(0,0,0),vec3(0,1,0),vec3(0,1,1),vec3(0,0,1)}, 
-    \\  {vec3(0,1,1),vec3(0,1,0),vec3(1,1,0),vec3(1,1,1)}, 
-    \\  {vec3(1,0,1),vec3(1,0,0),vec3(0,0,0),vec3(0,0,1)},
+    \\layout(std140, binding = 3) uniform Block {
+    \\  vec3 normals[BLOCK_FACE_COUNT];
+    \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE];
     \\};
     \\
     \\void main() {
@@ -68,10 +57,9 @@ else
     \\  uint y = (vert_data & uint(0x0F000000)) >> 24;
     \\  uint z = (vert_data & uint(0x00F00000)) >> 20;
     \\  uint n = (vert_data & uint(0x000F0000)) >> 16;
-    \\  uint p = (vert_data & uint(0x0000FF00)) >> 8;
-    \\  uint t = (vert_data & uint(0x000000FF)) >> 0;
-    \\  frag_pos = vec3(x,y,z) + faces[n][gl_VertexID] + 16 * vec3(chunk_coords[gl_DrawID]);
-    \\  frag_color = vec3(x,y,z)/16;
+    \\
+    \\  frag_pos = vec3(x, y, z) + faces[n * VERTS_PER_FACE + gl_VertexID] + 16 * vec3(chunk_coords[gl_DrawID]);
+    \\  frag_color = vec3(x, y, z) / 16.0;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
@@ -109,6 +97,7 @@ ibo: gl.uint,
 face_data_buffer: gl.uint,
 chunk_coords_ssbo: gl.uint,
 indirect_buffer: gl.uint,
+block_ubo: gl.uint,
 debug_buffer: if (Options.chunk_debug_buffer) gl.uint else void,
 
 const World = @This();
@@ -127,6 +116,28 @@ const Indirect = extern struct {
     first_index: u32,
     base_vertex: i32,
     base_instance: u32,
+};
+const raw_faces: []const u8 = blk: {
+    const faces_count = Block.faces.len;
+    const verts_per_face = Block.faces[0].len;
+
+    var normals_data = std.mem.zeroes([4 * faces_count]u32);
+    for (Block.normals, 0..) |normal, i| {
+        normals_data[1 + 4 * i + 0] = @bitCast(@as(f32, normal[0]));
+        normals_data[1 + 4 * i + 1] = @bitCast(@as(f32, normal[1]));
+        normals_data[1 + 4 * i + 2] = @bitCast(@as(f32, normal[2]));
+    }
+    var faces_data = std.mem.zeroes([4 * faces_count * verts_per_face]u32);
+    for (Block.faces, 0..) |face, i| {
+        for (face, 0..) |vertex, j| {
+            const idx = i * verts_per_face + j;
+            faces_data[4 * idx + 0] = @bitCast(@as(f32, vertex[0]));
+            faces_data[4 * idx + 1] = @bitCast(@as(f32, vertex[1]));
+            faces_data[4 * idx + 2] = @bitCast(@as(f32, vertex[2]));
+        }
+    }
+
+    break :blk @ptrCast(&(normals_data ++ faces_data));
 };
 
 fn init_buffers(self: *World) !void {
@@ -167,6 +178,8 @@ fn init_buffers(self: *World) !void {
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.ibo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_coords_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
+
     if (Options.chunk_debug_buffer) {
         try gl_call(gl.GenBuffers(1, @ptrCast(&self.debug_buffer)));
     }
@@ -180,11 +193,11 @@ fn init_buffers(self: *World) !void {
         gl.STATIC_DRAW,
     ));
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.ibo));
-    const inds = [_]u8{ 0, 1, 2, 0, 2, 3 };
+    const inds: []const u8 = &Block.indices;
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
         @intCast(6 * @sizeOf(u8)),
-        &inds,
+        inds.ptr,
         gl.STATIC_DRAW,
     ));
     try gl_call(gl.EnableVertexAttribArray(0));
@@ -210,6 +223,15 @@ fn init_buffers(self: *World) !void {
         ));
         try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, self.debug_buffer));
     }
+
+    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
+    try gl_call(gl.BufferStorage(
+        gl.UNIFORM_BUFFER,
+        @intCast(raw_faces.len),
+        raw_faces.ptr,
+        0,
+    ));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, 3, self.block_ubo));
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.BufferData(
@@ -263,6 +285,7 @@ pub fn deinit(self: *World) void {
     gl.DeleteBuffers(1, @ptrCast(&self.face_data_buffer));
     gl.DeleteBuffers(1, @ptrCast(&self.ibo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buffer));
+    gl.DeleteBuffers(1, @ptrCast(&self.block_ubo));
     if (Options.chunk_debug_buffer) {
         gl.DeleteBuffers(1, @ptrCast(&self.debug_buffer));
     }
@@ -282,7 +305,7 @@ pub fn draw(self: *World) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
-        gl.UNSIGNED_BYTE,
+        @field(gl, Block.index_type),
         0,
         @intCast(self.chunks.len),
         0,
