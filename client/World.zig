@@ -354,7 +354,6 @@ pub const Chunk = struct {
 
     blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]BlockId,
     face_data: std.ArrayListUnmanaged(u32),
-    inds: std.ArrayListUnmanaged(u32),
 
     const I_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
     const J_OFFSET = CHUNK_SIZE;
@@ -416,7 +415,6 @@ pub const Chunk = struct {
     pub fn init(self: *Chunk, x: i32, y: i32, z: i32) !void {
         self.* = .{
             .face_data = .empty,
-            .inds = .empty,
             .x = x,
             .y = y,
             .z = z,
@@ -456,6 +454,5 @@ pub const Chunk = struct {
 
     pub fn deinit(self: *Chunk) void {
         self.face_data.deinit(App.gpa());
-        self.inds.deinit(App.gpa());
     }
 };
