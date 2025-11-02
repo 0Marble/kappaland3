@@ -13,8 +13,8 @@ const GpuAlloc = @import("GpuAlloc.zig");
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
-const DIM = 8;
-const HEIGHT = 2;
+const DIM = 1;
+const HEIGHT = 1;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_BINDING = 1;
@@ -341,46 +341,148 @@ pub const Chunk = struct {
     const K_OFFSET = 1;
 
     pub fn build_mesh(self: *Chunk) !void {
-        for (0..CHUNK_SIZE) |i| {
-            for (0..CHUNK_SIZE) |j| {
-                for (0..CHUNK_SIZE) |k| {
-                    const b = self.blocks[i * I_OFFSET + j * J_OFFSET + k * K_OFFSET];
-                    if (b == .air) continue;
+        for (0..CHUNK_SIZE) |z| {
+            try self.mesh_slice(.front, z);
+        }
+        for (0..CHUNK_SIZE) |z| {
+            try self.mesh_slice(.back, z);
+        }
+        for (0..CHUNK_SIZE) |x| {
+            try self.mesh_slice(.right, x);
+        }
+        for (0..CHUNK_SIZE) |x| {
+            try self.mesh_slice(.left, x);
+        }
+        for (0..CHUNK_SIZE) |y| {
+            try self.mesh_slice(.top, y);
+        }
+        for (0..CHUNK_SIZE) |y| {
+            try self.mesh_slice(.bot, y);
+        }
+    }
 
-                    if (k + 1 == CHUNK_SIZE or self.blocks[i * I_OFFSET + j * J_OFFSET + (k + 1) * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .top, b));
-                    }
-                    if (j + 1 == CHUNK_SIZE or self.blocks[i * I_OFFSET + (j + 1) * J_OFFSET + k * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .front, b));
-                    }
-                    if (i + 1 == CHUNK_SIZE or self.blocks[(i + 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .right, b));
-                    }
-                    if (k == 0 or self.blocks[i * I_OFFSET + j * J_OFFSET + (k - 1) * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .bot, b));
-                    }
-                    if (j == 0 or self.blocks[i * I_OFFSET + (j - 1) * J_OFFSET + k * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .back, b));
-                    }
-                    if (i == 0 or self.blocks[(i - 1) * I_OFFSET + j * J_OFFSET + k * K_OFFSET] == .air) {
-                        try self.face_data.append(App.gpa(), pack(i, k, j, .left, b));
-                    }
-                }
+    fn mesh_slice(self: *Chunk, comptime face: Face, layer: usize) !void {
+        const dir = Block.scale[@intFromEnum(face)];
+        const w_dim = dir[0..1];
+        const h_dim = dir[1..2];
+        const o_dim = dir[2..3];
+
+        var stack = std.mem.zeroes([CHUNK_SIZE * CHUNK_SIZE]Wh);
+        var top: usize = 0;
+        var visited = std.mem.zeroes([CHUNK_SIZE][CHUNK_SIZE]bool);
+        stack[top] = .{};
+        visited[0][0] = true;
+        top += 1;
+
+        while (top > 0) {
+            top -= 1;
+            const cur = stack[top];
+            var pos = Xyz{};
+            @field(pos, w_dim) = cur.w;
+            @field(pos, h_dim) = cur.h;
+            @field(pos, o_dim) = layer;
+            const size = self.greedy_size(pos, face);
+            if (size.w == 0 or size.h == 0) {
+                continue;
+            } else {
+                try self.face_data.append(App.gpa(), self.pack(pos, size, face));
+            }
+
+            const a = Wh{ .w = cur.w + size.w, .h = cur.h };
+            const b = Wh{ .h = cur.h + size.h, .w = cur.w };
+            if (a.w < CHUNK_SIZE and a.h < CHUNK_SIZE and !visited[a.w][a.h]) {
+                stack[top] = a;
+                top += 1;
+                visited[a.w][a.h] = true;
+            }
+            if (b.w < CHUNK_SIZE and b.h < CHUNK_SIZE and !visited[b.w][b.h]) {
+                stack[top] = b;
+                top += 1;
+                visited[b.w][b.h] = true;
             }
         }
     }
 
+    const Wh = struct {
+        w: usize = 0,
+        h: usize = 0,
+    };
+    const Xyz = struct {
+        x: usize = 0,
+        y: usize = 0,
+        z: usize = 0,
+    };
+    fn one_by_one_size(self: *Chunk, origin: Xyz, comptime face: Face) Wh {
+        if (self.visible(origin, face)) {
+            return .{ .w = 1, .h = 1 };
+        } else {
+            return .{ .w = 0, .h = 0 };
+        }
+    }
+    fn greedy_size(self: *Chunk, origin: Xyz, comptime face: Face) Wh {
+        const dir = Block.scale[@intFromEnum(face)];
+        const w_dim = dir[0..1];
+        const h_dim = dir[1..2];
+        const o_dim = dir[2..3];
+
+        var limit: usize = CHUNK_SIZE;
+        var best_size: Wh = .{ .w = 0, .h = 0 };
+        const block = self.blocks[origin.x * I_OFFSET + origin.y * K_OFFSET + origin.z * J_OFFSET];
+        const i_start = @field(origin, w_dim);
+        const j_start = @field(origin, h_dim);
+
+        for (i_start..CHUNK_SIZE) |i| {
+            for (j_start..limit) |j| {
+                var pos = Xyz{ .x = 0, .y = 0, .z = 0 };
+                @field(pos, w_dim) = i;
+                @field(pos, h_dim) = j;
+                @field(pos, o_dim) = @field(origin, o_dim);
+                const cur_size = Wh{ .h = j - j_start + 1, .w = i - i_start + 1 };
+                if (!self.visible(pos, face) or self.get(pos) != block) {
+                    limit = j;
+                    break;
+                }
+                if (cur_size.w * cur_size.h > best_size.w * best_size.h) {
+                    best_size = cur_size;
+                }
+            }
+        }
+
+        return best_size;
+    }
+
+    fn get(self: *Chunk, pos: Xyz) BlockId {
+        return self.blocks[pos.x * I_OFFSET + pos.y * K_OFFSET + pos.z * J_OFFSET];
+    }
+
+    fn visible(self: *Chunk, pos: Xyz, face: Face) bool {
+        const b = self.get(pos);
+        if (b == .air) return false;
+        const x, const y, const z = .{ pos.x, pos.y, pos.z };
+
+        return switch (face) {
+            .front => z + 1 == CHUNK_SIZE or self.blocks[x * I_OFFSET + y * K_OFFSET + (z + 1) * J_OFFSET] == .air,
+            .back => z == 0 or self.blocks[x * I_OFFSET + y * K_OFFSET + (z - 1) * J_OFFSET] == .air,
+            .right => x + 1 == CHUNK_SIZE or self.blocks[(x + 1) * I_OFFSET + y * K_OFFSET + z * J_OFFSET] == .air,
+            .left => x == 0 or self.blocks[(x - 1) * I_OFFSET + y * K_OFFSET + z * J_OFFSET] == .air,
+            .top => y + 1 == CHUNK_SIZE or self.blocks[x * I_OFFSET + (y + 1) * K_OFFSET + z * J_OFFSET] == .air,
+            .bot => y == 0 or self.blocks[x * I_OFFSET + (y - 1) * K_OFFSET + z * J_OFFSET] == .air,
+        };
+    }
+
     const Face = enum(u8) { front, back, right, left, top, bot };
-    fn pack(x: usize, y: usize, z: usize, face: Face, block: BlockId) u32 {
+    fn pack(self: *Chunk, pos: Xyz, size: Wh, face: Face) u32 {
         var res: u32 = 0;
+        const x, const y, const z = .{ pos.x, pos.y, pos.z };
+        const w, const h = .{ size.w, size.h };
 
         res |= @as(u32, @intCast(x)) << 28;
         res |= @as(u32, @intCast(y)) << 24;
         res |= @as(u32, @intCast(z)) << 20;
         res |= @as(u32, @intFromEnum(face)) << 16;
-
-        res |= @as(u32, @intCast(0x00)) << 8;
-        res |= @as(u32, @intFromEnum(block));
+        res |= @as(u32, @intCast(w - 1)) << 12;
+        res |= @as(u32, @intCast(h - 1)) << 8;
+        res |= @as(u32, @intFromEnum(self.get(pos)));
 
         return res;
     }
@@ -428,8 +530,12 @@ pub const Chunk = struct {
         }
     }
 
+    fn generate_solid(self: *Chunk) void {
+        @memset(&self.blocks, .stone);
+    }
+
     fn generate(self: *Chunk) void {
-        self.generate_balls();
+        self.generate_solid();
     }
 
     fn generate_balls(self: *Chunk) void {
