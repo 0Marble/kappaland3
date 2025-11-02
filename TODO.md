@@ -8,6 +8,7 @@
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
 - Fix client.GpuAlloc.full\_realloc
+- Add some sort of UI
 
 # Non-critical
 
