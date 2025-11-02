@@ -6,7 +6,6 @@
     - Frustum culling - skip chunks that are outside of the camera view
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
-- Fix client.GpuAlloc.full\_realloc
 - Add some sort of UI
 
 # Non-critical
@@ -18,6 +17,8 @@
 
 # Done
 
-02.11.2025: 
+- 02.11.2025: 
     1. Draw faces in separate draw calls - allows cheap face culling. 
     Tried it (branch chunk-split-faces), but it doesnt seem to improve fps (even makes it worse in some cases)
+    2. Fix client.GpuAlloc.full\_realloc
+    The issue was that the `vert_data` vertex data was still bound to the old freed buffer.
