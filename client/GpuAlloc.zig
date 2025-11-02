@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const gl = if (builtin.is_test) void else @import("gl");
 const gl_call = if (builtin.is_test) undefined else @import("util.zig").gl_call;
+const MemoryUsage = @import("util.zig").MemoryUsage;
 
 const Log = @import("libmine").Log;
 const std = @import("std");
@@ -58,7 +59,7 @@ pub fn init(gpa: std.mem.Allocator, length: usize, usage: Usage) !GpuAlloc {
 
 fn alloc_success(self: *GpuAlloc, size: usize, handle: Handle) Handle {
     if (Options.gpu_alloc_log) {
-        Log.log(.debug, "{*}: Allocated {d} bytes at {}", .{ self, size, handle });
+        Log.log(.debug, "{*}: Allocated {f} at {}", .{ self, MemoryUsage.from_bytes(size), handle });
     }
     return handle;
 }
@@ -136,7 +137,7 @@ fn full_realloc(self: *GpuAlloc) !void {
         }
     }
     self.length = new_length;
-    Log.log(.debug, "{*}: Allocated {d} bytes on the GPU", .{ self, self.length });
+    Log.log(.debug, "{*}: Allocated {f} on the GPU", .{ self, MemoryUsage.from_bytes(self.length) });
 }
 
 pub fn realloc(
@@ -159,7 +160,7 @@ pub fn realloc(
     if (available_size >= new_size) {
         entry.used_size = new_size;
         if (Options.gpu_alloc_log) {
-            Log.log(.debug, "{*}: Reallocated {} to size {d}", .{ self, handle, new_size });
+            Log.log(.debug, "{*}: Reallocated {} to size {f}", .{ self, handle, MemoryUsage.from_bytes(new_size) });
         }
 
         return handle;

@@ -1,6 +1,40 @@
 const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
 const gl = @import("gl");
+const std = @import("std");
+
+pub const MemoryUsage = struct {
+    bytes: usize,
+
+    pub fn from_bytes(bytes: anytype) MemoryUsage {
+        return .{
+            .bytes = @intCast(bytes),
+        };
+    }
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (self.bytes) {
+            0...1024 - 1 => {
+                try writer.print("{d}B", .{self.bytes});
+            },
+            1024...1024 * 1024 - 1 => {
+                const num = @as(f64, @floatFromInt(self.bytes)) / 1024;
+                try writer.print("{d:.2}KB", .{num});
+            },
+            1024 * 1024...1024 * 1024 * 1024 - 1 => {
+                const num = @as(f64, @floatFromInt(self.bytes)) / (1024 * 1024);
+                try writer.print("{d:.2}MB", .{num});
+            },
+            else => {
+                const num = @as(f64, @floatFromInt(self.bytes)) / (1024 * 1024 * 1024);
+                try writer.print("{d:.2}GB", .{num});
+            },
+        }
+    }
+};
 
 fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
     return switch (code) {

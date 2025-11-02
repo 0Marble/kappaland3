@@ -11,7 +11,7 @@ const Block = @import("Block");
 const GpuAlloc = @import("GpuAlloc.zig");
 
 const CHUNK_SIZE = 16;
-const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
+const EXPECTED_BUFFER_SIZE = 16 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
 const DIM = 16;
 const HEIGHT = 8;
