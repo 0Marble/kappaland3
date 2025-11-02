@@ -13,8 +13,8 @@ const GpuAlloc = @import("GpuAlloc.zig");
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
-const DIM = 1;
-const HEIGHT = 1;
+const DIM = 16;
+const HEIGHT = 8;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_BINDING = 1;
@@ -438,8 +438,8 @@ pub const Chunk = struct {
             if (limit == j_start) break;
         }
 
-        for (0..best_size.w - 1) |i| {
-            for (0..best_size.h - 1) |j| {
+        for (0..best_size.w) |i| {
+            for (0..best_size.h) |j| {
                 visited[i_start + i][j_start + j] = true;
             }
         }
@@ -706,6 +706,7 @@ const ChunkStorage = struct {
         try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
         try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
+        Log.log(.debug, "Drawing {d} triangles", .{total_primitives});
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {

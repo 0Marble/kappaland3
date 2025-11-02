@@ -2,6 +2,7 @@ const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
 const gl = @import("gl");
 const std = @import("std");
+const Options = @import("ClientOptions");
 
 pub const MemoryUsage = struct {
     bytes: usize,
@@ -50,7 +51,10 @@ fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
     };
 }
 
-pub fn gl_call(res: anytype) !@TypeOf(res) {
+pub inline fn gl_call(res: anytype) !@TypeOf(res) {
+    if (!Options.gl_check_errors) {
+        return res;
+    }
     var ok = true;
     while (true) {
         const err = gl.GetError();
