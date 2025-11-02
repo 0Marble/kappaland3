@@ -13,14 +13,20 @@ const GpuAlloc = @import("GpuAlloc.zig");
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
-const DIM = 16;
-const HEIGHT = 8;
+const DIM = 8;
+const HEIGHT = 2;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_BINDING = 1;
 const DEBUG_DATA_BINDING = 2;
 const BLOCK_DATA_BINDING = 3;
 const VERT_DATA_BINDING = 4;
+const BLOCK_FACE_COUNT = Block.faces.len;
+const VERTS_PER_FACE = Block.faces[0].len;
+const N_OFFSET = VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE;
+const W_OFFSET = VERTS_PER_FACE * CHUNK_SIZE;
+const H_OFFSET = VERTS_PER_FACE;
+const P_OFFSET = 1;
 
 const VERT =
     \\#version 460 core
@@ -36,7 +42,18 @@ const VERT =
 ++ std.fmt.comptimePrint("#define DEBUG_DATA_LOCATION {d}\n", .{DEBUG_DATA_BINDING}) ++
     \\
 ++ std.fmt.comptimePrint("#define BLOCK_DATA_LOCATION {d}\n", .{BLOCK_DATA_BINDING}) ++
-    \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
+    \\
+++ std.fmt.comptimePrint("#define CHUNK_SIZE {d}\n", .{CHUNK_SIZE}) ++
+    \\
+++ std.fmt.comptimePrint("#define N_OFFSET {d}\n", .{N_OFFSET}) ++
+    \\
+++ std.fmt.comptimePrint("#define W_OFFSET {d}\n", .{W_OFFSET}) ++
+    \\
+++ std.fmt.comptimePrint("#define H_OFFSET {d}\n", .{H_OFFSET}) ++
+    \\
+++ std.fmt.comptimePrint("#define P_OFFSET {d}\n", .{P_OFFSET}) ++
+    \\
+    \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|wwwwhhhh|tttttttt
     \\                                            // per instance
     \\uniform mat4 u_vp;
     \\
@@ -57,7 +74,7 @@ else
     \\
     \\layout(std140, binding = BLOCK_DATA_LOCATION) uniform Block {
     \\  vec3 normals[BLOCK_FACE_COUNT];
-    \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE];
+    \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE];
     \\};
     \\
     \\void main() {
@@ -65,8 +82,13 @@ else
     \\  uint y = (vert_data & uint(0x0F000000)) >> 24;
     \\  uint z = (vert_data & uint(0x00F00000)) >> 20;
     \\  uint n = (vert_data & uint(0x000F0000)) >> 16;
+    \\  uint w = (vert_data & uint(0x0000F000)) >> 12;
+    \\  uint h = (vert_data & uint(0x00000F00)) >> 8;
     \\
-    \\  frag_pos = vec3(x, y, z) + faces[n * VERTS_PER_FACE + gl_VertexID] + 16 * vec3(chunk_coords[gl_DrawID]);
+    \\  uint p = gl_VertexID;
+    \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
+    \\
+    \\  frag_pos = vec3(x, y, z) + faces[face] + 16 * vec3(chunk_coords[gl_DrawID]);
     \\  frag_color = vec3(x, y, z) / 16.0;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
@@ -117,22 +139,30 @@ pub fn init() !World {
 }
 
 const raw_faces: []const u8 = blk: {
-    const faces_count = Block.faces.len;
-    const verts_per_face = Block.faces[0].len;
+    const Xyz = struct { x: f32, y: f32, z: f32 };
 
-    var normals_data = std.mem.zeroes([4 * faces_count]u32);
+    @setEvalBranchQuota(std.math.maxInt(u32));
+    var normals_data = std.mem.zeroes([4 * BLOCK_FACE_COUNT]u32);
     for (Block.normals, 0..) |normal, i| {
         normals_data[1 + 4 * i + 0] = @bitCast(@as(f32, normal[0]));
         normals_data[1 + 4 * i + 1] = @bitCast(@as(f32, normal[1]));
         normals_data[1 + 4 * i + 2] = @bitCast(@as(f32, normal[2]));
     }
-    var faces_data = std.mem.zeroes([4 * faces_count * verts_per_face]u32);
-    for (Block.faces, 0..) |face, i| {
-        for (face, 0..) |vertex, j| {
-            const idx = i * verts_per_face + j;
-            faces_data[4 * idx + 0] = @bitCast(@as(f32, vertex[0]));
-            faces_data[4 * idx + 1] = @bitCast(@as(f32, vertex[1]));
-            faces_data[4 * idx + 2] = @bitCast(@as(f32, vertex[2]));
+    var faces_data = std.mem.zeroes([4 * BLOCK_FACE_COUNT * VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE]u32);
+    for (Block.faces, 0..) |face, n| {
+        for (0..CHUNK_SIZE) |w| {
+            for (0..CHUNK_SIZE) |h| {
+                for (face, 0..) |vertex, p| {
+                    const idx = n * N_OFFSET + w * W_OFFSET + h * H_OFFSET + p * P_OFFSET;
+                    const vec: zm.Vec3f = vertex;
+                    var scale = Xyz{ .x = 1, .y = 1, .z = 1 };
+                    @field(scale, Block.scale[n][0..1]) = w + 1;
+                    @field(scale, Block.scale[n][1..2]) = h + 1;
+                    faces_data[4 * idx + 0] = @bitCast(vec[0] * scale.x);
+                    faces_data[4 * idx + 1] = @bitCast(vec[1] * scale.y);
+                    faces_data[4 * idx + 2] = @bitCast(vec[2] * scale.z);
+                }
+            }
         }
     }
 
@@ -349,7 +379,7 @@ pub const Chunk = struct {
         res |= @as(u32, @intCast(z)) << 20;
         res |= @as(u32, @intFromEnum(face)) << 16;
 
-        res |= @as(u32, @intCast(0xC3)) << 8;
+        res |= @as(u32, @intCast(0x00)) << 8;
         res |= @as(u32, @intFromEnum(block));
 
         return res;
