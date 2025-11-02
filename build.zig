@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
     client_options.addOption(bool, "chunk_debug_buffer", b.option(bool, "chunk_debug_buffer", "Enable debug buffer in the chunk shader") orelse false);
     client_options.addOption(bool, "gpu_alloc_log", b.option(bool, "gpu_alloc_log", "Enable GpuAlloc logging") orelse false);
     client_options.addOption(bool, "gl_debug", b.option(bool, "gl_debug", "Enable OpenGL debug context") orelse true);
+    client_options.addOption(bool, "greedy_meshing", b.option(bool, "greedy_meshing", "Use greedy meshing") orelse true);
     client.root_module.addOptions("ClientOptions", client_options);
 
     const run_client = if (b.option(bool, "mangohud", "Enable mangohud") orelse true) blk: {

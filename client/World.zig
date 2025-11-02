@@ -366,39 +366,21 @@ pub const Chunk = struct {
         const w_dim = dir[0..1];
         const h_dim = dir[1..2];
         const o_dim = dir[2..3];
-
-        var stack = std.mem.zeroes([CHUNK_SIZE * CHUNK_SIZE]Wh);
-        var top: usize = 0;
         var visited = std.mem.zeroes([CHUNK_SIZE][CHUNK_SIZE]bool);
-        stack[top] = .{};
-        visited[0][0] = true;
-        top += 1;
+        for (0..CHUNK_SIZE) |i| {
+            for (0..CHUNK_SIZE) |j| {
+                var pos = Xyz{};
+                if (visited[i][j]) continue;
+                @field(pos, w_dim) = i;
+                @field(pos, h_dim) = j;
+                @field(pos, o_dim) = layer;
+                if (!self.visible(pos, face)) continue;
 
-        while (top > 0) {
-            top -= 1;
-            const cur = stack[top];
-            var pos = Xyz{};
-            @field(pos, w_dim) = cur.w;
-            @field(pos, h_dim) = cur.h;
-            @field(pos, o_dim) = layer;
-            const size = self.greedy_size(pos, face);
-            if (size.w == 0 or size.h == 0) {
-                continue;
-            } else {
+                const size = if (Options.greedy_meshing)
+                    self.greedy_size(pos, face, &visited)
+                else
+                    self.one_by_one_size(pos, face);
                 try self.face_data.append(App.gpa(), self.pack(pos, size, face));
-            }
-
-            const a = Wh{ .w = cur.w + size.w, .h = cur.h };
-            const b = Wh{ .h = cur.h + size.h, .w = cur.w };
-            if (a.w < CHUNK_SIZE and a.h < CHUNK_SIZE and !visited[a.w][a.h]) {
-                stack[top] = a;
-                top += 1;
-                visited[a.w][a.h] = true;
-            }
-            if (b.w < CHUNK_SIZE and b.h < CHUNK_SIZE and !visited[b.w][b.h]) {
-                stack[top] = b;
-                top += 1;
-                visited[b.w][b.h] = true;
             }
         }
     }
@@ -419,32 +401,46 @@ pub const Chunk = struct {
             return .{ .w = 0, .h = 0 };
         }
     }
-    fn greedy_size(self: *Chunk, origin: Xyz, comptime face: Face) Wh {
+    fn greedy_size(
+        self: *Chunk,
+        origin: Xyz,
+        comptime face: Face,
+        visited: *[CHUNK_SIZE][CHUNK_SIZE]bool,
+    ) Wh {
         const dir = Block.scale[@intFromEnum(face)];
         const w_dim = dir[0..1];
         const h_dim = dir[1..2];
         const o_dim = dir[2..3];
-
-        var limit: usize = CHUNK_SIZE;
-        var best_size: Wh = .{ .w = 0, .h = 0 };
-        const block = self.blocks[origin.x * I_OFFSET + origin.y * K_OFFSET + origin.z * J_OFFSET];
         const i_start = @field(origin, w_dim);
         const j_start = @field(origin, h_dim);
+        std.debug.assert(!visited[i_start][j_start]);
+        if (!self.visible(origin, face)) return .{};
+
+        var limit: usize = CHUNK_SIZE;
+        var best_size: Wh = .{ .w = 1, .h = 1 };
+        const block = self.get(origin);
 
         for (i_start..CHUNK_SIZE) |i| {
             for (j_start..limit) |j| {
-                var pos = Xyz{ .x = 0, .y = 0, .z = 0 };
+                var pos = Xyz{};
                 @field(pos, w_dim) = i;
                 @field(pos, h_dim) = j;
                 @field(pos, o_dim) = @field(origin, o_dim);
                 const cur_size = Wh{ .h = j - j_start + 1, .w = i - i_start + 1 };
-                if (!self.visible(pos, face) or self.get(pos) != block) {
+                if (!self.visible(pos, face) or self.get(pos) != block or visited[i][j]) {
                     limit = j;
                     break;
                 }
                 if (cur_size.w * cur_size.h > best_size.w * best_size.h) {
                     best_size = cur_size;
                 }
+            }
+            if (limit == j_start) break;
+        }
+
+        for (0..best_size.w - 1) |i| {
+            for (0..best_size.h - 1) |j| {
+                visited[i_start + i][j_start + j] = true;
             }
         }
 
@@ -531,11 +527,14 @@ pub const Chunk = struct {
     }
 
     fn generate_solid(self: *Chunk) void {
-        @memset(&self.blocks, .stone);
+        for (0..CHUNK_SIZE) |i| {
+            const b: BlockId = if (i % 2 == 0) .air else .stone;
+            @memset(self.blocks[i * CHUNK_SIZE * CHUNK_SIZE .. (i + 1) * CHUNK_SIZE * CHUNK_SIZE], b);
+        }
     }
 
     fn generate(self: *Chunk) void {
-        self.generate_solid();
+        self.generate_balls();
     }
 
     fn generate_balls(self: *Chunk) void {
