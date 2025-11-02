@@ -11,15 +11,16 @@ const Block = @import("Block");
 const GpuAlloc = @import("GpuAlloc.zig");
 
 const CHUNK_SIZE = 16;
-const EXPECTED_BUFFER_SIZE = 16 * 1024;
+const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
 const DIM = 16;
 const HEIGHT = 8;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
-const CHUNK_DATA_LOCATION = 1;
-const DEBUG_DATA_LOCATION = 2;
-const BLOCK_DATA_LOCATION = 3;
+const CHUNK_DATA_BINDING = 1;
+const DEBUG_DATA_BINDING = 2;
+const BLOCK_DATA_BINDING = 3;
+const VERT_DATA_BINDING = 4;
 
 const VERT =
     \\#version 460 core
@@ -30,11 +31,11 @@ const VERT =
     \\
 ++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION {d}\n", .{VERT_DATA_LOCATION}) ++
     \\
-++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_LOCATION}) ++
+++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_BINDING}) ++
     \\
-++ std.fmt.comptimePrint("#define DEBUG_DATA_LOCATION {d}\n", .{DEBUG_DATA_LOCATION}) ++
+++ std.fmt.comptimePrint("#define DEBUG_DATA_LOCATION {d}\n", .{DEBUG_DATA_BINDING}) ++
     \\
-++ std.fmt.comptimePrint("#define BLOCK_DATA_LOCATION {d}\n", .{BLOCK_DATA_LOCATION}) ++
+++ std.fmt.comptimePrint("#define BLOCK_DATA_LOCATION {d}\n", .{BLOCK_DATA_BINDING}) ++
     \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|????????|tttttttt
     \\                                            // per instance
     \\uniform mat4 u_vp;
@@ -157,10 +158,11 @@ fn init_buffers(self: *World) !void {
         gl.STATIC_DRAW,
     ));
 
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.storage.faces.buffer));
+    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.storage.faces.buffer, 0, @sizeOf(u32)));
     try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION));
-    try gl_call(gl.VertexAttribIPointer(VERT_DATA_LOCATION, 1, gl.UNSIGNED_INT, @sizeOf(u32), 0));
-    try gl_call(gl.VertexAttribDivisor(VERT_DATA_LOCATION, 1));
+    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION, 1, gl.UNSIGNED_INT, 0));
+    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION, VERT_DATA_BINDING));
+    try gl_call(gl.VertexBindingDivisor(VERT_DATA_BINDING, 1));
 
     if (Options.chunk_debug_buffer) {
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.debug_buffer));
@@ -170,7 +172,7 @@ fn init_buffers(self: *World) !void {
             null,
             gl.MAP_READ_BIT | gl.MAP_COHERENT_BIT | gl.MAP_PERSISTENT_BIT,
         ));
-        try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, DEBUG_DATA_LOCATION, self.debug_buffer));
+        try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, DEBUG_DATA_BINDING, self.debug_buffer));
     }
 
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
@@ -180,10 +182,10 @@ fn init_buffers(self: *World) !void {
         raw_faces.ptr,
         0,
     ));
-    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_LOCATION, self.block_ubo));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_BINDING, self.block_ubo));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.storage.chunk_coords_ssbo));
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_LOCATION, self.storage.chunk_coords_ssbo));
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_BINDING, self.storage.chunk_coords_ssbo));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     try gl_call(gl.BindVertexArray(0));
@@ -262,7 +264,9 @@ pub fn process_chunks(self: *World) !void {
     for (0..100) |_| {
         _ = try self.storage.process_one();
     }
+    try gl_call(gl.BindVertexArray(self.vao));
     try self.storage.regenerate_indirect();
+    try gl_call(gl.BindVertexArray(0));
 }
 
 fn init_shader(self: *World) !void {
@@ -565,6 +569,8 @@ const ChunkStorage = struct {
             @ptrCast(indirect),
         ));
         try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+
+        try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {

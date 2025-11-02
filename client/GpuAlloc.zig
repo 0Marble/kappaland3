@@ -135,6 +135,7 @@ fn full_realloc(self: *GpuAlloc) !void {
             try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
             try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
         }
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     }
     self.length = new_length;
     Log.log(.debug, "{*}: Allocated {f} on the GPU", .{ self, MemoryUsage.from_bytes(self.length) });
