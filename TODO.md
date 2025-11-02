@@ -2,7 +2,6 @@
 
 - Block placement/destruction
 - Chunk render optimizations:
-    - Greedy meshing - combine quads with the same texture into a larger quad
     - Frustum culling - skip chunks that are outside of the camera view
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
@@ -22,3 +21,5 @@
     Tried it (branch chunk-split-faces), but it doesnt seem to improve fps (even makes it worse in some cases)
     2. Fix client.GpuAlloc.full\_realloc
     The issue was that the `vert_data` vertex data was still bound to the old freed buffer.
+    3. Greedy meshing - combine quads with the same texture into a larger quad
+    This improved FPS on the 16x16x8 balls test by like 20 (30-60 -> 50-90), even hitting 120 sometimes
