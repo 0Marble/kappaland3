@@ -13,7 +13,7 @@ const GpuAlloc = @import("GpuAlloc.zig");
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = 512;
-const CHUNK_DATA_COORDS_ELEM_SIZE = 4 * @sizeOf(u32) * 6;
+const CHUNK_DATA_COORDS_ELEM_SIZE = 4 * @sizeOf(u32);
 const CHUNK_DATA_INDIRECT_ELEM_SIZE = @sizeOf(Indirect) * 6;
 const DIM = 16;
 const HEIGHT = 8;
@@ -233,16 +233,22 @@ pub fn draw(self: *World) !void {
     try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
     const vp = App.game_state().camera.as_mat();
     try self.shader.set_mat4("u_vp", vp);
+    const view_dir = App.game_state().camera.view_dir();
 
     try gl_call(gl.BindVertexArray(self.vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.storage.indirect_buffer));
-    try gl_call(gl.MultiDrawElementsIndirect(
-        gl.TRIANGLES,
-        @field(gl, Block.index_type),
-        0,
-        @intCast(self.storage.active_chunks_count() * 6),
-        0,
-    ));
+    inline for (comptime std.meta.fieldNames(Chunk.Face), 0..) |_, i| {
+        const normal: zm.Vec3f = Block.normals[i];
+        if (zm.vec.dot(view_dir, normal) < 0.9) {
+            try gl_call(gl.MultiDrawElementsIndirect(
+                gl.TRIANGLES,
+                @field(gl, Block.index_type),
+                i * @sizeOf(Indirect),
+                @intCast(self.storage.active_chunks_count()),
+                CHUNK_DATA_INDIRECT_ELEM_SIZE,
+            ));
+        }
+    }
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
 
@@ -358,14 +364,6 @@ pub const Chunk = struct {
         res |= @as(u32, @intFromEnum(block));
 
         return res;
-    }
-
-    pub fn draw(self: *Chunk, shader: *Shader) !void {
-        try shader.set("u_chunk_coord", .{ self.x, self.y, self.z }, "3i");
-
-        try gl_call(gl.BindVertexArray(self.vao));
-        try gl_call(gl.DrawElements(gl.TRIANGLES, @intCast(self.index_count), gl.UNSIGNED_INT, 0));
-        try gl_call(gl.BindVertexArray(0));
     }
 
     pub fn init(self: *Chunk, coords: ChunkCoord) void {
@@ -533,7 +531,7 @@ const ChunkStorage = struct {
 
         const count = self.active_chunks.values().len;
         const indirect = try App.frame_alloc().alloc(Indirect, 6 * count);
-        const coords = try App.frame_alloc().alloc(i32, 4 * 6 * count);
+        const coords = try App.frame_alloc().alloc(i32, 4 * count);
 
         var total_primitives: usize = 0;
         for (self.active_chunks.values()) |chunk| {
@@ -551,12 +549,12 @@ const ChunkStorage = struct {
                     .base_vertex = 0,
                     .first_index = 0,
                 };
-                coords[4 * idx + 0] = chunk.coords.x;
-                coords[4 * idx + 1] = chunk.coords.y;
-                coords[4 * idx + 2] = chunk.coords.z;
                 total_primitives += 3 * data.len;
                 face_offset += @intCast(data.len * @sizeOf(u32));
             }
+            coords[4 * chunk.active_chunk_index + 0] = chunk.coords.x;
+            coords[4 * chunk.active_chunk_index + 1] = chunk.coords.y;
+            coords[4 * chunk.active_chunk_index + 2] = chunk.coords.z;
         }
 
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));

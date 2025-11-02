@@ -15,6 +15,7 @@ controller: Controller,
 
 mat_changed: bool,
 cached_mat: zm.Mat4f,
+forward: zm.Vec3f,
 
 const Camera = @This();
 const Controls = enum(u32) {
@@ -35,6 +36,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .pos = @splat(0),
         .mat_changed = true,
         .cached_mat = .zero(),
+        .forward = @splat(0),
         .controller = undefined,
     };
     try self.controller.init(self);
@@ -56,6 +58,13 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
 
 pub fn deinit(self: *Camera) void {
     self.controller.deinit();
+}
+
+pub fn view_dir(self: *Camera) zm.Vec3f {
+    if (self.mat_changed) {
+        _ = self.as_mat();
+    }
+    return self.forward;
 }
 
 pub fn move(self: *Camera, cmd: Controls) void {
@@ -111,7 +120,7 @@ pub fn update_aspect(self: *Camera, aspect: f32) void {
 pub fn as_mat(self: *Camera) zm.Mat4f {
     if (self.mat_changed) {
         const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
-        const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
+        self.forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
         const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
         // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
         const f = 1.0 / @tan(self.fov * 0.5);
@@ -122,7 +131,7 @@ pub fn as_mat(self: *Camera) zm.Mat4f {
             0, 0, 0,  1,
             0, 0, -1, 0,
         } };
-        const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
+        const view = zm.Mat4f.lookAt(self.pos, self.pos + self.forward, up);
         self.cached_mat = proj.multiply(view);
         self.mat_changed = false;
     }
