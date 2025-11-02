@@ -10,6 +10,7 @@ const zm = @import("zm");
 const Keys = @import("Keys.zig");
 const Ecs = @import("libmine").Ecs;
 const World = @import("World.zig");
+const Options = @import("ClientOptions");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -102,7 +103,8 @@ fn init_sdl() !void {
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
     try sdl_call(c.SDL_GL_SetAttribute(
         c.SDL_GL_CONTEXT_FLAGS,
-        c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG,
+        c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
+            if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
@@ -131,15 +133,17 @@ fn init_gl() !void {
     try gl_call(gl.ClipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE));
     try gl_call(gl.DepthFunc(gl.GREATER));
 
-    var flags: u32 = 0;
-    try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
-    if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {
-        Log.log(.warn, "Could not enable OpenGL debug output!", .{});
-    } else {
-        try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
-        try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
-        try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
-        Log.log(.debug, "Enabled OpenGL debug output", .{});
+    if (Options.gl_debug) {
+        var flags: u32 = 0;
+        try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
+        if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {
+            Log.log(.warn, "Could not enable OpenGL debug output!", .{});
+        } else {
+            try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
+            try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
+            try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
+            Log.log(.debug, "Enabled OpenGL debug output", .{});
+        }
     }
 
     Log.log(.debug, "Initialized OpenGL", .{});

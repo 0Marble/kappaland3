@@ -565,8 +565,6 @@ const ChunkStorage = struct {
             @ptrCast(indirect),
         ));
         try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
-
-        Log.log(.debug, "Drawing {d} triangles", .{total_primitives});
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {
