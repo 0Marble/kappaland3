@@ -11,6 +11,7 @@
 - Try out the ECS-free version of client.Controller
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
+- Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 
 
 # Done
