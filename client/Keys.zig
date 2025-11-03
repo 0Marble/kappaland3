@@ -171,6 +171,16 @@ pub fn on_frame_start(self: *Keys) !void {
         });
     }
 
+    inline for (comptime std.meta.fieldNames(MouseButton)) |button| {
+        if (@field(self.this_frame_mouse_state, button)) {
+            try App.ecs().emit_event(MouseDownEvent, self.mouse_down, MouseDownEvent{
+                .button = @field(MouseButton, button),
+                .px = self.this_frame_mouse_state.x,
+                .py = self.this_frame_mouse_state.y,
+            });
+        }
+    }
+
     var it = self.this_frame_pressed_keys.keyIterator();
     while (it.next()) |key| {
         const evt = self.keydown.get(key.*) orelse continue;

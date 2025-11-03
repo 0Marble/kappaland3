@@ -45,12 +45,12 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_SPACE), .up);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LSHIFT), .down);
 
-    try self.controller.bind_command(.front, .{ .keydown = Camera.move });
-    try self.controller.bind_command(.back, .{ .keydown = Camera.move });
-    try self.controller.bind_command(.left, .{ .keydown = Camera.move });
-    try self.controller.bind_command(.right, .{ .keydown = Camera.move });
-    try self.controller.bind_command(.up, .{ .keydown = Camera.move });
-    try self.controller.bind_command(.down, .{ .keydown = Camera.move });
+    try self.controller.bind_command(.front, .{ .normal = Camera.move });
+    try self.controller.bind_command(.back, .{ .normal = Camera.move });
+    try self.controller.bind_command(.left, .{ .normal = Camera.move });
+    try self.controller.bind_command(.right, .{ .normal = Camera.move });
+    try self.controller.bind_command(.up, .{ .normal = Camera.move });
+    try self.controller.bind_command(.down, .{ .normal = Camera.move });
     try self.controller.bind_command(.move, .{ .mouse_move = Camera.look_around });
 }
 
