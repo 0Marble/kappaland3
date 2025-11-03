@@ -16,6 +16,10 @@
 
 # Done
 
+- 03.11.2025:
+    1. Add some sort of UI 
+    Tried dvui, it does not have an sdl3+opengl backend. Techinically speaking I could make my own, but....
+
 - 02.11.2025: 
     1. Draw faces in separate draw calls - allows cheap face culling. 
     Tried it (branch chunk-split-faces), but it doesnt seem to improve fps (even makes it worse in some cases)
