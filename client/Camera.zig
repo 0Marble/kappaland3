@@ -90,7 +90,7 @@ pub fn move(self: *Camera, cmd: Controls) void {
     self.mat_changed = true;
 }
 
-pub fn look_around(self: *Camera, _: Controls, m: Keys.OnMouseMove.Move) void {
+pub fn look_around(self: *Camera, _: Controls, m: Keys.MouseMoveEvent) void {
     if (App.key_state().is_mouse_down(.middle)) {
         const amt = App.frametime() * 0.001;
         self.angles[0] -= m.dy * amt;

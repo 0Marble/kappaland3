@@ -8,7 +8,6 @@
 
 # Non-critical
 
-- Try out the ECS-free version of client.Controller
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
@@ -20,6 +19,9 @@
     1. Add some sort of UI 
     Tried dvui, it does not have an sdl3+opengl backend. Techinically speaking I could make my own, but....
     Going with imgui instead.
+    2. Try out the ECS-free version of client.Controller
+    In the end I decided on a more flexible idea: implement generic events in the ECS!
+    Removing direct ecs calls was a good idea, I realized it as soon as I tried to add mousedown into client.Keys
 
 - 02.11.2025: 
     1. Draw faces in separate draw calls - allows cheap face culling. 

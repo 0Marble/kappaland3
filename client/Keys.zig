@@ -22,25 +22,6 @@ pub const MouseButton = enum {
     }
 };
 
-pub const OnMouseMove = struct {
-    data: *anyopaque,
-
-    callback: *const fn (*anyopaque, move: Move) void,
-    pub const Move = struct { dx: f32, dy: f32, x: f32, y: f32 };
-};
-pub const OnMouseClick = struct {
-    data: *anyopaque,
-    callback: *const fn (*anyopaque, button: MouseButton, x: f32, y: f32) void,
-};
-pub const OnMouseDown = struct {
-    data: *anyopaque,
-    callback: *const fn (*anyopaque, button: MouseButton, x: f32, y: f32) void,
-};
-pub const OnKeydown = struct {
-    data: *anyopaque,
-    callback: *const fn (data: *anyopaque, code: Scancode) void,
-};
-
 const MouseState = struct {
     left: bool,
     right: bool,
@@ -49,6 +30,19 @@ const MouseState = struct {
     y: f32,
 
     const init: MouseState = std.mem.zeroes(MouseState);
+};
+
+pub const MouseMoveEvent = struct {
+    dx: f32,
+    dy: f32,
+    px: f32,
+    py: f32,
+};
+
+pub const MouseDownEvent = struct {
+    button: MouseButton,
+    px: f32,
+    py: f32,
 };
 
 pub const Scancode = struct {
@@ -68,33 +62,31 @@ pre_system: Ecs.SystemRef,
 post_system: Ecs.SystemRef,
 keys_eid: Ecs.EntityRef,
 keys_tag: Ecs.ComponentRef,
-keydown_components: std.AutoHashMapUnmanaged(Scancode, KeydownEcs),
-mouse_move_component: Ecs.ComponentRef,
-mouse_move_system: Ecs.SystemRef,
-
-const KeydownEcs = struct {
-    component: Ecs.ComponentRef,
-    system: Ecs.SystemRef,
-};
+keydown: std.AutoHashMapUnmanaged(Scancode, Ecs.EventRef),
+mouse_move: Ecs.EventRef,
+mouse_down: Ecs.EventRef,
 
 const Keys = @This();
 pub fn init(self: *Keys) !void {
     self.* = .{
         .prev_frame_pressed_keys = .empty,
         .this_frame_pressed_keys = .empty,
-        .keydown_components = .empty,
         .prev_frame_mouse_state = .init,
         .this_frame_mouse_state = .init,
         .pre_system = 0,
         .post_system = 0,
         .keys_tag = 0,
         .keys_eid = 0,
-        .mouse_move_component = 0,
-        .mouse_move_system = 0,
+
+        .keydown = .empty,
+        .mouse_move = 0,
+        .mouse_down = 0,
     };
     self.keys_eid = try App.game_state().ecs.spawn();
     self.keys_tag = try App.game_state().ecs.register_component("main.keys.tag", void, true);
-    self.mouse_move_component = try App.ecs().register_component("main.keys.mouse_move", OnMouseMove, true);
+
+    self.mouse_move = try App.ecs().register_event("main.keys.mouse_move", MouseMoveEvent);
+    self.mouse_down = try App.ecs().register_event("main.keys.mouse_down", MouseDownEvent);
 
     try App.game_state().ecs.add_component(self.keys_eid, void, self.keys_tag, {});
 
@@ -103,7 +95,9 @@ pub fn init(self: *Keys) !void {
         "main.keys.pre",
         &.{self.keys_tag},
         self,
-        Keys.manage_systems,
+        struct {
+            fn dummy(_: *Keys, _: *Ecs, _: Ecs.EntityRef) void {}
+        }.dummy,
     );
     self.post_system = try App.game_state().ecs.register_system(
         *Keys,
@@ -114,24 +108,14 @@ pub fn init(self: *Keys) !void {
             fn dummy(_: *Keys, _: *Ecs, _: Ecs.EntityRef) void {}
         }.dummy,
     );
-    try App.game_state().ecs.ensure_eval_order(self.pre_system, self.post_system);
+    try App.ecs().ensure_eval_order(self.pre_system, self.post_system);
 
-    self.mouse_move_system = try App.ecs().register_system(
-        *Keys,
-        "main.keys.mouse_move",
-        &.{self.mouse_move_component},
-        self,
-        &struct {
-            fn callback(keys: *Keys, ecs: *Ecs, eid: Ecs.EntityRef) void {
-                const body = ecs.get_component(eid, OnMouseMove, keys.mouse_move_component).?;
-                const x = keys.this_frame_mouse_state.x;
-                const y = keys.this_frame_mouse_state.y;
-                const dx = x - keys.prev_frame_mouse_state.x;
-                const dy = y - keys.prev_frame_mouse_state.y;
-                body.callback(body.data, .{ .x = x, .y = y, .dx = dx, .dy = dy });
-            }
-        }.callback,
-    );
+    const mouse_move_sys = try App.ecs().get_event_system(self.mouse_down);
+    const mouse_down_sys = try App.ecs().get_event_system(self.mouse_move);
+    try App.ecs().ensure_eval_order(self.pre_system, mouse_move_sys);
+    try App.ecs().ensure_eval_order(mouse_move_sys, self.post_system);
+    try App.ecs().ensure_eval_order(self.pre_system, mouse_down_sys);
+    try App.ecs().ensure_eval_order(mouse_down_sys, self.post_system);
 }
 
 pub fn on_keydown(self: *Keys, key: Scancode) !void {
@@ -175,30 +159,23 @@ pub fn mouse_pos(self: *Keys) struct { x: f32, y: f32 } {
     return .{ self.this_frame_mouse_state.x, self.this_frame_mouse_state.y };
 }
 
-fn manage_systems(self: *Keys, _: *Ecs, _: Ecs.EntityRef) void {
-    var prev_frame = self.prev_frame_pressed_keys.keyIterator();
-    while (prev_frame.next()) |entry| {
-        const ecs_data = self.keydown_components.get(entry.*) orelse continue;
-        App.game_state().ecs.disable_system(ecs_data.system);
-    }
-
-    var this_frame = self.this_frame_pressed_keys.keyIterator();
-    while (this_frame.next()) |entry| {
-        const ecs_data = self.keydown_components.get(entry.*) orelse continue;
-        App.game_state().ecs.enable_system(ecs_data.system);
-    }
-
-    if (self.prev_frame_mouse_state.x != self.this_frame_mouse_state.x or
-        self.prev_frame_mouse_state.y != self.this_frame_mouse_state.y)
-    {
-        App.ecs().enable_system(self.mouse_move_system);
-    } else {
-        App.ecs().disable_system(self.mouse_move_system);
-    }
-}
-
 pub fn on_frame_start(self: *Keys) !void {
-    _ = self;
+    const dx = self.this_frame_mouse_state.x - self.prev_frame_mouse_state.x;
+    const dy = self.this_frame_mouse_state.y - self.prev_frame_mouse_state.y;
+    if (dx != 0 or dy != 0) {
+        try App.ecs().emit_event(MouseMoveEvent, self.mouse_move, MouseMoveEvent{
+            .dx = dx,
+            .dy = dy,
+            .px = self.this_frame_mouse_state.x,
+            .py = self.this_frame_mouse_state.y,
+        });
+    }
+
+    var it = self.this_frame_pressed_keys.keyIterator();
+    while (it.next()) |key| {
+        const evt = self.keydown.get(key.*) orelse continue;
+        try App.ecs().emit_event(Scancode, evt, key.*);
+    }
 }
 
 pub fn on_frame_end(self: *Keys) !void {
@@ -211,38 +188,24 @@ pub fn on_frame_end(self: *Keys) !void {
     self.prev_frame_mouse_state = self.this_frame_mouse_state;
 }
 
-pub fn get_keydown_component(self: *Keys, key: Scancode) !Ecs.ComponentRef {
-    const entry = try self.keydown_components.getOrPut(App.gpa(), key);
-    if (entry.found_existing) return entry.value_ptr.component;
-    const name = try std.fmt.allocPrintSentinel(App.frame_alloc(), "main.keys.keydown.{d}", .{key.scancode}, 0);
-    Log.log(.debug, "Registering new keydown component: {s}", .{name});
+pub fn get_keydown_event(self: *Keys, scancode: Scancode) !Ecs.EventRef {
+    const entry = try self.keydown.getOrPut(App.gpa(), scancode);
+    if (entry.found_existing) {
+        return entry.value_ptr.*;
+    }
 
-    const KeydownSystem = struct {
-        component: Ecs.ComponentRef,
-        key: Scancode,
-    };
-    const component = try App.game_state().ecs.register_component(name, OnKeydown, true);
-    const system = try App.game_state().ecs.register_system(KeydownSystem, name, &.{component}, .{
-        .component = component,
-        .key = key,
-    }, struct {
-        fn system(k: KeydownSystem, ecs: *Ecs, eid: Ecs.EntityRef) void {
-            const callback = ecs.get_component(eid, OnKeydown, k.component).?.*;
-            callback.callback(callback.data, k.key);
-        }
-    }.system);
-    App.game_state().ecs.disable_system(system);
+    const name = try std.fmt.allocPrint(App.frame_alloc(), "main.keys.keydown.{}", .{scancode});
+    const evt = try App.ecs().register_event(name, Scancode);
+    entry.value_ptr.* = evt;
+    const sys = try App.ecs().get_event_system(evt);
+    try App.ecs().ensure_eval_order(self.pre_system, sys);
+    try App.ecs().ensure_eval_order(sys, self.post_system);
 
-    try App.game_state().ecs.ensure_eval_order(self.pre_system, system);
-    try App.game_state().ecs.ensure_eval_order(system, self.post_system);
-
-    entry.value_ptr.* = .{ .component = component, .system = system };
-
-    return component;
+    return evt;
 }
 
 pub fn deinit(self: *Keys) void {
-    self.keydown_components.deinit(App.gpa());
+    self.keydown.deinit(App.gpa());
     self.this_frame_pressed_keys.deinit(App.gpa());
     self.prev_frame_pressed_keys.deinit(App.gpa());
 }

@@ -22,7 +22,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             mouse_move: MouseMove,
 
             const Keydown = *const fn (ctx: *Ctx, cmd: Command) void;
-            const MouseMove = *const fn (ctx: *Ctx, cmd: Command, move: Keys.OnMouseMove.Move) void;
+            const MouseMove = *const fn (ctx: *Ctx, cmd: Command, move: Keys.MouseMoveEvent) void;
         };
 
         const Self = @This();
@@ -39,14 +39,18 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             }
             try App.ecs().add_component(self.eid, void, controller_tag, {});
 
-            try App.ecs().add_component(self.eid, Keys.OnMouseMove, App.key_state().mouse_move_component, .{
-                .data = @ptrCast(self),
-                .callback = @ptrCast(&on_mouse_move),
-            });
+            try App.ecs().add_event_listener(
+                self.eid,
+                Keys.MouseMoveEvent,
+                *Self,
+                App.key_state().mouse_move,
+                self,
+                &on_mouse_move,
+            );
         }
 
-        fn on_keydown(self: *Self, code: Scancode) void {
-            const cmds = self.keydown_binds.get(code).?;
+        fn on_keydown(self: *Self, code: *Scancode) void {
+            const cmds = self.keydown_binds.get(code.*).?;
             for (cmds.items) |cmd| {
                 const bind = self.cmd_binds.get(cmd).?;
                 if (bind == .keydown) bind.keydown(self.ctx, cmd);
@@ -60,7 +64,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
 
             _ = entry.value_ptr.swapRemove(idx);
             if (entry.value_ptr.items.len == 0) {
-                try App.ecs().remove_component(self.eid, try App.key_state().get_keydown_component(scancode));
+                try App.ecs().remove_event_listener(self.eid, try App.key_state().get_keydown_event(scancode));
             }
         }
 
@@ -70,15 +74,8 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             try entry.value_ptr.append(App.gpa(), cmd);
 
             if (!entry.found_existing) {
-                try App.ecs().add_component(
-                    self.eid,
-                    Keys.OnKeydown,
-                    try App.key_state().get_keydown_component(scancode),
-                    .{
-                        .data = @ptrCast(self),
-                        .callback = @ptrCast(&on_keydown),
-                    },
-                );
+                const evt = try App.key_state().get_keydown_event(scancode);
+                try App.ecs().add_event_listener(self.eid, Keys.Scancode, *Self, evt, self, on_keydown);
             }
         }
 
@@ -89,10 +86,10 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             }
         }
 
-        fn on_mouse_move(self: *Self, move: Keys.OnMouseMove.Move) void {
+        fn on_mouse_move(self: *Self, move: *Keys.MouseMoveEvent) void {
             for (self.mousemove_binds.items) |cmd| {
                 const callback = self.cmd_binds.get(cmd).?;
-                if (callback == .mouse_move) callback.mouse_move(self.ctx, cmd, move);
+                if (callback == .mouse_move) callback.mouse_move(self.ctx, cmd, move.*);
             }
         }
 
