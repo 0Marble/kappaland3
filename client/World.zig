@@ -292,22 +292,13 @@ pub fn draw(self: *World) !void {
     }
 }
 
-pub fn update(self: *World) !void {
+pub fn on_frame_start(self: *World) !void {
     for (0..100) |_| {
         _ = try self.storage.process_one();
     }
     try gl_call(gl.BindVertexArray(self.vao));
     try self.storage.regenerate_indirect();
     try gl_call(gl.BindVertexArray(0));
-
-    c.igText("Triangle count: %d", self.storage.triange_count);
-    const gpu_memory_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-        App.frame_alloc(),
-        "GPU Memory: {f}",
-        .{util.MemoryUsage.from_bytes(self.storage.faces.length)},
-        0,
-    ));
-    c.igText("%s", gpu_memory_str);
 }
 
 fn init_shader(self: *World) !void {

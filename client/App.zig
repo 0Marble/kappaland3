@@ -11,11 +11,11 @@ const Keys = @import("Keys.zig");
 const Ecs = @import("libmine").Ecs;
 const World = @import("World.zig");
 const Options = @import("ClientOptions");
+pub const DebugUi = @import("DebugUi.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
-imgui: *c.ImGuiContext,
 
 temp_memory: std.heap.ArenaAllocator,
 frame_memory: std.heap.ArenaAllocator,
@@ -25,6 +25,7 @@ frame_data: FrameData,
 game: GameState,
 
 world: World,
+debug_ui: DebugUi,
 
 const App = @This();
 var ok = false;
@@ -75,26 +76,10 @@ pub fn init() !void {
     try init_memory();
     try init_sdl();
     try init_gl();
-    try init_imgui();
     try init_gamestate();
 
     Log.log(.debug, "Started the client", .{});
     ok = true;
-}
-
-fn init_imgui() !void {
-    app.imgui = c.igCreateContext(null) orelse {
-        Log.log(.err, "Could not create imgui context", .{});
-        return error.ImguiError;
-    };
-    if (!c.ig_ImplSDL3_InitForOpenGL(app.win, app.gl_ctx)) {
-        Log.log(.err, "Could not init imgui for SDL3+OpenGL", .{});
-        return error.ImguiError;
-    }
-    if (!c.ig_ImplOpenGL3_Init("#version 460 core")) {
-        Log.log(.err, "Could not init imgui for OpenGL", .{});
-        return error.ImguiError;
-    }
 }
 
 fn init_memory() !void {
@@ -107,6 +92,7 @@ fn init_gamestate() !void {
     app.frame_data = .{};
     try app.game.init();
     app.world = try .init();
+    app.debug_ui = try .init(app);
 }
 
 fn init_sdl() !void {
@@ -187,10 +173,7 @@ pub fn deinit() void {
 
     app.game.deinit();
     app.world.deinit();
-
-    c.ig_ImplOpenGL3_Shutdown();
-    c.ig_ImplSDL3_Shutdown();
-    c.igDestroyContext(null);
+    app.debug_ui.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -232,34 +215,18 @@ pub fn run() !void {
         app.frame_data.on_frame_start();
         if (!try handle_events()) break;
 
-        c.ig_ImplOpenGL3_NewFrame();
-        c.ig_ImplSDL3_NewFrame();
-        c.igNewFrame();
-
-        _ = c.igBegin("Client", null, 0);
-
-        const pos_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "xyz: {}, angles: {}", .{
-            app.game.camera.pos,
-            app.game.camera.angles,
-        }, 0));
-        c.igText("%s", pos_str);
-        const cpu_memory_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "CPU Memory: {f}", .{
-            util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
-        }, 0));
-        c.igText("%s", cpu_memory_str);
-
-        try app.world.update();
+        try app.debug_ui.on_frame_start();
+        try app.world.on_frame_start();
         try app.game.on_frame_start();
-        try app.game.update();
 
-        c.igEnd();
-        c.igRender();
+        try app.game.update();
+        try app.debug_ui.update();
 
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         try app.world.draw();
 
-        c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
+        try app.debug_ui.on_frame_end();
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
         }
@@ -279,8 +246,6 @@ fn handle_events() !bool {
     var running = true;
     var evt: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&evt)) {
-        _ = c.ig_ImplSDL3_ProcessEvent(&evt);
-
         switch (evt.type) {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {
