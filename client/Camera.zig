@@ -15,6 +15,8 @@ controller: Controller,
 
 mat_changed: bool,
 cached_mat: zm.Mat4f,
+cached_inv: zm.Mat4f,
+cached_forward: zm.Vec3f,
 
 const Camera = @This();
 const Controls = enum(u32) {
@@ -33,9 +35,11 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .fov = fov,
         .angles = @splat(0),
         .pos = @splat(0),
+        .controller = undefined,
         .mat_changed = true,
         .cached_mat = .zero(),
-        .controller = undefined,
+        .cached_inv = .zero(),
+        .cached_forward = @splat(0),
     };
     try self.controller.init(self);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_W), .front);
@@ -108,23 +112,45 @@ pub fn update_aspect(self: *Camera, aspect: f32) void {
     self.mat_changed = true;
 }
 
+fn recalculate(self: *Camera) void {
+    if (!self.mat_changed) return;
+    const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
+    const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
+    const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
+    // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
+    const f = 1.0 / @tan(self.fov * 0.5);
+    const g = f / self.aspect;
+    const proj = zm.Mat4f{ .data = .{
+        g, 0, 0,  0,
+        0, f, 0,  0,
+        0, 0, 0,  1,
+        0, 0, -1, 0,
+    } };
+    const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
+    self.cached_mat = proj.multiply(view);
+    self.mat_changed = false;
+}
+
 pub fn as_mat(self: *Camera) zm.Mat4f {
-    if (self.mat_changed) {
-        const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
-        const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
-        const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
-        // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
-        const f = 1.0 / @tan(self.fov * 0.5);
-        const g = f / self.aspect;
-        const proj = zm.Mat4f{ .data = .{
-            g, 0, 0,  0,
-            0, f, 0,  0,
-            0, 0, 0,  1,
-            0, 0, -1, 0,
-        } };
-        const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
-        self.cached_mat = proj.multiply(view);
-        self.mat_changed = false;
-    }
+    self.recalculate();
     return self.cached_mat;
+}
+
+pub fn view_dir(self: *Camera) zm.Vec3f {
+    self.recalculate();
+    return self.cached_forward;
+}
+
+pub fn inverse(self: *Camera) zm.Mat4f {
+    self.recalculate();
+    return self.cached_inv;
+}
+
+pub fn screen_to_world_dir(self: *Camera, px: f32, py: f32) zm.Vec3f {
+    const w: f32 = @floatFromInt(App.screen_width());
+    const h: f32 = @floatFromInt(App.screen_height());
+    const x = 2 * (px / w) - 1;
+    const y = 2 * (py / h) - 1;
+    self.recalculate();
+    return zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 0 }));
 }

@@ -307,3 +307,14 @@ pub fn ecs() *Ecs {
 pub fn current_frame() u64 {
     return app.frame_data.cur_frame;
 }
+
+pub fn screen_width() i32 {
+    var w: i32 = 0;
+    try sdl_call(c.SDL_GetWindowSize(app.win, &w, null));
+    return w;
+}
+pub fn screen_height() i32 {
+    var h: i32 = 0;
+    try sdl_call(c.SDL_GetWindowSize(app.win, null, &h));
+    return h;
+}
