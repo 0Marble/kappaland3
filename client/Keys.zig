@@ -158,6 +158,15 @@ pub fn is_mouse_down(self: *Keys, button: MouseButton) bool {
 pub fn mouse_pos(self: *Keys) struct { x: f32, y: f32 } {
     return .{ self.this_frame_mouse_state.x, self.this_frame_mouse_state.y };
 }
+pub fn is_mouse_just_down(self: *Keys, button: MouseButton) bool {
+    switch (button) {
+        inline else => |tag| {
+            const cur = @field(self.this_frame_mouse_state, @tagName(tag));
+            const prev = @field(self.prev_frame_mouse_state, @tagName(tag));
+            return cur and !prev;
+        },
+    }
+}
 
 pub fn on_frame_start(self: *Keys) !void {
     const dx = self.this_frame_mouse_state.x - self.prev_frame_mouse_state.x;

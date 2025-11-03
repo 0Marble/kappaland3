@@ -51,6 +51,14 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
                 self,
                 &on_mouse_move_handler,
             );
+            try App.ecs().add_event_listener(
+                self.eid,
+                Keys.MouseDownEvent,
+                *Self,
+                App.key_state().mouse_down,
+                self,
+                &on_mouse_down_handler,
+            );
         }
 
         pub fn bind_command(self: *Self, cmd: Command, bind: CommandBind) !void {
@@ -96,6 +104,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             self.cmd_binds.deinit(App.gpa());
             self.keydown_binds.deinit(App.gpa());
             self.mousemove_binds.deinit(App.gpa());
+            self.mousedown_binds.deinit(App.gpa());
         }
 
         fn on_keydown_handler(self: *Self, code: *Scancode) void {

@@ -78,6 +78,7 @@ else
     \\  vec3 normals[BLOCK_FACE_COUNT];
     \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE];
     \\};
+    \\vec3 colors[4] = {vec3(0,0,0),vec3(0.2,0.2,0.2),vec3(0.6,0.4,0.2),vec3(0.2,0.7,0.3)};
     \\
     \\void main() {
     \\  uint x = (vert_data & uint(0xF0000000)) >> 28;
@@ -86,12 +87,13 @@ else
     \\  uint n = (vert_data & uint(0x000F0000)) >> 16;
     \\  uint w = (vert_data & uint(0x0000F000)) >> 12;
     \\  uint h = (vert_data & uint(0x00000F00)) >> 8;
+    \\  uint t = (vert_data & uint(0x000000FF));
     \\
     \\  uint p = gl_VertexID;
     \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
     \\
     \\  frag_pos = vec3(x, y, z) + faces[face] + 16 * vec3(chunk_coords[gl_DrawID]);
-    \\  frag_color = vec3(x, y, z) / 16.0;
+    \\  frag_color = colors[t];
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
@@ -292,31 +294,7 @@ pub fn draw(self: *World) !void {
     }
 }
 
-fn block_coord_dim(val: f32) struct { i32, usize } {
-    const x: i32 = @intFromFloat(val);
-    const chunk: i32 = @divFloor(x, 16);
-    const block: usize = @intCast(@mod(x, 16));
-    return .{ chunk, block };
-}
-
 pub fn on_frame_start(self: *World) !void {
-    if (App.key_state().is_key_just_pressed(.from_sdl(c.SDL_SCANCODE_R))) {
-        const pos = App.game_state().camera.pos;
-        const chunk_pos: ChunkCoord = .{
-            .x = @divFloor(@as(i32, @intFromFloat(pos[0])), 16),
-            .y = @divFloor(@as(i32, @intFromFloat(pos[1])), 16),
-            .z = @divFloor(@as(i32, @intFromFloat(pos[2])), 16),
-        };
-        const block_pos: Chunk.Xyz = .{
-            .x = @intCast(@mod(@as(i32, @intFromFloat(pos[0])), 16)),
-            .y = @intCast(@mod(@as(i32, @intFromFloat(pos[1])), 16)),
-            .z = @intCast(@mod(@as(i32, @intFromFloat(pos[2])), 16)),
-        };
-        const chunk = self.storage.active_chunks.get(chunk_pos).?;
-        chunk.set(block_pos, .stone);
-        try self.storage.remesh_active_chunk(chunk_pos);
-    }
-
     for (0..10) |_| {
         _ = try self.storage.process_one();
     }
@@ -924,3 +902,117 @@ const ChunkStorage = struct {
         return self.chunk_worklist.count();
     }
 };
+
+pub const BlockPosition = struct {
+    cx: i32,
+    cy: i32,
+    cz: i32,
+    bx: usize,
+    by: usize,
+    bz: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    face: Chunk.Face,
+
+    fn from_world(pos: zm.Vec3f) BlockPosition {
+        return .{
+            .cx = @divFloor(@as(i32, @intFromFloat(pos[0])), CHUNK_SIZE),
+            .cy = @divFloor(@as(i32, @intFromFloat(pos[1])), CHUNK_SIZE),
+            .cz = @divFloor(@as(i32, @intFromFloat(pos[2])), CHUNK_SIZE),
+            .bx = @intCast(@mod(@as(i32, @intFromFloat(pos[0])), CHUNK_SIZE)),
+            .by = @intCast(@mod(@as(i32, @intFromFloat(pos[1])), CHUNK_SIZE)),
+            .bz = @intCast(@mod(@as(i32, @intFromFloat(pos[2])), CHUNK_SIZE)),
+            .gx = @intFromFloat(pos[0]),
+            .gy = @intFromFloat(pos[1]),
+            .gz = @intFromFloat(pos[2]),
+            .face = .top,
+        };
+    }
+
+    fn chunk_pos(self: BlockPosition) ChunkCoord {
+        return .{ .x = self.cx, .y = self.cy, .z = self.cz };
+    }
+    fn block_pos(self: BlockPosition) Chunk.Xyz {
+        return .{ .x = self.bx, .y = self.by, .z = self.bz };
+    }
+};
+
+fn get_block(self: *World, pos: BlockPosition) ?BlockId {
+    const chunk = self.storage.active_chunks.get(pos.chunk_pos()) orelse return null;
+    const b = chunk.get(pos.block_pos());
+    return b;
+}
+
+const RAYCAST_STEP = 0.1;
+const RAYCAST_RE_EVAL = 16;
+pub fn raycast(self: *World, pos: zm.Vec3f, dir: zm.Vec3f) ?BlockPosition {
+    var step: f32 = RAYCAST_STEP;
+    var cur: zm.Vec3f = pos;
+
+    for (0..RAYCAST_RE_EVAL) |_| {
+        var t: f32 = 0;
+        var cur_bp = BlockPosition.from_world(cur);
+        var prev_bp = cur_bp;
+        var prev_bp_pos = cur;
+        var cur_bp_pos = cur;
+
+        while (true) : (t += step) {
+            const bp = BlockPosition.from_world(cur);
+            if (!std.meta.eql(cur_bp, bp)) {
+                prev_bp = cur_bp;
+                cur_bp = bp;
+                prev_bp_pos = cur_bp_pos;
+                cur_bp_pos = cur;
+            }
+            if (self.get_block(bp)) |b| {
+                if (b != .air) {
+                    break;
+                }
+            } else return null;
+            cur = @mulAdd(zm.Vec3f, dir, @splat(t), cur);
+        }
+
+        if (std.meta.eql(prev_bp, cur_bp)) {
+            return cur_bp;
+        }
+
+        var ok: usize = 0;
+        if (prev_bp.gx + 1 == cur_bp.gx) {
+            cur_bp.face = .right;
+            ok += 1;
+        }
+        if (prev_bp.gx - 1 == cur_bp.gx) {
+            cur_bp.face = .left;
+            ok += 1;
+        }
+        if (prev_bp.gy + 1 == cur_bp.gy) {
+            cur_bp.face = .top;
+            ok += 1;
+        }
+        if (prev_bp.gy - 1 == cur_bp.gy) {
+            cur_bp.face = .bot;
+            ok += 1;
+        }
+        if (prev_bp.gz + 1 == cur_bp.gz) {
+            cur_bp.face = .front;
+            ok += 1;
+        }
+        if (prev_bp.gz - 1 == cur_bp.gz) {
+            cur_bp.face = .back;
+            ok += 1;
+        }
+
+        if (ok == 1) return cur_bp;
+        step /= 2;
+        cur = prev_bp_pos;
+    }
+    Log.log(.warn, "Could not accurately determine the targeted block", .{});
+    return BlockPosition.from_world(cur);
+}
+
+pub fn request_break_block(self: *World, bp: BlockPosition) !void {
+    const chunk = self.storage.active_chunks.get(bp.chunk_pos()) orelse return;
+    chunk.set(bp.block_pos(), .air);
+    try self.storage.remesh_active_chunk(bp.chunk_pos());
+}

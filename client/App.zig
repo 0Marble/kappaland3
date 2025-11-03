@@ -310,11 +310,15 @@ pub fn current_frame() u64 {
 
 pub fn screen_width() i32 {
     var w: i32 = 0;
-    try sdl_call(c.SDL_GetWindowSize(app.win, &w, null));
+    sdl_call(c.SDL_GetWindowSize(app.win, &w, null)) catch return 0;
     return w;
 }
 pub fn screen_height() i32 {
     var h: i32 = 0;
-    try sdl_call(c.SDL_GetWindowSize(app.win, null, &h));
+    sdl_call(c.SDL_GetWindowSize(app.win, null, &h)) catch return 0;
     return h;
+}
+
+pub fn game_world() *World {
+    return &app.world;
 }

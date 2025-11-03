@@ -27,6 +27,7 @@ const Controls = enum(u32) {
     up,
     down,
     move,
+    interract,
 };
 
 pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
@@ -56,10 +57,25 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     try self.controller.bind_command(.up, .{ .normal = Camera.move });
     try self.controller.bind_command(.down, .{ .normal = Camera.move });
     try self.controller.bind_command(.move, .{ .mouse_move = Camera.look_around });
+    try self.controller.bind_command(.interract, .{ .mouse_down = Camera.interract });
 }
 
 pub fn deinit(self: *Camera) void {
     self.controller.deinit();
+}
+
+pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
+    const dir = self.screen_to_world_dir(btn.px, btn.py);
+
+    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {
+        const bp = App.game_world().raycast(self.pos, dir) orelse {
+            Log.log(.debug, "Could not find a target block in this direction", .{});
+            return;
+        };
+        App.game_world().request_break_block(bp) catch |err| {
+            Log.log(.warn, "{*}: Error while placing blocks: {}", .{ self, err });
+        };
+    }
 }
 
 pub fn move(self: *Camera, cmd: Controls) void {
@@ -128,6 +144,7 @@ fn recalculate(self: *Camera) void {
     } };
     const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
     self.cached_mat = proj.multiply(view);
+    self.cached_inv = self.cached_mat.inverse();
     self.mat_changed = false;
 }
 
@@ -150,7 +167,7 @@ pub fn screen_to_world_dir(self: *Camera, px: f32, py: f32) zm.Vec3f {
     const w: f32 = @floatFromInt(App.screen_width());
     const h: f32 = @floatFromInt(App.screen_height());
     const x = 2 * (px / w) - 1;
-    const y = 2 * (py / h) - 1;
+    const y = 2 * ((h - py) / h) - 1;
     self.recalculate();
-    return zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 0 }));
+    return zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 1 }));
 }
