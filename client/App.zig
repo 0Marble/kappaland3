@@ -15,8 +15,8 @@ const Options = @import("ClientOptions");
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
+imgui: *c.ImGuiContext,
 
-main_alloc: std.heap.DebugAllocator(.{}),
 temp_memory: std.heap.ArenaAllocator,
 frame_memory: std.heap.ArenaAllocator,
 static_memory: std.heap.ArenaAllocator,
@@ -29,6 +29,7 @@ world: World,
 const App = @This();
 var ok = false;
 var app: *App = undefined;
+var main_alloc = std.heap.DebugAllocator(.{ .enable_memory_limit = true }).init;
 
 const FrameData = struct {
     cur_frame: u64 = 0,
@@ -68,18 +69,32 @@ pub fn init() !void {
     if (ok) return;
     Log.log(.debug, "Initialization...", .{});
 
-    var debug_alloc = std.heap.DebugAllocator(.{}).init;
-    app = try debug_alloc.allocator().create(App);
+    app = try main_alloc.allocator().create(App);
     @memset(std.mem.asBytes(app), 0xbc);
-    app.main_alloc = debug_alloc;
 
     try init_memory();
     try init_sdl();
     try init_gl();
+    try init_imgui();
     try init_gamestate();
 
     Log.log(.debug, "Started the client", .{});
     ok = true;
+}
+
+fn init_imgui() !void {
+    app.imgui = c.igCreateContext(null) orelse {
+        Log.log(.err, "Could not create imgui context", .{});
+        return error.ImguiError;
+    };
+    if (!c.ig_ImplSDL3_InitForOpenGL(app.win, app.gl_ctx)) {
+        Log.log(.err, "Could not init imgui for SDL3+OpenGL", .{});
+        return error.ImguiError;
+    }
+    if (!c.ig_ImplOpenGL3_Init("#version 460 core")) {
+        Log.log(.err, "Could not init imgui for OpenGL", .{});
+        return error.ImguiError;
+    }
 }
 
 fn init_memory() !void {
@@ -173,6 +188,10 @@ pub fn deinit() void {
     app.game.deinit();
     app.world.deinit();
 
+    c.ig_ImplOpenGL3_Shutdown();
+    c.ig_ImplSDL3_Shutdown();
+    c.igDestroyContext(null);
+
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
     _ = c.SDL_GL_DestroyContext(app.gl_ctx);
@@ -182,8 +201,7 @@ pub fn deinit() void {
     app.static_memory.deinit();
     app.frame_memory.deinit();
     app.temp_memory.deinit();
-    var main_alloc = app.main_alloc;
-    main_alloc.allocator().destroy(app);
+    gpa().destroy(app);
     _ = main_alloc.deinit();
 
     ok = false;
@@ -194,7 +212,7 @@ pub fn game_state() *GameState {
 }
 
 pub fn gpa() std.mem.Allocator {
-    return app.main_alloc.allocator();
+    return main_alloc.allocator();
 }
 
 pub fn temp_alloc() std.mem.Allocator {
@@ -214,6 +232,18 @@ pub fn run() !void {
         app.frame_data.on_frame_start();
         if (!try handle_events()) break;
 
+        c.ig_ImplOpenGL3_NewFrame();
+        c.ig_ImplSDL3_NewFrame();
+        c.igNewFrame();
+        _ = c.igBegin("Client", null, 0);
+        const usage_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "{f}", .{
+            util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
+        }, 0));
+        c.igLabelText("Memory usage", "%s", usage_str);
+        c.igEnd();
+
+        c.igRender();
+
         try app.game.on_frame_start();
 
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -221,6 +251,7 @@ pub fn run() !void {
         try app.game.update();
         try app.world.draw();
 
+        c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
         }
@@ -241,6 +272,8 @@ fn handle_events() !bool {
     var running = true;
     var evt: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&evt)) {
+        _ = c.ig_ImplSDL3_ProcessEvent(&evt);
+
         switch (evt.type) {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {
