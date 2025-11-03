@@ -129,9 +129,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    if (b.option(bool, "llvm", "Build with llvm") orelse false) {
-        client.use_llvm = true;
-    }
     client.root_module.linkSystemLibrary("SDL3", .{});
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
@@ -150,11 +147,21 @@ pub fn build(b: *std.Build) void {
     client_options.addOption(bool, "gl_debug", b.option(bool, "gl_debug", "Enable OpenGL debug context") orelse true);
     client_options.addOption(bool, "gl_check_errors", b.option(bool, "gl_check_errors", "Check gl_Error") orelse true);
     client_options.addOption(bool, "greedy_meshing", b.option(bool, "greedy_meshing", "Use greedy meshing") orelse true);
+    client_options.addOption(usize, "world_size", b.option(usize, "world_size", "World size in chunks (x/z)") orelse 16);
+    client_options.addOption(usize, "world_height", b.option(usize, "world_height", "World height in chunks") orelse 8);
+    client_options.addOption(bool, "ui_store_src", b.option(bool, "ui_store_src", "Store callback source locations in DebugUi") orelse true);
     client.root_module.addOptions("ClientOptions", client_options);
 
-    const run_client = if (b.option(bool, "mangohud", "Enable mangohud") orelse true) blk: {
-        const cmd = b.addSystemCommand(&.{"mangohud"});
+    const wrapper: ?[]const u8 = b.option([]const u8, "command", "Wrapper command");
+    const run_client = if (wrapper) |command| blk: {
+        const cmd = b.addSystemCommand(&.{command});
+        if (std.mem.eql(u8, command, "gdb")) {
+            client.use_llvm = true;
+            client_options.addOption(bool, "in_gdb", true);
+            cmd.addArg("--args");
+        }
         cmd.addFileArg(client.getEmittedBin());
+
         break :blk cmd;
     } else b.addRunArtifact(client);
 

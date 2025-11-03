@@ -25,6 +25,18 @@ pub fn deinit(self: *GameState) void {
 }
 
 pub fn on_frame_start(self: *GameState) !void {
+    try App.gui().add_to_frame(GameState, "Debug", self, &struct {
+        fn callback(this: *GameState) !void {
+            const camera_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                App.frame_alloc(),
+                "xyz: {}, angles: {}",
+                .{ this.camera.pos, this.camera.angles },
+                0,
+            ));
+            c.igText("%s", camera_str);
+        }
+    }.callback, @src());
+
     try self.keys.on_frame_start();
 }
 

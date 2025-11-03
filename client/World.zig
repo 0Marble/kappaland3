@@ -14,9 +14,9 @@ const c = @import("c.zig").c;
 
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
-const EXPECTED_LOADED_CHUNKS_COUNT = 512;
-const DIM = 16;
-const HEIGHT = 8;
+const DIM: comptime_int = Options.world_size;
+const HEIGHT: comptime_int = Options.world_height;
+const EXPECTED_LOADED_CHUNKS_COUNT = DIM * DIM * HEIGHT;
 const DEBUG_SIZE = DIM * DIM * HEIGHT * CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_BINDING = 1;

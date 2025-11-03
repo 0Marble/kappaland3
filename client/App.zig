@@ -216,11 +216,12 @@ pub fn run() !void {
         if (!try handle_events()) break;
 
         try app.debug_ui.on_frame_start();
+
         try app.world.on_frame_start();
         try app.game.on_frame_start();
 
-        try app.game.update();
         try app.debug_ui.update();
+        try app.game.update();
 
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -242,10 +243,16 @@ pub fn key_state() *Keys {
     return &game_state().keys;
 }
 
+pub fn gui() *DebugUi {
+    return &app.debug_ui;
+}
+
 fn handle_events() !bool {
     var running = true;
     var evt: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&evt)) {
+        if (gui().handle_event(&evt) == .captured) continue;
+
         switch (evt.type) {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {

@@ -2,6 +2,20 @@ const std = @import("std");
 const c = @import("c.zig").c;
 const Log = @import("libmine").Log;
 const App = @import("App.zig");
+const Options = @import("ClientOptions");
+
+const ContentsCallback = struct {
+    src: if (Options.ui_store_src) std.builtin.SourceLocation else void,
+    data: *anyopaque,
+    callback: *const fn (*anyopaque) anyerror!void,
+
+    fn do(self: ContentsCallback) !void {
+        try self.callback(self.data);
+    }
+};
+
+const FrameContentsMap = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(ContentsCallback));
+frames: FrameContentsMap,
 
 const DebugUi = @This();
 pub fn init(app: *App) !DebugUi {
@@ -18,7 +32,9 @@ pub fn init(app: *App) !DebugUi {
         return error.ImguiError;
     }
 
-    return .{};
+    return .{
+        .frames = .empty,
+    };
 }
 
 pub fn deinit(self: *DebugUi) void {
@@ -28,10 +44,26 @@ pub fn deinit(self: *DebugUi) void {
     c.igDestroyContext(null);
 }
 
+pub fn add_to_frame(
+    self: *DebugUi,
+    comptime Ctx: type,
+    name: [:0]const u8,
+    ctx: *Ctx,
+    contents: *const fn (ctx: *Ctx) anyerror!void,
+    src: std.builtin.SourceLocation,
+) !void {
+    const entry = try self.frames.getOrPutValue(App.frame_alloc(), name, .empty);
+    try entry.value_ptr.append(App.frame_alloc(), .{
+        .data = @ptrCast(ctx),
+        .callback = @ptrCast(contents),
+        .src = if (Options.ui_store_src) src else {},
+    });
+}
+
 pub const EventStatus = enum { captured, fallthrough };
-pub fn handle_event(self: *DebugUi, evt: c.SDL_Event) EventStatus {
+pub fn handle_event(self: *DebugUi, evt: *c.SDL_Event) EventStatus {
     _ = self;
-    _ = c.ig_ImplSDL3_ProcessEvent(&evt);
+    _ = c.ig_ImplSDL3_ProcessEvent(evt);
     return .fallthrough;
 }
 
@@ -44,19 +76,18 @@ pub fn on_frame_start(self: *DebugUi) !void {
 }
 
 pub fn update(self: *DebugUi) !void {
-    _ = self;
-    _ = c.igBegin("Client", null, 0);
+    for (self.frames.keys(), self.frames.values()) |frame, contents| {
+        _ = c.igBegin(@ptrCast(frame), null, 0);
+        for (contents.items) |cb| {
+            try cb.do();
+        }
+        c.igEnd();
+    }
 
-    const pos_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(App.frame_alloc(), "xyz: {}, angles: {}", .{
-        App.game_state().camera.pos,
-        App.game_state().camera.angles,
-    }, 0));
-    c.igText("%s", pos_str);
-    c.igEnd();
     c.igRender();
 }
 
 pub fn on_frame_end(self: *DebugUi) !void {
-    _ = self;
+    self.frames = .empty;
     c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
 }
