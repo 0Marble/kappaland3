@@ -216,6 +216,18 @@ pub fn run() !void {
         if (!try handle_events()) break;
 
         try app.debug_ui.on_frame_start();
+        try gui().add_to_frame(App, "Debug", app, &struct {
+            fn callback(self: *App) !void {
+                _ = self;
+                const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                    frame_alloc(),
+                    "CPU Memory: {f}",
+                    .{util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes)},
+                    0,
+                ));
+                c.igText("%s", mem_str);
+            }
+        }.callback, @src());
 
         try app.world.on_frame_start();
         try app.game.on_frame_start();

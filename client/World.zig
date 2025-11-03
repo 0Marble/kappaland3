@@ -299,6 +299,22 @@ pub fn on_frame_start(self: *World) !void {
     try gl_call(gl.BindVertexArray(self.vao));
     try self.storage.regenerate_indirect();
     try gl_call(gl.BindVertexArray(0));
+
+    try App.gui().add_to_frame(World, "Debug", self, &struct {
+        fn callback(this: *World) !void {
+            c.igText("Triangles: %zu", this.storage.triange_count);
+            c.igText("Loaded Chunks: %zu", this.storage.active_chunks_count());
+            c.igText("Chunks In Queue: %zu", this.storage.chunk_worklist.items.len);
+
+            const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                App.frame_alloc(),
+                "GPU Memory: {f}",
+                .{util.MemoryUsage.from_bytes(this.storage.faces.length)},
+                0,
+            ));
+            c.igText("%s", mem_str);
+        }
+    }.callback, @src());
 }
 
 fn init_shader(self: *World) !void {
