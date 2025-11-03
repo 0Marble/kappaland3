@@ -235,20 +235,28 @@ pub fn run() !void {
         c.ig_ImplOpenGL3_NewFrame();
         c.ig_ImplSDL3_NewFrame();
         c.igNewFrame();
+
         _ = c.igBegin("Client", null, 0);
-        const usage_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "{f}", .{
+
+        const pos_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "xyz: {}, angles: {}", .{
+            app.game.camera.pos,
+            app.game.camera.angles,
+        }, 0));
+        c.igText("%s", pos_str);
+        const cpu_memory_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(frame_alloc(), "CPU Memory: {f}", .{
             util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
         }, 0));
-        c.igLabelText("Memory usage", "%s", usage_str);
-        c.igEnd();
+        c.igText("%s", cpu_memory_str);
 
-        c.igRender();
-
+        try app.world.update();
         try app.game.on_frame_start();
+        try app.game.update();
+
+        c.igEnd();
+        c.igRender();
 
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        try app.game.update();
         try app.world.draw();
 
         c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
@@ -258,7 +266,6 @@ pub fn run() !void {
 
         try app.game.on_frame_end();
         app.frame_data.on_frame_end();
-        try app.world.process_chunks();
 
         _ = app.frame_memory.reset(.{ .retain_capacity = {} });
     }

@@ -3,12 +3,14 @@ const Ecs = @import("libmine").Ecs;
 const std = @import("std");
 const gl = @import("gl");
 const zm = @import("zm");
+const util = @import("util.zig");
 const gl_call = @import("util.zig").gl_call;
 const Shader = @import("Shader.zig");
 const App = @import("App.zig");
 const Options = @import("ClientOptions");
 const Block = @import("Block");
 const GpuAlloc = @import("GpuAlloc.zig");
+const c = @import("c.zig").c;
 
 const CHUNK_SIZE = 16;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
@@ -290,13 +292,22 @@ pub fn draw(self: *World) !void {
     }
 }
 
-pub fn process_chunks(self: *World) !void {
+pub fn update(self: *World) !void {
     for (0..100) |_| {
         _ = try self.storage.process_one();
     }
     try gl_call(gl.BindVertexArray(self.vao));
     try self.storage.regenerate_indirect();
     try gl_call(gl.BindVertexArray(0));
+
+    c.igText("Triangle count: %d", self.storage.triange_count);
+    const gpu_memory_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+        App.frame_alloc(),
+        "GPU Memory: {f}",
+        .{util.MemoryUsage.from_bytes(self.storage.faces.length)},
+        0,
+    ));
+    c.igText("%s", gpu_memory_str);
 }
 
 fn init_shader(self: *World) !void {
@@ -592,6 +603,7 @@ const ChunkStorage = struct {
     active_chunks: std.AutoArrayHashMapUnmanaged(ChunkCoord, *Chunk),
     freelist: std.ArrayListUnmanaged(*Chunk),
     active_list_changed: bool,
+    triange_count: usize,
 
     pub fn init(self: *ChunkStorage) !void {
         self.* = ChunkStorage{
@@ -602,6 +614,7 @@ const ChunkStorage = struct {
             .active_chunks = .empty,
             .freelist = .empty,
             .active_list_changed = false,
+            .triange_count = 0,
             .allocated_chunks_count = EXPECTED_LOADED_CHUNKS_COUNT,
         };
 
@@ -654,7 +667,7 @@ const ChunkStorage = struct {
         const count = self.active_chunks.values().len;
         const indirect = try App.frame_alloc().alloc(Indirect, count);
         const coords = try App.frame_alloc().alloc(i32, 4 * count);
-        var total_primitives: usize = 0;
+        self.triange_count = 0;
         for (self.active_chunks.values()) |chunk| {
             const range = self.faces.get_range(chunk.handle).?;
             indirect[chunk.active_chunk_index] = Indirect{
@@ -667,7 +680,7 @@ const ChunkStorage = struct {
             coords[4 * chunk.active_chunk_index + 0] = chunk.coords.x;
             coords[4 * chunk.active_chunk_index + 1] = chunk.coords.y;
             coords[4 * chunk.active_chunk_index + 2] = chunk.coords.z;
-            total_primitives += 3 * chunk.face_data.items.len;
+            self.triange_count += 3 * chunk.face_data.items.len;
         }
 
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
@@ -706,7 +719,6 @@ const ChunkStorage = struct {
         try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
         try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
-        Log.log(.debug, "Drawing {d} triangles", .{total_primitives});
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {
