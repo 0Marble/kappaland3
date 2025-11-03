@@ -1,6 +1,5 @@
-const builtin = @import("builtin");
-const gl = if (builtin.is_test) void else @import("gl");
-const gl_call = if (builtin.is_test) undefined else @import("util.zig").gl_call;
+const gl = @import("gl");
+const gl_call = @import("util.zig").gl_call;
 const MemoryUsage = @import("util.zig").MemoryUsage;
 
 const Log = @import("libmine").Log;
@@ -32,7 +31,7 @@ const Entry = struct {
     used_size: usize,
 };
 
-buffer: if (builtin.is_test) void else gl.uint,
+buffer: gl.uint,
 initial_length: usize,
 length: usize,
 usage: Usage,
@@ -41,7 +40,7 @@ freelist: Queue(usize),
 gpa: std.mem.Allocator,
 
 const GpuAlloc = @This();
-const Usage = if (builtin.is_test) void else gl.uint;
+const Usage = gl.uint;
 pub fn init(gpa: std.mem.Allocator, length: usize, usage: Usage) !GpuAlloc {
     var self = GpuAlloc{
         .buffer = 0,
@@ -115,28 +114,26 @@ fn full_realloc(self: *GpuAlloc) !void {
     else
         self.length * 2;
 
-    if (!builtin.is_test) {
-        if (self.length != 0) {
-            var new_buffer: gl.uint = 0;
-            try gl_call(gl.CreateBuffers(1, @ptrCast(&new_buffer)));
-            try gl_call(gl.BindBuffer(gl.COPY_READ_BUFFER, self.buffer));
-            try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, new_buffer));
-            try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
-            try gl_call(gl.CopyBufferSubData(
-                gl.COPY_READ_BUFFER,
-                gl.ARRAY_BUFFER,
-                0,
-                0,
-                @intCast(self.length),
-            ));
-            try gl_call(gl.DeleteBuffers(1, @ptrCast(&self.buffer)));
-            self.buffer = new_buffer;
-        } else {
-            try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
-            try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
-        }
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
+    if (self.length != 0) {
+        var new_buffer: gl.uint = 0;
+        try gl_call(gl.CreateBuffers(1, @ptrCast(&new_buffer)));
+        try gl_call(gl.BindBuffer(gl.COPY_READ_BUFFER, self.buffer));
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, new_buffer));
+        try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
+        try gl_call(gl.CopyBufferSubData(
+            gl.COPY_READ_BUFFER,
+            gl.ARRAY_BUFFER,
+            0,
+            0,
+            @intCast(self.length),
+        ));
+        try gl_call(gl.DeleteBuffers(1, @ptrCast(&self.buffer)));
+        self.buffer = new_buffer;
+    } else {
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
+        try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(new_length), null, self.usage));
     }
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     self.length = new_length;
     Log.log(.debug, "{*}: Allocated {f} on the GPU", .{ self, MemoryUsage.from_bytes(self.length) });
 }
@@ -168,18 +165,16 @@ pub fn realloc(
     } else {
         const new_handle = try self.alloc(new_size, alignment);
 
-        if (!builtin.is_test) {
-            try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
-            const old_range = self.get_range(handle).?;
-            const new_range = self.get_range(new_handle).?;
-            try gl_call(gl.CopyBufferSubData(
-                gl.ARRAY_BUFFER,
-                gl.ARRAY_BUFFER,
-                old_range.offset,
-                new_range.offset,
-                new_range.size,
-            ));
-        }
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.buffer));
+        const old_range = self.get_range(handle).?;
+        const new_range = self.get_range(new_handle).?;
+        try gl_call(gl.CopyBufferSubData(
+            gl.ARRAY_BUFFER,
+            gl.ARRAY_BUFFER,
+            old_range.offset,
+            new_range.offset,
+            new_range.size,
+        ));
 
         self.free(handle);
         return new_handle;

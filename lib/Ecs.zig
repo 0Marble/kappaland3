@@ -7,6 +7,7 @@ const Log = @import("Log.zig");
 pub const EntityRef = u64;
 pub const SystemRef = u64;
 pub const ComponentRef = u64;
+pub const EventRef = u64;
 
 pub const Error = error{
     ComponentAlreadyDefined,
@@ -16,7 +17,29 @@ pub const Error = error{
     InvalidComponent,
     DeadEntity,
     ComponentTypecheckError,
+    InvalidEvent,
 } || std.mem.Allocator.Error;
+
+const DecodedEventRef = union(enum) {
+    const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
+
+    reserved: enum(u8) { invalid = 0, _ },
+    index: u64,
+
+    pub fn decode(ref: EventRef) DecodedEventRef {
+        if (ref < OFFSET) {
+            return .{ .reserved = @enumFromInt(ref) };
+        } else {
+            return .{ .index = ref - OFFSET };
+        }
+    }
+    pub fn encode(self: DecodedEventRef) EventRef {
+        switch (self) {
+            .reserved => |x| return @intFromEnum(x),
+            .index => |x| return x + OFFSET,
+        }
+    }
+};
 
 const DecodedSystemRef = union(enum) {
     const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
@@ -636,6 +659,18 @@ systems: SystemStore,
 component_names: StringStore,
 gpa: std.mem.Allocator,
 
+events: std.ArrayListUnmanaged(EventData),
+
+const EventData = struct {
+    component: ComponentRef,
+    system: SystemRef,
+    bodies: std.ArrayListAlignedUnmanaged(u8, std.mem.Alignment.@"64"),
+
+    pub fn deinit(self: *EventData, gpa: std.mem.Allocator) void {
+        self.bodies.deinit(gpa);
+    }
+};
+
 const Self = @This();
 const Ecs = @This();
 pub fn init(gpa: std.mem.Allocator) Self {
@@ -646,6 +681,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .systems = .init(gpa),
         .dense_components = .empty,
         .sparse_components = .empty,
+        .events = .empty,
     };
 }
 
@@ -655,6 +691,8 @@ pub fn deinit(self: *Self) void {
     self.component_names.deinit(self.gpa);
     for (self.dense_components.items) |*s| s.deinit(self.gpa);
     for (self.sparse_components.items) |*s| s.deinit(self.gpa);
+    for (self.events.items) |*evt_data| evt_data.deinit(self.gpa);
+    self.events.deinit(self.gpa);
     self.dense_components.deinit(self.gpa);
     self.sparse_components.deinit(self.gpa);
 }
@@ -959,6 +997,10 @@ pub fn ensure_eval_order(self: *Self, before: SystemRef, after: SystemRef) Error
 
 pub fn evaluate(self: *Self) Error!void {
     try self.systems.eval(self);
+    for (self.events.items) |*evt_data| {
+        evt_data.bodies.clearRetainingCapacity();
+        self.disable_system(evt_data.system);
+    }
 }
 
 test "Ecs.init" {
@@ -1199,4 +1241,154 @@ test "Ecs.add_component replacement" {
     try std.testing.expectEqual(.{ 0, 0, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
     try ecs.add_component(player, Vec3f, pos, .{ 0, 1, 0 });
     try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
+}
+
+const EventComponent = struct {
+    data: *anyopaque,
+    callback: *const fn (*anyopaque, *anyopaque) void,
+};
+pub fn register_event(self: *Self, name: []const u8, comptime Body: type) Error!EventRef {
+    const component = try self.register_component(name, EventComponent, true);
+    const event = (DecodedEventRef{ .index = self.events.items.len }).encode();
+    const evt_data = try self.events.addOne(self.gpa);
+    evt_data.component = component;
+
+    evt_data.system = try self.register_system(EventRef, name, &.{component}, event, &struct {
+        fn callback(evt: EventRef, ecs: *Ecs, eid: EntityRef) void {
+            const comp = ecs.get_event_component(evt) catch unreachable;
+            const cb = ecs.get_component(eid, EventComponent, comp).?.*;
+            const bodies = ecs.get_event_queue(Body, evt).?;
+            for (bodies) |*b| {
+                cb.callback(cb.data, @ptrCast(b));
+            }
+        }
+    }.callback);
+    evt_data.bodies = .empty;
+    self.disable_system(evt_data.system);
+
+    return event;
+}
+
+pub fn add_event_listener(
+    self: *Self,
+    eid: EntityRef,
+    comptime Body: type,
+    comptime Ctx: type,
+    event: EventRef,
+    ctx: Ctx,
+    callback: *const fn (Ctx, *Body) void,
+) Error!void {
+    const comp = try self.get_event_component(event);
+    if (@typeInfo(Ctx) == .pointer) {
+        try self.add_component(eid, EventComponent, comp, EventComponent{
+            .callback = @ptrCast(callback),
+            .data = @ptrCast(ctx),
+        });
+    } else {
+        const HeapCtx = struct {
+            ctx: Ctx,
+            callback: @TypeOf(callback),
+        };
+        const ctx_ref = try self.gpa.create(HeapCtx);
+        ctx_ref.ctx = ctx;
+        ctx_ref.callback = callback;
+        try self.add_component(eid, EventComponent, comp, .{
+            .data = @ptrCast(ctx_ref),
+            .callback = @ptrCast(&struct {
+                fn heap_callback(hc: HeapCtx, body: *Body) void {
+                    hc.callback(ctx.ctx, body);
+                }
+            }.heap_callback),
+        });
+    }
+}
+
+pub fn remove_event_listener(self: *Self, eid: EntityRef, event: EventRef) void {
+    const comp = self.get_event_component(event) catch return;
+    self.remove_component(eid, comp);
+}
+
+pub fn emit_event(self: *Self, comptime Body: type, event: EventRef, body: Body) Error!void {
+    const decoded = DecodedEventRef.decode(event);
+    if (decoded != .index) {
+        Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
+        return Error.InvalidEvent;
+    }
+    const idx = decoded.index;
+    const evt_data = &self.events.items[idx];
+    try evt_data.bodies.appendSlice(self.gpa, &std.mem.toBytes(body));
+    self.enable_system(evt_data.system);
+}
+
+pub fn get_event_system(self: *Self, event: EventRef) Error!SystemRef {
+    const decoded = DecodedEventRef.decode(event);
+    if (decoded != .index) {
+        Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
+        return Error.InvalidEvent;
+    }
+    const idx = decoded.index;
+    const evt_data = &self.events.items[idx];
+    return evt_data.system;
+}
+
+fn get_event_component(self: *Self, event: EventRef) Error!SystemRef {
+    const decoded = DecodedEventRef.decode(event);
+    if (decoded != .index) {
+        Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
+        return Error.InvalidEvent;
+    }
+    const idx = decoded.index;
+    const evt_data = &self.events.items[idx];
+    return evt_data.component;
+}
+
+fn get_event_queue(self: *Self, comptime Body: type, event: EventRef) ?[]Body {
+    const decoded = DecodedEventRef.decode(event);
+    if (decoded != .index) {
+        Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
+        return null;
+    }
+    const idx = decoded.index;
+    const evt_data = &self.events.items[idx];
+    return @ptrCast(evt_data.bodies.items);
+}
+
+test "Ecs.register_event" {
+    var ecs = Ecs.init(std.testing.allocator);
+    defer ecs.deinit();
+
+    const evt = try ecs.register_event("add", usize);
+    const player = try ecs.spawn();
+
+    const PlayerEventListener = struct {
+        sum: usize = 0,
+        ran: bool = false,
+        fn on_event(self: *@This(), num: *usize) void {
+            if (!self.ran) {
+                self.ran = true;
+                self.sum = 0;
+            }
+            self.sum += num.*;
+        }
+    };
+    var listener = PlayerEventListener{};
+    try ecs.add_event_listener(player, usize, *PlayerEventListener, evt, &listener, &PlayerEventListener.on_event);
+
+    try ecs.emit_event(usize, evt, 10);
+    try ecs.evaluate();
+    try std.testing.expect(listener.ran);
+    try std.testing.expectEqual(10, listener.sum);
+    listener.ran = false;
+
+    try ecs.evaluate();
+    try std.testing.expect(!listener.ran);
+    listener.ran = false;
+
+    try ecs.emit_event(usize, evt, 10);
+    try ecs.emit_event(usize, evt, 20);
+    try ecs.emit_event(usize, evt, 30);
+    try ecs.evaluate();
+    try std.testing.expect(listener.ran);
+    try std.testing.expectEqual(60, listener.sum);
+    listener.ran = false;
 }
