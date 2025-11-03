@@ -1,16 +1,16 @@
 # Critical
 
-- Block placement/destruction
 - Chunk render optimizations:
     - Frustum culling - skip chunks that are outside of the camera view
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
+- Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 
 # Non-critical
 
+- Placing/breaking - improve the raycaster
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
-- Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 
 
 # Done
@@ -22,6 +22,9 @@
     2. Try out the ECS-free version of client.Controller
     In the end I decided on a more flexible idea: implement generic events in the ECS!
     Removing direct ecs calls was a good idea, I realized it as soon as I tried to add mousedown into client.Keys
+    3. Block placement/destruction
+    Kind of working, but raycasting is still an issue, plus we need to be much more organized to handle this well.
+    The process has revealed that phase ordering is actually much more important.
 
 - 02.11.2025: 
     1. Draw faces in separate draw calls - allows cheap face culling. 
