@@ -5,7 +5,6 @@
     - Frustum culling - skip chunks that are outside of the camera view
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
-- Add some sort of UI
 
 # Non-critical
 
@@ -19,6 +18,7 @@
 - 03.11.2025:
     1. Add some sort of UI 
     Tried dvui, it does not have an sdl3+opengl backend. Techinically speaking I could make my own, but....
+    Going with imgui instead.
 
 - 02.11.2025: 
     1. Draw faces in separate draw calls - allows cheap face culling. 
