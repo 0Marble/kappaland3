@@ -292,10 +292,35 @@ pub fn draw(self: *World) !void {
     }
 }
 
+fn block_coord_dim(val: f32) struct { i32, usize } {
+    const x: i32 = @intFromFloat(val);
+    const chunk: i32 = @divFloor(x, 16);
+    const block: usize = @intCast(@mod(x, 16));
+    return .{ chunk, block };
+}
+
 pub fn on_frame_start(self: *World) !void {
-    for (0..100) |_| {
+    if (App.key_state().is_key_just_pressed(.from_sdl(c.SDL_SCANCODE_R))) {
+        const pos = App.game_state().camera.pos;
+        const chunk_pos: ChunkCoord = .{
+            .x = @divFloor(@as(i32, @intFromFloat(pos[0])), 16),
+            .y = @divFloor(@as(i32, @intFromFloat(pos[1])), 16),
+            .z = @divFloor(@as(i32, @intFromFloat(pos[2])), 16),
+        };
+        const block_pos: Chunk.Xyz = .{
+            .x = @intCast(@mod(@as(i32, @intFromFloat(pos[0])), 16)),
+            .y = @intCast(@mod(@as(i32, @intFromFloat(pos[1])), 16)),
+            .z = @intCast(@mod(@as(i32, @intFromFloat(pos[2])), 16)),
+        };
+        const chunk = self.storage.active_chunks.get(chunk_pos).?;
+        chunk.set(block_pos, .stone);
+        try self.storage.remesh_active_chunk(chunk_pos);
+    }
+
+    for (0..10) |_| {
         _ = try self.storage.process_one();
     }
+
     try gl_call(gl.BindVertexArray(self.vao));
     try self.storage.regenerate_indirect();
     try gl_call(gl.BindVertexArray(0));
@@ -304,7 +329,7 @@ pub fn on_frame_start(self: *World) !void {
         fn callback(this: *World) !void {
             c.igText("Triangles: %zu", this.storage.triange_count);
             c.igText("Loaded Chunks: %zu", this.storage.active_chunks_count());
-            c.igText("Chunks In Queue: %zu", this.storage.chunk_worklist.items.len);
+            c.igText("Chunks In Worklist: %zu", this.storage.worklist_size());
 
             const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
@@ -352,7 +377,6 @@ pub const Chunk = struct {
     blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]BlockId,
     face_data: std.ArrayListUnmanaged(u32),
     callbacks: std.ArrayListUnmanaged(ChunkCallback),
-    active_chunk_index: usize,
 
     const I_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
     const J_OFFSET = CHUNK_SIZE;
@@ -469,6 +493,10 @@ pub const Chunk = struct {
         return self.blocks[pos.x * I_OFFSET + pos.y * K_OFFSET + pos.z * J_OFFSET];
     }
 
+    fn set(self: *Chunk, pos: Xyz, block: BlockId) void {
+        self.blocks[pos.x * I_OFFSET + pos.y * K_OFFSET + pos.z * J_OFFSET] = block;
+    }
+
     fn visible(self: *Chunk, pos: Xyz, face: Face) bool {
         const b = self.get(pos);
         if (b == .air) return false;
@@ -517,8 +545,15 @@ pub const Chunk = struct {
             .callbacks = .empty,
             .stage = .ungenerated,
             .handle = .invalid,
-            .active_chunk_index = 0,
         };
+    }
+
+    pub fn clear(self: *Chunk) void {
+        self.coords = std.mem.zeroes(ChunkCoord);
+        self.face_data.clearRetainingCapacity();
+        self.callbacks.clearRetainingCapacity();
+        self.stage = .dead;
+        self.handle = .invalid;
     }
 
     fn recommended_gpu_allocation_size(self: *Chunk) usize {
@@ -551,8 +586,31 @@ pub const Chunk = struct {
         }
     }
 
+    fn generate_flat(self: *Chunk) void {
+        @memset(&self.blocks, .air);
+        if (self.coords.y > 0) return;
+        if (self.coords.y < 0) {
+            @memset(&self.blocks, .stone);
+        }
+
+        for (0..CHUNK_SIZE) |x| {
+            for (0..CHUNK_SIZE) |z| {
+                for (0..4) |y| {
+                    self.set(.{ .x = x, .y = y, .z = z }, .stone);
+                }
+                for (4..8) |y| {
+                    self.set(.{ .x = x, .y = y, .z = z }, .dirt);
+                }
+                self.set(.{ .x = x, .y = 9, .z = z }, .grass);
+                if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE) {
+                    self.set(.{ .x = x, .y = 9, .z = z }, .stone);
+                }
+            }
+        }
+    }
+
     fn generate(self: *Chunk) void {
-        self.generate_balls();
+        self.generate_flat();
     }
 
     fn generate_balls(self: *Chunk) void {
@@ -606,7 +664,7 @@ const ChunkStorage = struct {
     chunk_coords_ssbo: gl.uint,
     allocated_chunks_count: usize,
 
-    chunk_worklist: std.ArrayListUnmanaged(*Chunk),
+    chunk_worklist: std.AutoArrayHashMapUnmanaged(ChunkCoord, *Chunk),
     active_chunks: std.AutoArrayHashMapUnmanaged(ChunkCoord, *Chunk),
     freelist: std.ArrayListUnmanaged(*Chunk),
     active_list_changed: bool,
@@ -646,6 +704,36 @@ const ChunkStorage = struct {
         try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     }
 
+    fn remesh_active_chunk(self: *ChunkStorage, coords: ChunkCoord) !void {
+        const chunk = if (self.active_chunks.fetchSwapRemove(coords)) |chunk| chunk.value else {
+            Log.log(.warn, "{*}: remesh_active_chunk on an inactive chunk {}", .{ self, coords });
+            return;
+        };
+        chunk.face_data.clearRetainingCapacity();
+        chunk.stage = .waiting_for_mesh;
+        if (try self.chunk_worklist.fetchPut(App.gpa(), coords, chunk)) |_| {
+            Log.log(.warn, "{*}: Multiple chunks in worklist for {}", .{ self, coords });
+        }
+    }
+
+    fn unload_chunk(self: *ChunkStorage, coords: ChunkCoord) void {
+        const chunk = if (self.active_chunks.fetchSwapRemove(coords)) |kv| blk: {
+            self.active_list_changed = true;
+            break :blk kv.value;
+        } else if (self.chunk_worklist.fetchSwapRemove(coords)) |kv|
+            kv.value
+        else
+            return;
+
+        if (chunk.handle != .invalid) {
+            self.faces.free(chunk.handle);
+        }
+        chunk.clear();
+        self.freelist.append(App.gpa(), chunk) catch |err| {
+            Log.log(.warn, "{*}: couldnt put a chunk onto the freelist: {}", .{ self, err });
+        };
+    }
+
     pub fn request_chunk(self: *ChunkStorage, coords: ChunkCoord, callback: ?ChunkCallback) !void {
         if (self.active_chunks.get(coords)) |exitsing| {
             if (callback) |cb| {
@@ -660,7 +748,10 @@ const ChunkStorage = struct {
         else
             try App.gpa().create(Chunk);
         new_chunk.init(coords);
-        try self.chunk_worklist.append(App.gpa(), new_chunk);
+        if (try self.chunk_worklist.fetchPut(App.gpa(), coords, new_chunk)) |_| {
+            Log.log(.warn, "{*}: Multiple chunks in worklist for {}", .{ self, coords });
+        }
+
         if (callback) |cb| {
             try new_chunk.callbacks.append(App.gpa(), cb);
             cb.do(new_chunk);
@@ -675,18 +766,18 @@ const ChunkStorage = struct {
         const indirect = try App.frame_alloc().alloc(Indirect, count);
         const coords = try App.frame_alloc().alloc(i32, 4 * count);
         self.triange_count = 0;
-        for (self.active_chunks.values()) |chunk| {
+        for (self.active_chunks.values(), 0..) |chunk, i| {
             const range = self.faces.get_range(chunk.handle).?;
-            indirect[chunk.active_chunk_index] = Indirect{
+            indirect[i] = Indirect{
                 .count = 6,
                 .instance_count = @intCast(chunk.face_data.items.len),
                 .base_instance = @intCast(@divExact(range.offset, 4)),
                 .base_vertex = 0,
                 .first_index = 0,
             };
-            coords[4 * chunk.active_chunk_index + 0] = chunk.coords.x;
-            coords[4 * chunk.active_chunk_index + 1] = chunk.coords.y;
-            coords[4 * chunk.active_chunk_index + 2] = chunk.coords.z;
+            coords[4 * i + 0] = chunk.coords.x;
+            coords[4 * i + 1] = chunk.coords.y;
+            coords[4 * i + 2] = chunk.coords.z;
             self.triange_count += 3 * chunk.face_data.items.len;
         }
 
@@ -729,13 +820,15 @@ const ChunkStorage = struct {
     }
 
     pub fn process_one(self: *ChunkStorage) !bool {
-        while (self.chunk_worklist.pop()) |chunk| {
+        while (self.chunk_worklist.pop()) |kv| {
+            const chunk = kv.value;
+
             switch (chunk.stage) {
                 .dead => continue,
                 .ungenerated => {
                     chunk.generate();
                     chunk.stage = .waiting_for_mesh;
-                    try self.chunk_worklist.append(App.gpa(), chunk);
+                    try self.chunk_worklist.put(App.gpa(), chunk.coords, chunk);
                     for (chunk.callbacks.items) |cb| {
                         cb.do(chunk);
                     }
@@ -744,7 +837,7 @@ const ChunkStorage = struct {
                 .waiting_for_mesh => {
                     try chunk.build_mesh();
                     chunk.stage = .waiting_for_upload;
-                    try self.chunk_worklist.append(App.gpa(), chunk);
+                    try self.chunk_worklist.put(App.gpa(), chunk.coords, chunk);
                     for (chunk.callbacks.items) |cb| {
                         cb.do(chunk);
                     }
@@ -756,8 +849,10 @@ const ChunkStorage = struct {
                     for (chunk.callbacks.items) |cb| {
                         cb.do(chunk);
                     }
-                    try self.active_chunks.put(App.gpa(), chunk.coords, chunk);
-                    chunk.active_chunk_index = self.active_chunks.values().len - 1;
+
+                    if (try self.active_chunks.fetchPut(App.gpa(), chunk.coords, chunk)) |_| {
+                        Log.log(.warn, "{*}: Multiple chunks in active list for {}", .{ self, chunk.coords });
+                    }
                     self.active_list_changed = true;
                     return true;
                 },
@@ -775,7 +870,7 @@ const ChunkStorage = struct {
     }
 
     pub fn deinit(self: *ChunkStorage) void {
-        for (self.chunk_worklist.items) |chunk| {
+        for (self.chunk_worklist.values()) |chunk| {
             chunk.deinit();
             App.gpa().destroy(chunk);
         }
@@ -823,5 +918,9 @@ const ChunkStorage = struct {
 
     fn active_chunks_count(self: *ChunkStorage) usize {
         return self.active_chunks.count();
+    }
+
+    fn worklist_size(self: *ChunkStorage) usize {
+        return self.chunk_worklist.count();
     }
 };

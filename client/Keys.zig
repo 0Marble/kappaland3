@@ -171,6 +171,9 @@ pub fn is_mouse_down(self: *Keys, button: MouseButton) bool {
         inline else => |tag| return @field(self.this_frame_mouse_state, @tagName(tag)),
     }
 }
+pub fn mouse_pos(self: *Keys) struct { x: f32, y: f32 } {
+    return .{ self.this_frame_mouse_state.x, self.this_frame_mouse_state.y };
+}
 
 fn manage_systems(self: *Keys, _: *Ecs, _: Ecs.EntityRef) void {
     var prev_frame = self.prev_frame_pressed_keys.keyIterator();
