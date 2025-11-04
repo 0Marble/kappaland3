@@ -1,0 +1,105 @@
+const World = @import("World.zig");
+const std = @import("std");
+
+const Stage = enum { dead, generating, meshing, active };
+
+const CHUNK_SIZE = World.CHUNK_SIZE;
+pub const X_OFFSET = 1;
+pub const Z_OFFSET = CHUNK_SIZE;
+pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
+
+coords: World.ChunkCoords,
+blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]World.BlockId,
+stage: Stage,
+
+const Chunk = @This();
+pub fn init(self: *Chunk, coords: World.ChunkCoords) !void {
+    self.coords = coords;
+    @memset(&self.blocks, .air);
+    self.stage = .generating;
+}
+
+pub fn process(self: *Chunk) !void {}
+
+pub fn deinit(self: *Chunk) void {
+    self.stage = .dead;
+}
+
+pub fn clear(self: *Chunk) void {
+    self.stage = .dead;
+}
+
+fn generate(self: *Chunk) void {
+    self.generate_balls();
+}
+
+pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
+    return self.blocks[pos.x * X_OFFSET + pos.y * Y_OFFSET + pos.z * Z_OFFSET];
+}
+
+pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
+    self.blocks[pos.x * X_OFFSET + pos.y * Y_OFFSET + pos.z * Z_OFFSET] = block;
+}
+
+fn generate_grid(self: *Chunk) void {
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |j| {
+            for (0..CHUNK_SIZE) |k| {
+                const x: i32 = (self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
+                const y: i32 = (self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
+                const z: i32 = (self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
+                const idx = i * X_OFFSET + j * Y_OFFSET + k * Z_OFFSET;
+
+                if (@rem(x + y + z, 2) == 0) {
+                    self.blocks[idx] = .air;
+                } else {
+                    self.blocks[idx] = .stone;
+                }
+            }
+        }
+    }
+}
+
+fn generate_flat(self: *Chunk) void {
+    @memset(&self.blocks, .air);
+    if (self.coords.y > 0) return;
+    if (self.coords.y < 0) {
+        @memset(&self.blocks, .stone);
+        return;
+    }
+
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |z| {
+            for (0..4) |y| {
+                self.set(.{ .x = x, .y = y, .z = z }, .stone);
+            }
+            for (4..8) |y| {
+                self.set(.{ .x = x, .y = y, .z = z }, .dirt);
+            }
+            self.set(.{ .x = x, .y = 8, .z = z }, .grass);
+            if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE) {
+                self.set(.{ .x = x, .y = 8, .z = z }, .stone);
+            }
+        }
+    }
+}
+
+fn generate_balls(self: *Chunk) void {
+    const scale = std.math.pi / 8.0;
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |j| {
+            for (0..CHUNK_SIZE) |k| {
+                const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
+                const y: f32 = @floatFromInt(self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
+                const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
+                const idx = i * X_OFFSET + j * Y_OFFSET + k * Z_OFFSET;
+                const w = @abs(@sin(x * scale) + @cos(z * scale) + @sin(y * scale));
+                if (w < 3 * 0.4) {
+                    self.blocks[idx] = .air;
+                } else {
+                    self.blocks[idx] = .stone;
+                }
+            }
+        }
+    }
+}

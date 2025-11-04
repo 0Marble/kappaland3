@@ -4,6 +4,14 @@ const gl = @import("gl");
 const std = @import("std");
 const Options = @import("ClientOptions");
 
+pub fn Xyz(comptime T: type) type {
+    return struct {
+        x: T = 0,
+        y: T = 0,
+        z: T = 0,
+    };
+}
+
 pub const MemoryUsage = struct {
     bytes: usize,
 
