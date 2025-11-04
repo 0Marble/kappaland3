@@ -60,7 +60,13 @@ pub fn process_work(self: *World) !void {
         const kv = self.worklist.pop() orelse break;
         const chunk = kv.value;
         try chunk.process();
-        if (chunk.stage != .active) try self.worklist.put(App.gpa(), chunk.coords, chunk);
+        if (chunk.stage != .active) {
+            try self.worklist.put(App.gpa(), chunk.coords, chunk);
+        } else {
+            if (try self.active.fetchPut(App.gpa(), chunk.coords, chunk)) |_| {
+                Log.log(.warn, "{*}: Duplicate chunks at coordinate {}", .{ self, chunk.coords });
+            }
+        }
     }
 }
 

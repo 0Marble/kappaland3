@@ -80,7 +80,7 @@ const VERT =
     \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
     \\
     \\  frag_pos = vec3(x, y, z) + faces[face] + 16 * vec3(chunk_coords[gl_DrawID]);
-    \\  frag_color = colors[t];
+    \\  frag_color = vec3(x, y, z) / 16.0;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
@@ -186,6 +186,10 @@ pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
         mesh.init(chunk);
         try mesh.build();
         try self.update_mesh(mesh);
+
+        if (try self.meshes.fetchPut(App.gpa(), chunk.coords, mesh)) |_| {
+            Log.log(.warn, "{*}: Multiple meshes for chunk at {}", .{ self, chunk.coords });
+        }
     }
     self.meshes_changed = true;
 }
@@ -352,6 +356,7 @@ fn regenerate_indirect(self: *Self) !void {
         ));
     }
 
+    try gl_call(gl.BindVertexArray(self.vao));
     try gl_call(gl.BufferSubData(
         gl.SHADER_STORAGE_BUFFER,
         0,
@@ -369,6 +374,7 @@ fn regenerate_indirect(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
+    try gl_call(gl.BindVertexArray(0));
 }
 
 const ChunkMesh = struct {
@@ -421,7 +427,7 @@ const ChunkMesh = struct {
         }
     }
 
-    const FaceSize = struct { w: usize, h: usize };
+    const FaceSize = struct { w: usize = 0, h: usize = 0 };
     fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace) u32 {
         var res: u32 = 0;
         const x, const y, const z = .{ pos.x, pos.y, pos.z };
@@ -444,12 +450,12 @@ const ChunkMesh = struct {
         const x, const y, const z = .{ pos.x, pos.y, pos.z };
 
         return switch (face) {
-            .front => z + 1 == CHUNK_SIZE or self.blocks[x * X_OFFSET + y * Y_OFFSET + (z + 1) * Z_OFFSET] == .air,
-            .back => z == 0 or self.blocks[x * X_OFFSET + y * Y_OFFSET + (z - 1) * Z_OFFSET] == .air,
-            .right => x + 1 == CHUNK_SIZE or self.blocks[(x + 1) * X_OFFSET + y * Y_OFFSET + z * Z_OFFSET] == .air,
-            .left => x == 0 or self.blocks[(x - 1) * X_OFFSET + y * Y_OFFSET + z * Z_OFFSET] == .air,
-            .top => y + 1 == CHUNK_SIZE or self.blocks[x * X_OFFSET + (y + 1) * Y_OFFSET + z * Z_OFFSET] == .air,
-            .bot => y == 0 or self.blocks[x * X_OFFSET + (y - 1) * Y_OFFSET + z * Z_OFFSET] == .air,
+            .front => z + 1 == CHUNK_SIZE or self.get(.init(x, y, z + 1)) == .air,
+            .back => z == 0 or self.get(.init(x, y, z - 1)) == .air,
+            .right => x + 1 == CHUNK_SIZE or self.get(.init(x + 1, y, z)) == .air,
+            .left => x == 0 or self.get(.init(x - 1, y, z)) == .air,
+            .top => y + 1 == CHUNK_SIZE or self.get(.init(x, y + 1, z)) == .air,
+            .bot => y == 0 or self.get(.init(x, y - 1, z)) == .air,
         };
     }
 
@@ -528,6 +534,10 @@ const ChunkMesh = struct {
         }
 
         return best_size;
+    }
+
+    fn get(self: *ChunkMesh, pos: World.BlockCoords) World.BlockId {
+        return self.chunk.?.get(pos);
     }
 };
 

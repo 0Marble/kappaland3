@@ -9,6 +9,10 @@ pub fn Xyz(comptime T: type) type {
         x: T = 0,
         y: T = 0,
         z: T = 0,
+
+        pub fn init(x: T, y: T, z: T) @This() {
+            return .{ .x = x, .y = y, .z = z };
+        }
     };
 }
 
@@ -59,7 +63,7 @@ fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
     };
 }
 
-pub inline fn gl_call(res: anytype) !@TypeOf(res) {
+pub fn gl_call(res: anytype) !@TypeOf(res) {
     if (!Options.gl_check_errors) {
         return res;
     }

@@ -37,7 +37,10 @@ pub fn process(self: *Chunk) !void {
             self.generate();
             self.stage = .meshing;
         },
-        .meshing => {},
+        .meshing => {
+            try App.renderer().upload_chunk(self);
+            self.stage = .active;
+        },
         .active => return,
     }
 }
