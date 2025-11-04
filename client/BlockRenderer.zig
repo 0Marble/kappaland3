@@ -122,23 +122,24 @@ block_model_ubo: gl.uint,
 meshes_changed: bool,
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *ChunkMesh),
 freelist: std.ArrayListUnmanaged(*ChunkMesh),
+triangle_count: usize,
 
 const Self = @This();
 
 pub fn init(self: *Self) !void {
     self.meshes_changed = false;
     self.meshes = .empty;
+    self.freelist = .empty;
+    self.triangle_count = 0;
+
+    self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
     try self.init_buffers();
     try self.init_shader();
 }
 
 pub fn deinit(self: *Self) void {
-    for (self.freelist.items) |mesh| {
-        mesh.deinit();
-    }
-    for (self.meshes.values()) |mesh| {
-        mesh.deinit();
-    }
+    for (self.freelist.items) |mesh| mesh.deinit();
+    for (self.meshes.values()) |mesh| mesh.deinit();
     self.meshes.deinit(App.gpa());
     self.freelist.deinit(App.gpa());
 
@@ -160,12 +161,12 @@ pub fn draw(self: *Self) !void {
     try self.shader.set_mat4("u_vp", vp);
 
     try gl_call(gl.BindVertexArray(self.vao));
-    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.storage.indirect_buffer));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
         @field(gl, BlockModel.index_type),
         0,
-        @intCast(self.storage.active_chunks_count()),
+        @intCast(self.meshes.count()),
         0,
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
@@ -180,9 +181,9 @@ pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
         const mesh = if (self.freelist.pop()) |mesh|
             mesh
         else
-            try .create(chunk);
+            try ChunkMesh.create();
 
-        mesh.chunk = chunk;
+        mesh.init(chunk);
         try mesh.build();
         try self.update_mesh(mesh);
     }
@@ -271,7 +272,7 @@ fn init_buffers(self: *Self) !void {
     try gl_call(gl.VertexBindingDivisor(VERT_DATA_BINDING, 1));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_BINDING, self.storage.chunk_coords_ssbo));
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_BINDING, self.chunk_coords_ssbo));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     try gl_call(gl.BindVertexArray(0));
@@ -313,23 +314,23 @@ fn regenerate_indirect(self: *Self) !void {
     if (!self.meshes_changed) return;
     self.meshes_changed = false;
 
-    const count = self.active_chunks.values().len;
+    const count = self.meshes.count();
     const indirect = try App.frame_alloc().alloc(Indirect, count);
     const coords = try App.frame_alloc().alloc(i32, 4 * count);
-    self.triange_count = 0;
-    for (self.active_chunks.values(), 0..) |chunk, i| {
-        const range = self.faces.get_range(chunk.handle).?;
+    self.triangle_count = 0;
+    for (self.meshes.values(), 0..) |mesh, i| {
+        const range = self.faces.get_range(mesh.handle).?;
         indirect[i] = Indirect{
             .count = 6,
-            .instance_count = @intCast(chunk.face_data.items.len),
+            .instance_count = @intCast(mesh.faces.items.len),
             .base_instance = @intCast(@divExact(range.offset, 4)),
             .base_vertex = 0,
             .first_index = 0,
         };
-        coords[4 * i + 0] = chunk.coords.x;
-        coords[4 * i + 1] = chunk.coords.y;
-        coords[4 * i + 2] = chunk.coords.z;
-        self.triange_count += 3 * chunk.face_data.items.len;
+        coords[4 * i + 0] = mesh.chunk.?.coords.x;
+        coords[4 * i + 1] = mesh.chunk.?.coords.y;
+        coords[4 * i + 2] = mesh.chunk.?.coords.z;
+        self.triangle_count += 3 * mesh.faces.items.len;
     }
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
@@ -375,20 +376,25 @@ const ChunkMesh = struct {
     const Y_OFFSET = Chunk.Y_OFFSET;
     const Z_OFFSET = Chunk.Z_OFFSET;
 
-    chunk: *Chunk,
+    chunk: ?*Chunk,
     faces: std.ArrayListUnmanaged(u32),
     handle: GpuAlloc.Handle,
 
-    fn create(chunk: *Chunk) !*ChunkMesh {
+    fn create() !*ChunkMesh {
         const self = try App.gpa().create(ChunkMesh);
-        self.chunk = chunk;
+        self.chunk = null;
         self.faces = .empty;
         self.handle = .invalid;
         return self;
     }
+    fn init(self: *ChunkMesh, chunk: *Chunk) void {
+        self.chunk = chunk;
+    }
+
     fn clear(self: *ChunkMesh) void {
         self.faces.clearRetainingCapacity();
     }
+
     fn deinit(self: *ChunkMesh) void {
         self.faces.deinit(App.gpa());
         App.gpa().destroy(self);

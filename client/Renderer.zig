@@ -1,4 +1,4 @@
-const BlockRenderer = @import("BlockRenderer.zig");
+pub const BlockRenderer = @import("BlockRenderer.zig");
 const App = @import("App.zig");
 const gl = @import("gl");
 const std = @import("std");

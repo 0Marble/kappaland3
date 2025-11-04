@@ -17,26 +17,23 @@ active: std.AutoArrayHashMapUnmanaged(ChunkCoords, *Chunk),
 freelist: std.ArrayListUnmanaged(*Chunk),
 
 const World = @This();
-fn init(self: *World) !void {
+pub fn init(self: *World) !void {
+    self.worklist = .empty;
+    self.active = .empty;
+    self.freelist = .empty;
+
     try self.init_chunks();
 }
 
-fn init_chunks(self: *World) !void {
-    for (0..World.DIM) |i| {
-        for (0..World.DIM) |j| {
-            for (0..World.HEIGHT) |k| {
-                const x = @as(i32, @intCast(i)) - DIM / 2;
-                const y = @as(i32, @intCast(k)) - HEIGHT + 1;
-                const z = @as(i32, @intCast(j)) - DIM / 2;
-                try self.request_chunk(.{ .x = x, .y = y, .z = z });
-            }
-        }
-    }
+pub fn deinit(self: *World) void {
+    for (self.worklist.values()) |chunk| chunk.deinit();
+    for (self.active.values()) |chunk| chunk.deinit();
+    for (self.freelist.items) |chunk| chunk.deinit();
+
+    self.worklist.deinit(App.gpa());
+    self.active.deinit(App.gpa());
+    self.freelist.deinit(App.gpa());
 }
-
-pub const ChunkCoords = util.Xyz(i32);
-
-pub const BlockCoords = util.Xyz(usize);
 
 pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
     if (self.active.get(coords)) |_| return;
@@ -45,8 +42,8 @@ pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
     const chunk = if (self.freelist.pop()) |old|
         old
     else
-        try App.gpa().create(Chunk);
-    try chunk.init(coords);
+        try Chunk.create();
+    chunk.init(coords);
     try self.worklist.put(App.gpa(), coords, chunk);
 }
 
@@ -69,3 +66,18 @@ pub fn process_work(self: *World) !void {
 
 pub const BlockId = enum(u16) { air = 0, stone = 1, dirt = 2, grass = 3, _ };
 pub const BlockFace = enum(u8) { front, back, right, left, top, bot };
+pub const ChunkCoords = util.Xyz(i32);
+pub const BlockCoords = util.Xyz(usize);
+
+fn init_chunks(self: *World) !void {
+    for (0..World.DIM) |i| {
+        for (0..World.DIM) |j| {
+            for (0..World.HEIGHT) |k| {
+                const x = @as(i32, @intCast(i)) - DIM / 2;
+                const y = @as(i32, @intCast(k)) - HEIGHT + 1;
+                const z = @as(i32, @intCast(j)) - DIM / 2;
+                try self.request_load_chunk(.{ .x = x, .y = y, .z = z });
+            }
+        }
+    }
+}

@@ -1,5 +1,6 @@
 const World = @import("World.zig");
 const std = @import("std");
+const App = @import("App.zig");
 
 const Stage = enum { dead, generating, meshing, active };
 
@@ -13,24 +14,37 @@ blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]World.BlockId,
 stage: Stage,
 
 const Chunk = @This();
-pub fn init(self: *Chunk, coords: World.ChunkCoords) !void {
-    self.coords = coords;
-    @memset(&self.blocks, .air);
-    self.stage = .generating;
+pub fn create() !*Chunk {
+    const self = try App.gpa().create(Chunk);
+    self.coords = std.mem.zeroes(World.ChunkCoords);
+    self.stage = .dead;
+    return self;
 }
 
-pub fn process(self: *Chunk) !void {}
-
-pub fn deinit(self: *Chunk) void {
-    self.stage = .dead;
+pub fn init(self: *Chunk, coords: World.ChunkCoords) void {
+    self.coords = coords;
+    self.stage = .generating;
 }
 
 pub fn clear(self: *Chunk) void {
     self.stage = .dead;
 }
 
-fn generate(self: *Chunk) void {
-    self.generate_balls();
+pub fn process(self: *Chunk) !void {
+    switch (self.stage) {
+        .dead => return,
+        .generating => {
+            self.generate();
+            self.stage = .meshing;
+        },
+        .meshing => {},
+        .active => return,
+    }
+}
+
+pub fn deinit(self: *Chunk) void {
+    self.stage = .dead;
+    App.gpa().destroy(self);
 }
 
 pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
@@ -39,6 +53,10 @@ pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
 
 pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
     self.blocks[pos.x * X_OFFSET + pos.y * Y_OFFSET + pos.z * Z_OFFSET] = block;
+}
+
+fn generate(self: *Chunk) void {
+    self.generate_balls();
 }
 
 fn generate_grid(self: *Chunk) void {

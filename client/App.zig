@@ -7,11 +7,11 @@ const Log = @import("libmine").Log;
 const gl = @import("gl");
 pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
-const Keys = @import("Keys.zig");
+pub const Keys = @import("Keys.zig");
 const Ecs = @import("libmine").Ecs;
-const World = @import("World.zig");
 const Options = @import("ClientOptions");
 pub const DebugUi = @import("DebugUi.zig");
+pub const Renderer = @import("Renderer.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -23,8 +23,7 @@ static_memory: std.heap.ArenaAllocator,
 
 frame_data: FrameData,
 game: GameState,
-
-world: World,
+main_renderer: Renderer,
 debug_ui: DebugUi,
 
 const App = @This();
@@ -76,7 +75,7 @@ pub fn init() !void {
     try init_memory();
     try init_sdl();
     try init_gl();
-    try init_gamestate();
+    try init_game();
 
     Log.log(.debug, "Started the client", .{});
     ok = true;
@@ -88,11 +87,11 @@ fn init_memory() !void {
     app.static_memory = .init(gpa());
 }
 
-fn init_gamestate() !void {
+fn init_game() !void {
     app.frame_data = .{};
     try app.game.init();
-    app.world = try .init();
     app.debug_ui = try .init(app);
+    try app.main_renderer.init();
 }
 
 fn init_sdl() !void {
@@ -172,8 +171,8 @@ pub fn deinit() void {
     if (!ok) return;
 
     app.game.deinit();
-    app.world.deinit();
     app.debug_ui.deinit();
+    app.main_renderer.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -229,7 +228,6 @@ pub fn run() !void {
             }
         }.callback, @src());
 
-        try app.world.on_frame_start();
         try app.game.on_frame_start();
 
         try app.debug_ui.update();
@@ -237,7 +235,7 @@ pub fn run() !void {
 
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        try app.world.draw();
+        try renderer().draw();
 
         try app.debug_ui.on_frame_end();
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
@@ -319,6 +317,6 @@ pub fn screen_height() i32 {
     return h;
 }
 
-pub fn game_world() *World {
-    return &app.world;
+pub fn renderer() *Renderer {
+    return &app.main_renderer;
 }

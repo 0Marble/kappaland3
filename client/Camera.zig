@@ -66,16 +66,9 @@ pub fn deinit(self: *Camera) void {
 
 pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
     const dir = self.screen_to_world_dir(btn.px, btn.py);
+    _ = dir; // autofix
 
-    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {
-        const bp = App.game_world().raycast(self.pos, dir) orelse {
-            Log.log(.debug, "Could not find a target block in this direction", .{});
-            return;
-        };
-        App.game_world().request_break_block(bp) catch |err| {
-            Log.log(.warn, "{*}: Error while placing blocks: {}", .{ self, err });
-        };
-    }
+    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {}
 }
 
 pub fn move(self: *Camera, cmd: Controls) void {
