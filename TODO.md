@@ -5,12 +5,18 @@
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
+- Lights support - we can either have the lighting be calculated on the cpu or on the gpu, I would prefer the cpu since the gpu is already quite strained, but I am also often wrong about gpu performance
+    1. Just stick a u32 RGBA onto vertex attributes - 2x the memory...
+    2. Pack vertex attribs xxxxyyyy|zzzz?nnn|tttttttt|wwhhllll with 4 bits of light level - no colored lights, more difficult to support u16-based texture indices in the future
+    3. Calculate everything in the fragment shader - have a buffer with concated per-chunk light block data, and another one with chunk light-buf offsets. If we have enough gpu it is the easiest approach
+    4. Deferred shading - have a completely different shader pass that computes "light meshes", i.e. draws just the light-enduced color of the block faces. We render it to a gpu texture, and then use later for final calculations
 
 # Non-critical
 
 - Placing/breaking - improve the raycaster
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
+- Deferred shading - it would greatly (supposedly?) simplify later non-block rendering. Use the same fragment shader for everything!
 
 
 # Done
