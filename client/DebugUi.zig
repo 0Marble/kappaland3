@@ -87,7 +87,7 @@ pub fn update(self: *DebugUi) !void {
     c.igRender();
 }
 
-pub fn on_frame_end(self: *DebugUi) !void {
+pub fn draw(self: *DebugUi) !void {
     self.frames = .empty;
     c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
 }

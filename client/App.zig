@@ -233,11 +233,7 @@ pub fn run() !void {
         try app.debug_ui.update();
         try app.game.update();
 
-        gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
         try renderer().draw();
-
-        try app.debug_ui.on_frame_end();
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
         }

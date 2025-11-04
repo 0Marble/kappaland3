@@ -46,6 +46,7 @@ pub fn init(
     self.index_type = switch (Idx) {
         u32 => gl.UNSIGNED_INT,
         u16 => gl.UNSIGNED_SHORT,
+        u8 => gl.UNSIGNED_BYTE,
         else => @compileError("Invalid index type \"" ++ @typeName(Idx) ++ "\""),
     };
 
