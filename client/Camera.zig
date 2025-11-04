@@ -123,8 +123,9 @@ pub fn update_aspect(self: *Camera, aspect: f32) void {
 
 fn recalculate(self: *Camera) void {
     if (!self.mat_changed) return;
-    const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1]).multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
-    const forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
+    const rot = zm.Mat4f.rotation(.{ 0, 1, 0 }, self.angles[1])
+        .multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
+    self.cached_forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
     const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
     // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
     const f = 1.0 / @tan(self.fov * 0.5);
@@ -135,7 +136,7 @@ fn recalculate(self: *Camera) void {
         0, 0, 0,  1,
         0, 0, -1, 0,
     } };
-    const view = zm.Mat4f.lookAt(self.pos, self.pos + forward, up);
+    const view = zm.Mat4f.lookAt(self.pos, self.pos + self.cached_forward, up);
     self.cached_mat = proj.multiply(view);
     self.cached_inv = self.cached_mat.inverse();
     self.mat_changed = false;
@@ -163,4 +164,35 @@ pub fn screen_to_world_dir(self: *Camera, px: f32, py: f32) zm.Vec3f {
     const y = 2 * ((h - py) / h) - 1;
     self.recalculate();
     return zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 1 }));
+}
+
+pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
+    const mat = self.as_mat();
+    var ndc = mat.multiplyVec4(.{ point[0], point[1], point[2], 1.0 });
+    ndc /= @splat(ndc[3]);
+    return @abs(ndc[0]) < 1 and @abs(ndc[1]) < 1 and ndc[2] > 0;
+}
+
+test "Camera.point_in_frustum" {
+    var cam = Camera{
+        .angles = @splat(0),
+        .aspect = 1,
+        .fov = std.math.pi * 0.5,
+        .pos = @splat(0),
+        .mat_changed = true,
+        .cached_forward = @splat(0),
+        .cached_inv = .zero(),
+        .cached_mat = .zero(),
+        .controller = undefined,
+    };
+
+    try std.testing.expect(cam.point_in_frustum(.{ 0, 0, -1 }));
+    try std.testing.expect(cam.point_in_frustum(.{ 0, 0, -10 }));
+    try std.testing.expect(!cam.point_in_frustum(.{ 0, 0, 1 }));
+    try std.testing.expect(!cam.point_in_frustum(.{ 0, 0, 10 }));
+
+    try std.testing.expect(cam.point_in_frustum(.{ 0.9, 0, -1 }));
+    try std.testing.expect(!cam.point_in_frustum(.{ 100, 0, -1 }));
+    try std.testing.expect(cam.point_in_frustum(.{ 99, 0, -100 }));
+    try std.testing.expect(!cam.point_in_frustum(.{ 101, 0, -100 }));
 }

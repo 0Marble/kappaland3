@@ -156,7 +156,7 @@ pub fn is_mouse_down(self: *Keys, button: MouseButton) bool {
     }
 }
 pub fn mouse_pos(self: *Keys) struct { x: f32, y: f32 } {
-    return .{ self.this_frame_mouse_state.x, self.this_frame_mouse_state.y };
+    return .{ .x = self.this_frame_mouse_state.x, .y = self.this_frame_mouse_state.y };
 }
 pub fn is_mouse_just_down(self: *Keys, button: MouseButton) bool {
     switch (button) {

@@ -12,11 +12,12 @@ const util = @import("util.zig");
 const Log = @import("libmine").Log;
 const gl_call = util.gl_call;
 const Renderer = @import("Renderer.zig");
+const Camera = @import("Camera.zig");
 
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = World.DIM * World.DIM * World.HEIGHT;
-const MINIMAL_MESH_SIZE = 1024;
+const MINIMAL_MESH_SIZE = 4 * 1024;
 const VERT_DATA_LOCATION = 0;
 const CHUNK_DATA_BINDING = 1;
 const BLOCK_DATA_BINDING = 3;
@@ -136,7 +137,6 @@ pub fn init(self: *Self) !void {
     self.freelist = .empty;
     self.triangle_count = 0;
 
-    self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
     try self.init_buffers();
     try self.init_shader();
 }
@@ -158,7 +158,8 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn draw(self: *Self) !void {
-    try self.regenerate_indirect();
+    const seen_cnt = try self.compute_seen();
+    if (seen_cnt == 0) return;
 
     try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
     const vp = App.game_state().camera.as_mat();
@@ -170,7 +171,7 @@ pub fn draw(self: *Self) !void {
         gl.TRIANGLES,
         @field(gl, BlockModel.index_type),
         0,
-        @intCast(self.meshes.count()),
+        @intCast(seen_cnt),
         0,
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
@@ -229,6 +230,8 @@ const raw_faces: []const u8 = blk: {
 };
 
 fn init_buffers(self: *Self) !void {
+    self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
+
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ibo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ubo)));
@@ -315,15 +318,50 @@ const Indirect = extern struct {
     base_instance: u32,
 };
 
-fn regenerate_indirect(self: *Self) !void {
-    if (!self.meshes_changed) return;
-    self.meshes_changed = false;
+const MeshOrder = struct {
+    mesh: *ChunkMesh,
+    center: zm.Vec3f,
 
-    const count = self.meshes.count();
-    const indirect = try App.frame_alloc().alloc(Indirect, count);
-    const coords = try App.frame_alloc().alloc(i32, 4 * count);
+    fn less(pos: zm.Vec3f, a: MeshOrder, b: MeshOrder) bool {
+        const d1 = zm.vec.lenSq(a.center - pos);
+        const d2 = zm.vec.lenSq(b.center - pos);
+        return d1 < d2;
+    }
+};
+
+fn compute_seen(self: *Self) !usize {
+    const mesh_order = try App.frame_alloc().alloc(MeshOrder, self.meshes.count());
+    const cam: *Camera = &App.game_state().camera;
+
+    var counter: usize = 0;
+    for (self.meshes.values()) |mesh| {
+        var all_unseen = true;
+        var center: zm.Vec3f = @splat(0);
+        for (&mesh.corners()) |p| {
+            if (cam.point_in_frustum(p)) {
+                all_unseen = false;
+            }
+            center += p;
+        }
+        if (all_unseen) continue;
+
+        center /= @splat(8);
+        mesh_order[counter].mesh = mesh;
+        mesh_order[counter].center = center;
+        counter += 1;
+    }
+    if (counter == 0) return 0;
+
+    const indirect = try App.frame_alloc().alloc(Indirect, counter);
+    const coords = try App.frame_alloc().alloc(i32, 4 * counter);
+    @memset(coords, 0);
+    @memset(indirect, std.mem.zeroes(Indirect));
+
+    std.mem.sort(MeshOrder, mesh_order[0..counter], cam.pos, MeshOrder.less);
+
     self.triangle_count = 0;
-    for (self.meshes.values(), 0..) |mesh, i| {
+    for (0..counter) |i| {
+        const mesh = mesh_order[i].mesh;
         const range = self.faces.get_range(mesh.handle).?;
         indirect[i] = Indirect{
             .count = 6,
@@ -341,8 +379,8 @@ fn regenerate_indirect(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
 
-    if (self.allocated_chunks_count < count) {
-        self.allocated_chunks_count = count * 2;
+    if (self.allocated_chunks_count < counter) {
+        self.allocated_chunks_count = counter * 2;
         try gl_call(gl.BufferData(
             gl.SHADER_STORAGE_BUFFER,
             @intCast(self.allocated_chunks_count * @sizeOf(i32) * 4),
@@ -361,7 +399,7 @@ fn regenerate_indirect(self: *Self) !void {
     try gl_call(gl.BufferSubData(
         gl.SHADER_STORAGE_BUFFER,
         0,
-        @intCast(coords.len * @sizeOf(i32)),
+        @intCast(counter * @sizeOf(i32) * 4),
         @ptrCast(coords),
     ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
@@ -369,13 +407,15 @@ fn regenerate_indirect(self: *Self) !void {
     try gl_call(gl.BufferSubData(
         gl.DRAW_INDIRECT_BUFFER,
         0,
-        @intCast(indirect.len * @sizeOf(Indirect)),
+        @intCast(counter * @sizeOf(Indirect)),
         @ptrCast(indirect),
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
     try gl_call(gl.BindVertexArray(0));
+
+    return counter;
 }
 
 const ChunkMesh = struct {
@@ -539,6 +579,30 @@ const ChunkMesh = struct {
 
     fn get(self: *ChunkMesh, pos: World.BlockCoords) World.BlockId {
         return self.chunk.?.get(pos);
+    }
+
+    fn corners(self: *ChunkMesh) [8]zm.Vec3f {
+        var pts = std.mem.zeroes([8]zm.Vec3f);
+        const origin = zm.Vec3f{
+            @as(f32, @floatFromInt(self.chunk.?.coords.x)) * 16.0,
+            @as(f32, @floatFromInt(self.chunk.?.coords.y)) * 16.0,
+            @as(f32, @floatFromInt(self.chunk.?.coords.z)) * 16.0,
+        };
+        var idx: usize = 0;
+        for (0..2) |i| {
+            for (0..2) |j| {
+                for (0..2) |k| {
+                    const d = zm.Vec3f{
+                        @as(f32, @floatFromInt(i)),
+                        @as(f32, @floatFromInt(j)),
+                        @as(f32, @floatFromInt(k)),
+                    };
+                    pts[idx] = @mulAdd(zm.Vec3f, d, @splat(16.0), origin);
+                    idx += 1;
+                }
+            }
+        }
+        return pts;
     }
 };
 
