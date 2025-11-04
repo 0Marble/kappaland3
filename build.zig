@@ -78,7 +78,7 @@ fn get_imgui(
     install.step.dependOn(&sed_cmd.step);
     b.getInstallStep().dependOn(&install.step);
 
-    return lib;
+    return install.artifact;
 }
 
 pub fn build(b: *std.Build) void {

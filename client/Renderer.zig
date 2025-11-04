@@ -11,10 +11,11 @@ const Mesh = @import("Mesh.zig");
 const Shader = @import("Shader.zig");
 const zm = @import("zm");
 
-const BLOCK_COORDS_ATTACHMENT = gl.COLOR_ATTACHMENT0;
-const POS_ATTACHMENT = gl.COLOR_ATTACHMENT1;
-const NORMAL_ATTACHMENT = gl.COLOR_ATTACHMENT2;
-const BASE_COLOR_ATTACHMENT = gl.COLOR_ATTACHMENT3;
+pub const BLOCK_COORDS_ATTACHMENT = 0;
+pub const POS_ATTACHMENT = 1;
+pub const NORMAL_ATTACHMENT = 2;
+pub const BASE_COLOR_ATTACHMENT = 3;
+
 const POS_TEXTURE_UNIFORM = 0;
 const NORMAL_TEXTURE_UNIFORM = 1;
 const BASE_COLOR_TEXTURE_UNIFORM = 2;
@@ -62,12 +63,15 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.gbuffer_fbo));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
+
     try self.block_renderer.draw();
+
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
 
     try gl_call(gl.ClearColor(0.4, 0.4, 0.4, 1.0));
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
+    try self.lighting_pass.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POS_TEXTURE_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.pos_texture));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEXTURE_UNIFORM));
@@ -75,7 +79,6 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BASE_COLOR_TEXTURE_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.base_color_texture));
 
-    try self.lighting_pass.bind();
     try self.screen_quad.draw(gl.TRIANGLES);
 
     try App.gui().draw();
@@ -90,9 +93,9 @@ pub fn resize_gbuffer(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
-        BLOCK_COORDS_ATTACHMENT,
+        BLOCK_COORDS_ATTACHMENT + gl.COLOR_ATTACHMENT0,
         gl.TEXTURE_2D,
-        self.gbuffer_fbo,
+        self.block_coord_texture,
         0,
     ));
 
@@ -102,9 +105,9 @@ pub fn resize_gbuffer(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
-        POS_ATTACHMENT,
+        POS_ATTACHMENT + gl.COLOR_ATTACHMENT0,
         gl.TEXTURE_2D,
-        self.gbuffer_fbo,
+        self.pos_texture,
         0,
     ));
 
@@ -114,9 +117,9 @@ pub fn resize_gbuffer(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
-        NORMAL_ATTACHMENT,
+        NORMAL_ATTACHMENT + gl.COLOR_ATTACHMENT0,
         gl.TEXTURE_2D,
-        self.gbuffer_fbo,
+        self.normal_texture,
         0,
     ));
 
@@ -126,17 +129,17 @@ pub fn resize_gbuffer(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
-        BASE_COLOR_ATTACHMENT,
+        BASE_COLOR_ATTACHMENT + gl.COLOR_ATTACHMENT0,
         gl.TEXTURE_2D,
-        self.gbuffer_fbo,
+        self.base_color_texture,
         0,
     ));
 
     const attachments: []const gl.uint = &.{
-        BLOCK_COORDS_ATTACHMENT,
-        POS_ATTACHMENT,
-        NORMAL_ATTACHMENT,
-        BASE_COLOR_ATTACHMENT,
+        BLOCK_COORDS_ATTACHMENT + gl.COLOR_ATTACHMENT0,
+        POS_ATTACHMENT + gl.COLOR_ATTACHMENT0,
+        NORMAL_ATTACHMENT + gl.COLOR_ATTACHMENT0,
+        BASE_COLOR_ATTACHMENT + gl.COLOR_ATTACHMENT0,
     };
     try gl_call(gl.DrawBuffers(@intCast(attachments.len), @ptrCast(attachments)));
 
@@ -257,6 +260,6 @@ const FRAG_SRC =
     \\  float diff = max(dot(norm, light_dir), 0.0);
     \\  vec3 diffuse = u_light_color * diff * frag_color;
     \\
-    \\   out_color = vec4(ambient + diffuse, 1);
+    \\  out_color = vec4(ambient + diffuse, 1);
     \\}
 ;
