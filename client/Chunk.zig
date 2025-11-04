@@ -59,7 +59,7 @@ pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
 }
 
 fn generate(self: *Chunk) void {
-    self.generate_balls();
+    self.generate_wavy();
 }
 
 fn generate_grid(self: *Chunk) void {
@@ -119,6 +119,26 @@ fn generate_balls(self: *Chunk) void {
                     self.blocks[idx] = .air;
                 } else {
                     self.blocks[idx] = .stone;
+                }
+            }
+        }
+    }
+}
+
+fn generate_wavy(self: *Chunk) void {
+    const scale = std.math.pi / 16.0;
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |k| {
+            const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
+            const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
+            const top: f32 = (@sin(x * scale) + @cos(z * scale)) * 4.0 + 8.0;
+
+            for (0..CHUNK_SIZE) |j| {
+                const y: f32 = @floatFromInt(self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
+                if (y < top) {
+                    self.set(.init(i, j, k), .stone);
+                } else {
+                    self.set(.init(i, j, k), .air);
                 }
             }
         }
