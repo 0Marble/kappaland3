@@ -1,7 +1,7 @@
 # Critical
 
+- Reintroduce block placing (got removed during the deferred shading event)
 - Chunk render optimizations:
-    - Frustum culling - skip chunks that are outside of the camera view
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
@@ -16,10 +16,22 @@
 - Placing/breaking - improve the raycaster
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
-- Deferred shading - it would greatly (supposedly?) simplify later non-block rendering. Use the same fragment shader for everything!
-
+- Frustum culling - fix the corners getting cut off sometimes
 
 # Done
+
+- 04.11.2025:
+    1. Deferred shading - it would greatly (supposedly?) simplify later non-block rendering. 
+    I implemented it, and the performance seems to be just worse.
+    With frustum culling but without deferred shading, the fps on the balls test is 
+    perfect 120, with DS it fluctuates around 100.
+    Moreover, I would have to implement my own anti-aliasing, since the GPU built-in one only works
+    in forward rendering.
+    2. Frustum culling - skip chunks that are outside of the camera view
+    I implemeted by simply projecting the chunk coordinates by the camera matrix, it does however sometimes 
+    cut corners off. In addition, I now sort the chunks before drawing them.
+    3. I also organized the source files some more: now the World is split from rendering.
+
 
 - 03.11.2025:
     1. Add some sort of UI 
