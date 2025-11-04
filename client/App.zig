@@ -106,8 +106,10 @@ fn init_sdl() !void {
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
             if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
-    // try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
-    // try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
+    if (!Options.deferred_shading) {
+        try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
+        try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
+    }
     Log.log(.debug, "Set OpenGL attributes", .{});
 
     app.win = try sdl_call(c.SDL_CreateWindow(
@@ -260,7 +262,7 @@ fn handle_events() !bool {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {
                 gl.Viewport(0, 0, evt.window.data1, evt.window.data2);
-                try App.renderer().resize_gbuffer(evt.window.data1, evt.window.data2);
+                try App.renderer().resize_framebuffers(evt.window.data1, evt.window.data2);
                 game_state().camera.update_aspect(@as(f32, @floatFromInt(evt.window.data1)) /
                     @as(f32, @floatFromInt(evt.window.data2)));
             },

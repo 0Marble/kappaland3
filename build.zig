@@ -149,6 +149,7 @@ pub fn build(b: *std.Build) void {
     client_options.addOption(usize, "world_size", b.option(usize, "world_size", "World size in chunks (x/z)") orelse 16);
     client_options.addOption(usize, "world_height", b.option(usize, "world_height", "World height in chunks") orelse 8);
     client_options.addOption(bool, "ui_store_src", b.option(bool, "ui_store_src", "Store callback source locations in DebugUi") orelse true);
+    client_options.addOption(bool, "deferred_shading", b.option(bool, "deferred_shading", "Enable deferred shading") orelse false);
     client.root_module.addOptions("ClientOptions", client_options);
 
     const wrapper: ?[]const u8 = b.option([]const u8, "command", "Wrapper command");

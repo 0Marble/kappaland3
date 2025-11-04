@@ -10,6 +10,7 @@ const Log = @import("libmine").Log;
 const Mesh = @import("Mesh.zig");
 const Shader = @import("Shader.zig");
 const zm = @import("zm");
+const Options = @import("ClientOptions");
 
 pub const BLOCK_COORDS_ATTACHMENT = 0;
 pub const POS_ATTACHMENT = 1;
@@ -34,23 +35,27 @@ screen_quad: Mesh,
 
 const Renderer = @This();
 pub fn init(self: *Renderer) !void {
-    try self.init_buffers();
+    if (Options.deferred_shading) {
+        try self.init_buffers();
+        try self.init_lighting_pass();
+    }
     try self.block_renderer.init();
-    try self.init_lighting_pass();
 }
 
 pub fn deinit(self: *Renderer) void {
-    self.screen_quad.deinit();
-    self.lighting_pass.deinit();
-
     self.block_renderer.deinit();
 
-    gl.DeleteFramebuffers(1, @ptrCast(&self.gbuffer_fbo));
-    gl.DeleteRenderbuffers(1, @ptrCast(&self.depth_rbo));
-    gl.DeleteTextures(1, @ptrCast(&self.block_coord_texture));
-    gl.DeleteTextures(1, @ptrCast(&self.base_color_texture));
-    gl.DeleteTextures(1, @ptrCast(&self.pos_texture));
-    gl.DeleteTextures(1, @ptrCast(&self.normal_texture));
+    if (Options.deferred_shading) {
+        self.screen_quad.deinit();
+        self.lighting_pass.deinit();
+
+        gl.DeleteFramebuffers(1, @ptrCast(&self.gbuffer_fbo));
+        gl.DeleteRenderbuffers(1, @ptrCast(&self.depth_rbo));
+        gl.DeleteTextures(1, @ptrCast(&self.block_coord_texture));
+        gl.DeleteTextures(1, @ptrCast(&self.base_color_texture));
+        gl.DeleteTextures(1, @ptrCast(&self.pos_texture));
+        gl.DeleteTextures(1, @ptrCast(&self.normal_texture));
+    }
 }
 
 pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
@@ -59,32 +64,39 @@ pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
 
 pub fn draw(self: *Renderer) !void {
     try gl_call(gl.ClearDepth(0.0));
-
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.gbuffer_fbo));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
-    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
+    if (Options.deferred_shading) {
+        try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.gbuffer_fbo));
+    }
+
+    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
     try self.block_renderer.draw();
 
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
+    if (Options.deferred_shading) {
+        try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
 
-    try gl_call(gl.ClearColor(0.4, 0.4, 0.4, 1.0));
-    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
+        try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
-    try self.lighting_pass.bind();
-    try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POS_TEXTURE_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.pos_texture));
-    try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEXTURE_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.normal_texture));
-    try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BASE_COLOR_TEXTURE_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.base_color_texture));
+        try self.lighting_pass.bind();
+        try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POS_TEXTURE_UNIFORM));
+        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.pos_texture));
+        try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEXTURE_UNIFORM));
+        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.normal_texture));
+        try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BASE_COLOR_TEXTURE_UNIFORM));
+        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.base_color_texture));
 
-    try self.screen_quad.draw(gl.TRIANGLES);
+        try self.screen_quad.draw(gl.TRIANGLES);
+    }
 
     try App.gui().draw();
 }
 
-pub fn resize_gbuffer(self: *Renderer, w: i32, h: i32) !void {
+pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
+    if (!Options.deferred_shading) {
+        return;
+    }
+
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.gbuffer_fbo));
 
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.block_coord_texture));
@@ -164,7 +176,7 @@ fn init_buffers(self: *Renderer) !void {
     try gl_call(gl.GenTextures(1, @ptrCast(&self.base_color_texture)));
     try gl_call(gl.GenRenderbuffers(1, @ptrCast(&self.depth_rbo)));
 
-    try self.resize_gbuffer(640, 480);
+    try self.resize_framebuffers(640, 480);
 }
 
 fn init_lighting_pass(self: *Renderer) !void {
