@@ -340,17 +340,10 @@ fn compute_seen(self: *Self) !usize {
 
     var counter: usize = 0;
     for (self.meshes.values()) |mesh| {
-        var all_unseen = true;
-        var center: zm.Vec3f = @splat(0);
-        for (&mesh.corners()) |p| {
-            if (cam.point_in_frustum(p)) {
-                all_unseen = false;
-            }
-            center += p;
-        }
-        if (all_unseen) continue;
+        const sphere = mesh.bounding_sphere();
+        const center = zm.vec.xyz(sphere);
+        if (!cam.sphere_in_frustum(center, sphere[3])) continue;
 
-        center /= @splat(8);
         mesh_order[counter].mesh = mesh;
         mesh_order[counter].center = center;
         counter += 1;
@@ -590,9 +583,9 @@ const ChunkMesh = struct {
     fn corners(self: *ChunkMesh) [8]zm.Vec3f {
         var pts = std.mem.zeroes([8]zm.Vec3f);
         const origin = zm.Vec3f{
-            @as(f32, @floatFromInt(self.chunk.?.coords.x)) * 16.0,
-            @as(f32, @floatFromInt(self.chunk.?.coords.y)) * 16.0,
-            @as(f32, @floatFromInt(self.chunk.?.coords.z)) * 16.0,
+            @as(f32, @floatFromInt(self.chunk.?.coords.x)) * CHUNK_SIZE,
+            @as(f32, @floatFromInt(self.chunk.?.coords.y)) * CHUNK_SIZE,
+            @as(f32, @floatFromInt(self.chunk.?.coords.z)) * CHUNK_SIZE,
         };
         var idx: usize = 0;
         for (0..2) |i| {
@@ -603,12 +596,19 @@ const ChunkMesh = struct {
                         @as(f32, @floatFromInt(j)),
                         @as(f32, @floatFromInt(k)),
                     };
-                    pts[idx] = @mulAdd(zm.Vec3f, d, @splat(16.0), origin);
+                    pts[idx] = @mulAdd(zm.Vec3f, d, @splat(CHUNK_SIZE), origin);
                     idx += 1;
                 }
             }
         }
         return pts;
+    }
+    //xyzr
+    fn bounding_sphere(self: *ChunkMesh) zm.Vec4f {
+        var center: zm.Vec3f = @splat(0);
+        for (self.corners()) |p| center += p;
+        center /= @splat(8);
+        return .{ center[0], center[1], center[2], 8 * @sqrt(3.0) };
     }
 };
 

@@ -4,7 +4,7 @@ const MemoryUsage = @import("util.zig").MemoryUsage;
 
 const Log = @import("libmine").Log;
 const std = @import("std");
-const Queue = @import("libmine").queue.Queue;
+const Queue = @import("libmine").Queue;
 const Options = @import("ClientOptions");
 
 pub const Handle = enum(usize) {

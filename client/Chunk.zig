@@ -1,6 +1,7 @@
 const World = @import("World.zig");
 const std = @import("std");
 const App = @import("App.zig");
+const zm = @import("zm");
 
 const Stage = enum { dead, generating, meshing, active };
 
