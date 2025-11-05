@@ -214,18 +214,25 @@ pub fn run() !void {
         try app.debug_ui.on_frame_start();
         try gui().add_to_frame(App, "Debug", app, &struct {
             fn callback(self: *App) !void {
-                _ = self;
                 const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                     frame_alloc(),
-                    "CPU Memory: {f}",
+                    "CPU Memory (total): {f}",
                     .{util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes)},
                     0,
                 ));
                 c.igText("%s", mem_str);
+                const mem_str_arena: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                    frame_alloc(),
+                    "CPU Memory (frame arena): {f}",
+                    .{util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity())},
+                    0,
+                ));
+                c.igText("%s", mem_str_arena);
             }
         }.callback, @src());
 
         try app.game.on_frame_start();
+        try app.main_renderer.on_frame_start();
 
         try app.debug_ui.update();
         try app.game.update();

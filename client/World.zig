@@ -6,6 +6,7 @@ const util = @import("util.zig");
 const App = @import("App.zig");
 const Options = @import("ClientOptions");
 const Chunk = @import("Chunk.zig");
+const c = @import("c.zig").c;
 
 pub const CHUNK_SIZE = 16;
 pub const DIM: comptime_int = Options.world_size;
@@ -48,17 +49,25 @@ pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
 }
 
 pub fn request_set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
-    Log.log(.debug, "{*}: set_block at {}", .{ self, coords });
     const chunk_coords = world_to_chunk(coords);
     const block_coords = world_to_block(coords);
     const kv = self.active.fetchSwapRemove(chunk_coords) orelse {
-        Log.log(.debug, "{*}: set_block at an invactive chunk {}", .{ self, chunk_coords });
+        Log.log(.warn, "{*}: set_block at an invactive chunk {}", .{ self, chunk_coords });
         return;
     };
     const chunk = kv.value;
     chunk.set(block_coords, id);
     chunk.stage = .meshing;
     try self.worklist.put(App.gpa(), chunk.coords, chunk);
+}
+
+pub fn on_frame_start(self: *World) !void {
+    try App.gui().add_to_frame(World, "Debug", self, struct {
+        fn callback(this: *World) !void {
+            c.igText("Chunks Active: %zu", this.active.count());
+            c.igText("Chunks in Worklist: %zu", this.worklist.count());
+        }
+    }.callback, @src());
 }
 
 fn to_world_coord(pos: zm.Vec3f) WorldCoords {

@@ -33,7 +33,7 @@ pub fn on_frame_start(self: *GameState) !void {
         fn callback(this: *GameState) !void {
             const camera_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
-                "xyz: {}, angles: {}, view: {}",
+                "xyz: {:.3}, angles: {:.3}, view: {:.3}",
                 .{ this.camera.pos, this.camera.angles, this.camera.view_dir() },
                 0,
             ));
@@ -42,6 +42,7 @@ pub fn on_frame_start(self: *GameState) !void {
     }.callback, @src());
 
     try self.keys.on_frame_start();
+    try self.world.on_frame_start();
 }
 
 pub fn on_frame_end(self: *GameState) !void {

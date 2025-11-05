@@ -13,6 +13,7 @@ const Log = @import("libmine").Log;
 const gl_call = util.gl_call;
 const Renderer = @import("Renderer.zig");
 const Camera = @import("Camera.zig");
+const c = @import("c.zig").c;
 
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
@@ -130,6 +131,7 @@ meshes_changed: bool,
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *ChunkMesh),
 freelist: std.ArrayListUnmanaged(*ChunkMesh),
 triangle_count: usize,
+seen_cnt: usize,
 
 const Self = @This();
 
@@ -138,6 +140,7 @@ pub fn init(self: *Self) !void {
     self.meshes = .empty;
     self.freelist = .empty;
     self.triangle_count = 0;
+    self.seen_cnt = 0;
 
     try self.init_buffers();
     try self.init_shader();
@@ -160,8 +163,8 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn draw(self: *Self) !void {
-    const seen_cnt = try self.compute_seen();
-    if (seen_cnt == 0) return;
+    self.seen_cnt = try self.compute_seen();
+    if (self.seen_cnt == 0) return;
 
     try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
     const vp = App.game_state().camera.as_mat();
@@ -173,7 +176,7 @@ pub fn draw(self: *Self) !void {
         gl.TRIANGLES,
         @field(gl, BlockModel.index_type),
         0,
-        @intCast(seen_cnt),
+        @intCast(self.seen_cnt),
         0,
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
@@ -199,6 +202,31 @@ pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
         }
     }
     self.meshes_changed = true;
+}
+
+pub fn on_frame_start(self: *Self) !void {
+    try App.gui().add_to_frame(Self, "Debug", self, struct {
+        fn callback(this: *Self) !void {
+            c.igText("Triangles: %zu", this.triangle_count);
+            c.igText("Displayed chunks: %zu", this.seen_cnt);
+            const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                App.frame_alloc(),
+                "GPU Memory (faces): {f}",
+                .{util.MemoryUsage.from_bytes(this.faces.length)},
+                0,
+            ));
+            c.igText("%s", gpu_mem_faces);
+            const gpu_mem_indirect: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                App.frame_alloc(),
+                "GPU Memory (indirect+coords): {f}",
+                .{util.MemoryUsage.from_bytes(
+                    this.allocated_chunks_count * (@sizeOf(Indirect) + 4 * @sizeOf(i32)),
+                )},
+                0,
+            ));
+            c.igText("%s", gpu_mem_indirect);
+        }
+    }.callback, @src());
 }
 
 const raw_faces: []const u8 = blk: {
@@ -232,6 +260,7 @@ const raw_faces: []const u8 = blk: {
 };
 
 fn init_buffers(self: *Self) !void {
+    self.allocated_chunks_count = EXPECTED_LOADED_CHUNKS_COUNT;
     self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
@@ -243,7 +272,7 @@ fn init_buffers(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.BufferData(
         gl.DRAW_INDIRECT_BUFFER,
-        @intCast(EXPECTED_LOADED_CHUNKS_COUNT * @sizeOf(Indirect)),
+        @intCast(self.allocated_chunks_count * @sizeOf(Indirect)),
         null,
         gl.STREAM_DRAW,
     ));
@@ -252,7 +281,7 @@ fn init_buffers(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        @intCast(EXPECTED_LOADED_CHUNKS_COUNT * @sizeOf(u32) * 4),
+        @intCast(self.allocated_chunks_count * @sizeOf(u32) * 4),
         null,
         gl.STREAM_DRAW,
     ));

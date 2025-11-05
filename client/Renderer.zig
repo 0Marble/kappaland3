@@ -48,3 +48,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     self.cur_width = w;
     self.cur_height = h;
 }
+
+pub fn on_frame_start(self: *Renderer) !void {
+    try self.block_renderer.on_frame_start();
+}
