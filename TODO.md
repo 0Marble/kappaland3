@@ -2,7 +2,7 @@
 
 - Chunk render optimizations:
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
-- Work on the server
+- Work on the server (possibly wait till 0.16 with the new async IO?)
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 - Lights support - we can either have the lighting be calculated on the cpu or on the gpu, I would prefer the cpu since the gpu is already quite strained, but I am also often wrong about gpu performance
     1. Just stick a u32 RGBA onto vertex attributes - 2x the memory...
@@ -14,6 +14,8 @@
 
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
+- Ambient occlusion - right now the block lighting is very flat, its hard to see anything
+- How does transparensy, non-block models, textures work?
 
 # Done
 
