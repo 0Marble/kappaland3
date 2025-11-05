@@ -1,6 +1,5 @@
 # Critical
 
-- Reintroduce block placing (got removed during the deferred shading event)
 - Chunk render optimizations:
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server
@@ -13,12 +12,18 @@
 
 # Non-critical
 
-- Placing/breaking - improve the raycaster
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
 - Frustum culling - fix the corners getting cut off sometimes
 
 # Done
+
+- 05.11.2025:
+    1. Placing/breaking - improve the raycaster 
+    2. Reintroduce block placing (got removed during the deferred shading event)
+    Same thing really, but now the block placement is "perfect" (at least it seems to be)
+    The strategy I took was to do raycasting, and at each block along the ray check if it is 
+    air or not. 
 
 - 04.11.2025:
     1. Deferred shading - it would greatly (supposedly?) simplify later non-block rendering. 
