@@ -91,34 +91,7 @@ const VERT =
     \\}
 ;
 
-const FRAG = if (Options.deferred_shading)
-    \\#version 460 core
-    \\
-++ std.fmt.comptimePrint("#define BASE_COLOR_ATTACHMENT {d}\n", .{Renderer.BASE_COLOR_ATTACHMENT}) ++
-    \\
-++ std.fmt.comptimePrint("#define POS_ATTACHMENT {d}\n", .{Renderer.POS_ATTACHMENT}) ++
-    \\
-++ std.fmt.comptimePrint("#define NORMAL_ATTACHMENT {d}\n", .{Renderer.NORMAL_ATTACHMENT}) ++
-    \\
-++ std.fmt.comptimePrint("#define BLOCK_COORDS_ATTACHMENT {d}\n", .{Renderer.BLOCK_COORDS_ATTACHMENT}) ++
-    \\
-    \\in vec3 frag_color;
-    \\in vec3 frag_norm;
-    \\in vec3 frag_pos;
-    \\in flat ivec3 block_coords;
-    \\
-    \\layout(location = BASE_COLOR_ATTACHMENT) out vec4 out_color;
-    \\layout(location = POS_ATTACHMENT) out vec4 out_pos;
-    \\layout(location = NORMAL_ATTACHMENT) out vec4 out_norm;
-    \\layout(location = BLOCK_COORDS_ATTACHMENT) out ivec4 out_coords;
-    \\
-    \\void main() {
-    \\  out_color = vec4(frag_color, 1);
-    \\  out_pos = vec4(frag_pos, 0);
-    \\  out_norm = vec4(frag_norm, 0);
-    \\  out_coords = ivec4(block_coords, 1);
-    \\}
-else
+const FRAG =
     \\#version 460 core
     \\
     \\uniform vec3 u_ambient;
@@ -129,6 +102,7 @@ else
     \\in vec3 frag_color;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
+    \\in flat ivec3 block_coords;
     \\out vec4 out_color;
     \\
     \\void main() {
@@ -189,9 +163,7 @@ pub fn draw(self: *Self) !void {
     const seen_cnt = try self.compute_seen();
     if (seen_cnt == 0) return;
 
-    if (!Options.deferred_shading) {
-        try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
-    }
+    try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
     const vp = App.game_state().camera.as_mat();
     try self.shader.set_mat4("u_vp", vp);
 
@@ -338,11 +310,9 @@ fn init_shader(self: *Self) !void {
     };
 
     self.shader = try .init(&sources);
-    if (!Options.deferred_shading) {
-        try self.shader.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
-        try self.shader.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 2, 1, 1 }));
-        try self.shader.set_vec3("u_light_color", .{ 1, 1, 0.9 });
-    }
+    try self.shader.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
+    try self.shader.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 2, 1, 1 }));
+    try self.shader.set_vec3("u_light_color", .{ 1, 1, 0.9 });
 }
 
 const Indirect = extern struct {

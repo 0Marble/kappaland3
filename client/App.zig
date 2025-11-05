@@ -106,10 +106,8 @@ fn init_sdl() !void {
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
             if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
-    if (!Options.deferred_shading) {
-        try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
-        try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
-    }
+    try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
+    try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
     Log.log(.debug, "Set OpenGL attributes", .{});
 
     app.win = try sdl_call(c.SDL_CreateWindow(
