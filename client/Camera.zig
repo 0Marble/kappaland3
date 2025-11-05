@@ -72,10 +72,6 @@ pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
 
     const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
     const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
-    App.renderer().ray = .{
-        .origin = ray.origin,
-        .direction = ray.direction * @as(@Vector(3, f32), @splat(raycast.t)),
-    };
 
     if (btn.button == .left) {
         App.game_state().world.request_set_block(raycast.hit_coords, .air) catch |err| {
@@ -147,10 +143,11 @@ fn recalculate(self: *Camera) void {
     // const proj = zm.Mat4f.perspective(self.fov, self.aspect, 1, 0);
     const f = 1.0 / @tan(self.fov * 0.5);
     const g = f / self.aspect;
+    const near = 0.1;
     const proj = zm.Mat4f{ .data = .{
         g, 0, 0,  0,
         0, f, 0,  0,
-        0, 0, 0,  1,
+        0, 0, 0,  near,
         0, 0, -1, 0,
     } };
     const view = zm.Mat4f.lookAt(self.pos, self.pos + self.cached_forward, up);

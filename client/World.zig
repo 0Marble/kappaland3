@@ -84,7 +84,6 @@ const RaycastResult = struct {
     block: BlockId,
 };
 pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
-    Log.log(.debug, "{*}: Raycast {}", .{ self, ray });
     const one: zm.Vec3f = @splat(1);
 
     var cur_t: f32 = 0;
@@ -111,7 +110,6 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
 
         const cur_block = to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
         const block = self.get_block(cur_block);
-        Log.log(.debug, "{}:{}:{?}", .{ cur_t, cur_pos * mul, block });
         if (block != null and block.? != .air) {
             return RaycastResult{
                 .t = cur_t,
