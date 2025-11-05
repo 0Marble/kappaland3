@@ -73,7 +73,7 @@ pub fn draw(self: *Renderer) !void {
     try self.ray_shader.bind();
     const model = zm.Mat4f.translationVec3(self.ray.origin)
         .multiply(zm.Mat4f.scalingVec3(self.ray.direction));
-    const mvp = model.multiply(App.game_state().camera.as_mat());
+    const mvp = App.game_state().camera.as_mat().multiply(model);
     try self.ray_shader.set_mat4("u_mvp", mvp);
     try self.ray_mesh.draw(gl.LINES);
 

@@ -61,40 +61,8 @@ pub fn request_set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
     try self.worklist.put(App.gpa(), chunk.coords, chunk);
 }
 
-fn next_t(ray: zm.Rayf, cur_t: f32) struct { f32, BlockFace } {
-    // ray: o + t * s
-    // a + dt * s, dt s.t. one of a coords is an integer
-    const a = ray.at(cur_t);
-    const positive_faces: []const BlockFace = &.{ .right, .top, .front };
-    const negative_faces: []const BlockFace = &.{ .left, .bot, .back };
-
-    var dt = std.mem.zeroes([3]f32);
-    const b = @floor(a) + @as(@Vector(3, f32), @splat(1)) - a;
-    const c = @ceil(a) - @as(@Vector(3, f32), @splat(1)) - a;
-
-    for (0..3) |i| {
-        dt[i] = if (ray.direction[i] > 0)
-            b[i] / ray.direction[i]
-        else if (ray.direction[i] < 0)
-            c[i] / ray.direction[i]
-        else
-            std.math.inf(f32);
-    }
-
-    var j: usize = 0;
-    if (dt[1] < dt[j]) j = 1;
-    if (dt[2] < dt[j]) j = 2;
-    std.debug.assert(!std.math.isInf(dt[j]));
-    std.debug.assert(dt[j] > 0);
-
-    if (dt[j] < 0)
-        return .{ cur_t + dt[j], negative_faces[j] }
-    else
-        return .{ cur_t + dt[j], positive_faces[j] };
-}
-
 fn to_world_coord(pos: zm.Vec3f) WorldCoords {
-    return .init(@intFromFloat(pos[0]), @intFromFloat(pos[1]), @intFromFloat(pos[2]));
+    return .init(@intFromFloat(@floor(pos[0])), @intFromFloat(@floor(pos[1])), @intFromFloat(@floor(pos[2])));
 }
 
 fn world_to_chunk(w: WorldCoords) ChunkCoords {
@@ -111,31 +79,50 @@ fn world_to_block(w: WorldCoords) BlockCoords {
 
 const RaycastResult = struct {
     t: f32,
-    coords: WorldCoords,
-    face: BlockFace,
+    hit_coords: WorldCoords,
+    prev_coords: WorldCoords,
     block: BlockId,
 };
 pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
     Log.log(.debug, "{*}: Raycast {}", .{ self, ray });
+    const one: zm.Vec3f = @splat(1);
 
     var cur_t: f32 = 0;
-    var cur_face: BlockFace = .top;
+    var r = ray;
+    var mul = one;
+    for (0..3) |i| {
+        if (r.direction[i] < 0) {
+            r.direction[i] *= -1;
+            r.origin[i] *= -1;
+            mul[i] = -1;
+        }
+    }
+    var prev_block = to_world_coord(ray.origin);
 
     while (cur_t <= max_t) {
-        const coords = to_world_coord(ray.at(cur_t));
-        const block = self.get_block(coords);
-        Log.log(.debug, "{}:{}:{}:{?}", .{ cur_t, coords, cur_face, block });
+        const cur_pos = r.at(cur_t);
 
+        const dx = @select(f32, @ceil(cur_pos) == cur_pos, one, @ceil(cur_pos) - cur_pos);
+        const dt = dx / r.direction;
+
+        var j: usize = 0;
+        if (dt[j] > dt[1]) j = 1;
+        if (dt[j] > dt[2]) j = 2;
+
+        const cur_block = to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
+        const block = self.get_block(cur_block);
+        Log.log(.debug, "{}:{}:{?}", .{ cur_t, cur_pos * mul, block });
         if (block != null and block.? != .air) {
             return RaycastResult{
                 .t = cur_t,
-                .coords = coords,
                 .block = block.?,
-                .face = cur_face,
+                .hit_coords = cur_block,
+                .prev_coords = prev_block,
             };
         }
 
-        cur_t, cur_face = next_t(ray, cur_t);
+        cur_t += dt[j];
+        prev_block = cur_block;
     }
     return null;
 }

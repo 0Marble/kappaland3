@@ -67,16 +67,22 @@ pub fn deinit(self: *Camera) void {
 }
 
 pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
-    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {
-        const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
-        const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
-        App.game_state().world.request_set_block(raycast.coords, .air) catch |err| {
+    if (btn.button == .middle) return;
+    if (!App.key_state().is_mouse_just_down(btn.button)) return;
+
+    const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
+    const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
+    App.renderer().ray = .{
+        .origin = ray.origin,
+        .direction = ray.direction * @as(@Vector(3, f32), @splat(raycast.t)),
+    };
+
+    if (btn.button == .left) {
+        App.game_state().world.request_set_block(raycast.hit_coords, .air) catch |err| {
             Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
         };
-    } else if (btn.button == .right and App.key_state().is_mouse_just_down(.right)) {
-        const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
-        const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
-        App.game_state().world.request_set_block(raycast.face.next_to(raycast.coords), .stone) catch |err| {
+    } else if (btn.button == .right) {
+        App.game_state().world.request_set_block(raycast.prev_coords, .stone) catch |err| {
             Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
         };
     }
