@@ -14,7 +14,6 @@
 
 - Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
-- Frustum culling - fix the corners getting cut off sometimes
 
 # Done
 
@@ -24,6 +23,9 @@
     Same thing really, but now the block placement is "perfect" (at least it seems to be)
     The strategy I took was to do raycasting, and at each block along the ray check if it is 
     air or not. 
+    3. Frustum culling - fix the corners getting cut off sometimes
+    I approximate the frustum by a cone, and chunks by spheres. 
+    The math is pretty simple (ofc it took decades to actually iron out all the bugs lol)
 
 - 04.11.2025:
     1. Deferred shading - it would greatly (supposedly?) simplify later non-block rendering. 
