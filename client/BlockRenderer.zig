@@ -59,6 +59,8 @@ const VERT =
     \\out vec3 frag_norm;
     \\out vec3 frag_color;
     \\out vec3 frag_pos;
+    \\out ivec3 block_coords;
+    \\
     \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
     \\  ivec3 chunk_coords[];
     \\};
@@ -81,7 +83,8 @@ const VERT =
     \\  uint p = gl_VertexID;
     \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
     \\
-    \\  frag_pos = vec3(x, y, z) + faces[face] + 16 * vec3(chunk_coords[gl_DrawID]);
+    \\  block_coords = ivec3(x, y, z) + 16 * chunk_coords[gl_DrawID];
+    \\  frag_pos = faces[face] + block_coords;
     \\  frag_color = vec3(x, y, z) / 16.0;
     \\  frag_norm = normals[n];
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
@@ -102,6 +105,7 @@ const FRAG = if (Options.deferred_shading)
     \\in vec3 frag_color;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
+    \\in flat ivec3 block_coords;
     \\
     \\layout(location = BASE_COLOR_ATTACHMENT) out vec4 out_color;
     \\layout(location = POS_ATTACHMENT) out vec4 out_pos;
@@ -112,7 +116,7 @@ const FRAG = if (Options.deferred_shading)
     \\  out_color = vec4(frag_color, 1);
     \\  out_pos = vec4(frag_pos, 0);
     \\  out_norm = vec4(frag_norm, 0);
-    \\  out_coords = ivec4(0,0,0,0);
+    \\  out_coords = ivec4(block_coords, 1);
     \\}
 else
     \\#version 460 core

@@ -20,6 +20,7 @@ pub const BASE_COLOR_ATTACHMENT = 3;
 const POS_TEXTURE_UNIFORM = 0;
 const NORMAL_TEXTURE_UNIFORM = 1;
 const BASE_COLOR_TEXTURE_UNIFORM = 2;
+pub const BLOCK_COORDS_TEXTURE_UNIFORM = 3;
 
 block_renderer: BlockRenderer,
 
@@ -71,6 +72,11 @@ pub fn draw(self: *Renderer) !void {
     }
 
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
+    if (Options.deferred_shading) {
+        const invalid_location_color: []const c_int = &.{ 0, 0, 0, 0 };
+        try gl_call(gl.ClearBufferiv(gl.COLOR, BLOCK_COORDS_ATTACHMENT, invalid_location_color.ptr));
+    }
+
     try self.block_renderer.draw();
 
     if (Options.deferred_shading) {
@@ -232,6 +238,7 @@ fn init_lighting_pass(self: *Renderer) !void {
     try self.lighting_pass.set_int("u_pos", POS_TEXTURE_UNIFORM);
     try self.lighting_pass.set_int("u_normal", NORMAL_TEXTURE_UNIFORM);
     try self.lighting_pass.set_int("u_base_color", BASE_COLOR_TEXTURE_UNIFORM);
+    try self.lighting_pass.set_int("u_block_coord", BASE_COLOR_TEXTURE_UNIFORM);
 }
 
 const VERT_SRC =
@@ -254,6 +261,7 @@ const FRAG_SRC =
     \\uniform sampler2D u_pos;
     \\uniform sampler2D u_normal;
     \\uniform sampler2D u_base_color;
+    \\uniform isampler2D u_block_coord;
     \\
     \\uniform vec3 u_ambient;
     \\uniform vec3 u_light_color;
@@ -261,6 +269,9 @@ const FRAG_SRC =
     \\uniform vec3 u_view_pos;
     \\
     \\void main() {
+    \\  int is_block_rendered = texture(u_block_coord, frag_uv).a;
+    \\  if (is_block_rendered == 0) discard;
+    \\
     \\  vec3 frag_pos = texture(u_pos, frag_uv).rgb;
     \\  vec3 frag_norm = texture(u_normal, frag_uv).rgb;
     \\  vec3 frag_color = texture(u_base_color, frag_uv).rgb;
