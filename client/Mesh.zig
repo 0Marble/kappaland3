@@ -10,6 +10,7 @@ index_count: gl.sizei,
 index_type: gl.@"enum",
 
 const Mesh = @This();
+
 pub fn init(
     comptime Vert: type,
     comptime Idx: type,

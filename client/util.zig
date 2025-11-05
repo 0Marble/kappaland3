@@ -13,6 +13,16 @@ pub fn Xyz(comptime T: type) type {
         pub fn init(x: T, y: T, z: T) @This() {
             return .{ .x = x, .y = y, .z = z };
         }
+
+        pub fn add(self: @This(), other: @This()) @This() {
+            return .{ .x = self.x + other.x, .y = self.y + other.y, .z = self.z + other.z };
+        }
+        pub fn sub(self: @This(), other: @This()) @This() {
+            return .{ .x = self.x - other.x, .y = self.y - other.y, .z = self.z - other.z };
+        }
+        pub fn as_vec(self: @This()) @Vector(3, T) {
+            return .{ self.x, self.y, self.z };
+        }
     };
 }
 

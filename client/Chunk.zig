@@ -59,7 +59,7 @@ pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
 }
 
 fn generate(self: *Chunk) void {
-    self.generate_balls();
+    self.generate_wavy();
 }
 
 fn generate_grid(self: *Chunk) void {

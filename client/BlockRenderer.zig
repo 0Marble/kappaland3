@@ -181,9 +181,9 @@ pub fn draw(self: *Self) !void {
 }
 
 pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
-    if (self.meshes.get(chunk.coords)) |existing| {
-        Log.log(.warn, "TODO: updating chunks", .{});
-        _ = existing;
+    if (self.meshes.get(chunk.coords)) |mesh| {
+        try mesh.build();
+        try self.update_mesh(mesh);
     } else {
         const mesh = if (self.freelist.pop()) |mesh|
             mesh
@@ -453,6 +453,7 @@ const ChunkMesh = struct {
     }
 
     fn build(self: *ChunkMesh) !void {
+        self.faces.clearRetainingCapacity();
         for (0..CHUNK_SIZE) |z| {
             try self.mesh_slice(.front, z);
         }
@@ -625,8 +626,8 @@ fn update_mesh(self: *Self, mesh: *ChunkMesh) !void {
         return;
     }
 
-    const range = self.faces.get_range(mesh.handle).?;
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+    const range = self.faces.get_range(mesh.handle).?;
     try gl_call(gl.BufferSubData(
         gl.ARRAY_BUFFER,
         range.offset,

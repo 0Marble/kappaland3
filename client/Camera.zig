@@ -7,6 +7,8 @@ const Scancode = @import("Keys.zig").Scancode;
 const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 
+const MAX_REACH = 10;
+
 angles: @Vector(2, f32),
 pos: @Vector(3, f32),
 fov: f32,
@@ -65,10 +67,19 @@ pub fn deinit(self: *Camera) void {
 }
 
 pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
-    const dir = self.screen_to_world_dir(btn.px, btn.py);
-    _ = dir; // autofix
-
-    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {}
+    if (btn.button == .left and App.key_state().is_mouse_just_down(.left)) {
+        const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
+        const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
+        App.game_state().world.request_set_block(raycast.coords, .air) catch |err| {
+            Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
+        };
+    } else if (btn.button == .right and App.key_state().is_mouse_just_down(.right)) {
+        const ray = zm.Rayf.init(self.pos, self.screen_to_world_dir(btn.px, btn.py));
+        const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
+        App.game_state().world.request_set_block(raycast.face.next_to(raycast.coords), .stone) catch |err| {
+            Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
+        };
+    }
 }
 
 pub fn move(self: *Camera, cmd: Controls) void {
@@ -163,7 +174,7 @@ pub fn screen_to_world_dir(self: *Camera, px: f32, py: f32) zm.Vec3f {
     const x = 2 * (px / w) - 1;
     const y = 2 * ((h - py) / h) - 1;
     self.recalculate();
-    return zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 1 }));
+    return zm.vec.normalize(zm.vec.xyz(self.cached_inv.multiplyVec4(.{ x, y, 0, 1 })));
 }
 
 pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
