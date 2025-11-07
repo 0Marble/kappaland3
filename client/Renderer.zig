@@ -60,6 +60,7 @@ pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
 pub fn draw(self: *Renderer) !void {
     try gl_call(gl.ClearDepth(0.0));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
+    try gl_call(gl.Enable(gl.DEPTH_TEST));
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ms_fbo));
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
@@ -81,14 +82,15 @@ pub fn draw(self: *Renderer) !void {
         gl.NEAREST,
     ));
 
-    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT));
-
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
+    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT));
+    try gl_call(gl.Disable(gl.DEPTH_TEST));
+
+    try self.postprocessing.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + RENDERED_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.rendered_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
-    try self.postprocessing.bind();
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
@@ -213,10 +215,10 @@ fn init_buffers(self: *Renderer) !void {
 
 fn init_screen(self: *Renderer) !void {
     self.screen_quad = try Mesh.init(QuadVert, u8, &.{
-        .{ .pos = .{ .x = 0, .y = 0 }, .uv = .{ .u = 0, .v = 0 } },
-        .{ .pos = .{ .x = 0, .y = 1 }, .uv = .{ .u = 0, .v = 1 } },
+        .{ .pos = .{ .x = -1, .y = -1 }, .uv = .{ .u = 0, .v = 0 } },
+        .{ .pos = .{ .x = -1, .y = 1 }, .uv = .{ .u = 0, .v = 1 } },
         .{ .pos = .{ .x = 1, .y = 1 }, .uv = .{ .u = 1, .v = 1 } },
-        .{ .pos = .{ .x = 1, .y = 0 }, .uv = .{ .u = 1, .v = 0 } },
+        .{ .pos = .{ .x = 1, .y = -1 }, .uv = .{ .u = 1, .v = 0 } },
     }, &.{ 0, 1, 2, 0, 2, 3 }, gl.STATIC_DRAW);
 
     var sources: [2]Shader.Source = .{
