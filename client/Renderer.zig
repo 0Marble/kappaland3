@@ -26,9 +26,6 @@ cur_height: i32,
 ms_fbo: gl.uint,
 depth_tex_ms: gl.uint,
 rendered_tex_ms: gl.uint,
-copy_fbo: gl.uint,
-rendered_tex: gl.uint,
-depth_tex: gl.uint,
 
 screen_quad: Mesh,
 postprocessing: Shader,
@@ -45,9 +42,6 @@ pub fn deinit(self: *Renderer) void {
     gl.DeleteFramebuffers(1, @ptrCast(&self.ms_fbo));
     gl.DeleteTextures(1, @ptrCast(&self.rendered_tex_ms));
     gl.DeleteTextures(1, @ptrCast(&self.depth_tex_ms));
-    gl.DeleteFramebuffers(1, @ptrCast(&self.postprocessing));
-    gl.DeleteTextures(1, @ptrCast(&self.rendered_tex));
-    gl.DeleteTextures(1, @ptrCast(&self.depth_tex));
 
     self.screen_quad.deinit();
     self.postprocessing.deinit();
@@ -67,30 +61,14 @@ pub fn draw(self: *Renderer) !void {
 
     try self.block_renderer.draw();
 
-    try gl_call(gl.BindFramebuffer(gl.READ_FRAMEBUFFER, self.ms_fbo));
-    try gl_call(gl.BindFramebuffer(gl.DRAW_FRAMEBUFFER, self.copy_fbo));
-    try gl_call(gl.BlitFramebuffer(
-        0,
-        0,
-        self.cur_width,
-        self.cur_height,
-        0,
-        0,
-        self.cur_width,
-        self.cur_height,
-        gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT,
-        gl.NEAREST,
-    ));
-
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
-    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT));
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
     try self.postprocessing.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + RENDERED_TEX_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.rendered_tex));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_MULTISAMPLE, self.rendered_tex_ms));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_MULTISAMPLE, self.depth_tex_ms));
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
@@ -138,63 +116,11 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
         0,
     ));
 
-    // const attachments_ms: []const gl.@"enum" = &.{
-    //     gl.COLOR_ATTACHMENT0 + RENDERED_TEX_ATTACHMENT,
-    // };
-    // try gl_call(gl.DrawBuffers(@intCast(attachments_ms.len), attachments_ms.ptr));
-
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
         Log.log(.warn, "{*}: framebuffer 'ms_fbo' incomplete!", .{self});
     }
     try gl_call(gl.BindTexture(gl.TEXTURE_2D_MULTISAMPLE, 0));
-
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.copy_fbo));
-
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.rendered_tex));
-    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, null));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-    try gl_call(gl.FramebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0 + RENDERED_TEX_ATTACHMENT,
-        gl.TEXTURE_2D,
-        self.rendered_tex,
-        0,
-    ));
-
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
-    try gl_call(gl.TexImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.DEPTH24_STENCIL8,
-        w,
-        h,
-        0,
-        gl.DEPTH_STENCIL,
-        gl.UNSIGNED_INT_24_8,
-        null,
-    ));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-    try gl_call(gl.FramebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.DEPTH_STENCIL_ATTACHMENT + DEPTH_TEX_ATTACHMENT,
-        gl.TEXTURE_2D,
-        self.depth_tex,
-        0,
-    ));
-
-    // const attachments_copy: []const gl.@"enum" = &.{
-    //     gl.COLOR_ATTACHMENT0 + RENDERED_TEX_ATTACHMENT,
-    // };
-    // try gl_call(gl.DrawBuffers(@intCast(attachments_copy.len), attachments_copy.ptr));
-
-    if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'copy_fbo' incomplete!", .{self});
-    }
-
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 }
 
 pub fn on_frame_start(self: *Renderer) !void {
@@ -205,10 +131,6 @@ fn init_buffers(self: *Renderer) !void {
     try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.ms_fbo)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.rendered_tex_ms)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.depth_tex_ms)));
-
-    try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.copy_fbo)));
-    try gl_call(gl.GenTextures(1, @ptrCast(&self.rendered_tex)));
-    try gl_call(gl.GenTextures(1, @ptrCast(&self.depth_tex)));
 
     try self.resize_framebuffers(640, 480);
 }
@@ -258,9 +180,19 @@ const vert =
 ;
 const frag =
     \\#version 460 core
+    \\
+++ std.fmt.comptimePrint("#define SAMPLES {d}\n", .{SAMPLES}) ++
     \\in vec2 frag_uv;
     \\out vec4 out_color;
-    \\uniform sampler2D u_rendered_tex;
-    \\uniform sampler2D u_depth_tex;
-    \\void main() { out_color = texture(u_rendered_tex, frag_uv); }
+    \\uniform sampler2DMS u_rendered_tex;
+    \\uniform sampler2DMS u_depth_tex;
+    \\void main() {
+    \\  ivec2 size = textureSize(u_rendered_tex);
+    \\  ivec2 tex_coords = ivec2(vec2(size) * frag_uv);
+    \\  vec4 color = vec4(0,0,0,0);
+    \\  for (int i = 0; i < SAMPLES; i++) {
+    \\    color += texelFetch(u_rendered_tex, tex_coords, i);
+    \\  }
+    \\  out_color = color / SAMPLES;
+    \\}
 ;
