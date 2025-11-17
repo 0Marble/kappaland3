@@ -1,0 +1,14 @@
+.{
+    .{
+        .type = .bool,
+        .name = "ecs_logging",
+        .desc = "Enable logging in the ecs",
+        .default = false,
+    },
+    .{
+        .type = .bool,
+        .name = "ecs_typecheck",
+        .desc = "Perform runtime typechecking in the ECS",
+        .default = true,
+    },
+}

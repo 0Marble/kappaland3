@@ -1,6 +1,6 @@
 const std = @import("std");
 
-fn get_imgui(
+fn build_imgui(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -43,7 +43,7 @@ fn get_imgui(
     });
     mod.addCSourceFile(.{
         .language = .cpp,
-        .file = b.path("client/cimgui_impl.cpp"),
+        .file = b.path("wrapper/cimgui_impl.cpp"),
         .flags = flags,
     });
 
@@ -57,7 +57,7 @@ fn get_imgui(
         .linkage = .dynamic,
     });
     lib.installHeader(cimgui.path("cimgui.h"), "cimgui.h");
-    lib.installHeader(b.path("client/cimgui_impl.h"), "cimgui_impl.h");
+    lib.installHeader(b.path("wrapper/cimgui_impl.h"), "cimgui_impl.h");
     lib.linkLibC();
     lib.linkLibCpp();
 
@@ -81,36 +81,30 @@ fn get_imgui(
     return install.artifact;
 }
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+fn artifact_options(b: *std.Build, comptime opts: anytype) *std.Build.Step.Options {
+    const opts_map = b.addOptions();
 
-    const lib = b.addLibrary(.{
-        .name = "mine",
-        .root_module = b.createModule(.{
-            .optimize = optimize,
-            .target = target,
-            .root_source_file = b.path("lib/root.zig"),
-        }),
-    });
-    b.installArtifact(lib);
-    const lib_options = b.addOptions();
-    lib_options.addOption(bool, "ecs_logging", b.option(bool, "ecs_logging", "Enable logging in the ecs") orelse false);
-    lib_options.addOption(bool, "ecs_typecheck", b.option(bool, "ecs_typecheck", "Enable runtime type checking in the ecs") orelse true);
-    lib.root_module.addOptions("Options", lib_options);
+    inline for (opts) |o| {
+        const t = switch (o.type) {
+            .bool => bool,
+            .usize => usize,
+            .str => []const u8,
+            else => @compileError("Unsupported option type " ++ @tagName(o.type)),
+        };
+        opts_map.addOption(t, o.name, b.option(t, o.name, o.desc) orelse o.default);
+    }
 
-    const server = b.addExecutable(.{
-        .name = "server",
-        .root_module = b.createModule(.{
-            .optimize = optimize,
-            .target = target,
-            .root_source_file = b.path("server/main.zig"),
-        }),
-    });
-    server.root_module.addImport("libmine", lib.root_module);
-    b.installArtifact(server);
+    return opts_map;
+}
 
-    const imgui = get_imgui(b, target, optimize);
+fn build_client(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    const libmine = b.modules.get("mine").?;
+
+    const imgui = build_imgui(b, target, optimize);
     const gl = @import("zigglgen").generateBindingsModule(b, .{
         .api = .gl,
         .profile = .core,
@@ -120,6 +114,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
     const client = b.addExecutable(.{
         .name = "client",
         .root_module = b.createModule(.{
@@ -132,7 +127,7 @@ pub fn build(b: *std.Build) void {
     client.root_module.linkSystemLibrary("SDL3", .{});
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
-    client.root_module.addImport("libmine", lib.root_module);
+    client.root_module.addImport("libmine", libmine);
     client.root_module.addImport("HelloScene", b.createModule(.{
         .root_source_file = b.path("assets/HelloScene.zon"),
     }));
@@ -141,14 +136,8 @@ pub fn build(b: *std.Build) void {
     }));
     client.root_module.linkLibrary(imgui);
     b.installArtifact(client);
-    const client_options = b.addOptions();
-    client_options.addOption(bool, "gpu_alloc_log", b.option(bool, "gpu_alloc_log", "Enable GpuAlloc logging") orelse false);
-    client_options.addOption(bool, "gl_debug", b.option(bool, "gl_debug", "Enable OpenGL debug context") orelse true);
-    client_options.addOption(bool, "gl_check_errors", b.option(bool, "gl_check_errors", "Check gl_Error") orelse true);
-    client_options.addOption(bool, "greedy_meshing", b.option(bool, "greedy_meshing", "Use greedy meshing") orelse true);
-    client_options.addOption(usize, "world_size", b.option(usize, "world_size", "World size in chunks (x/z)") orelse 16);
-    client_options.addOption(usize, "world_height", b.option(usize, "world_height", "World height in chunks") orelse 8);
-    client_options.addOption(bool, "ui_store_src", b.option(bool, "ui_store_src", "Store callback source locations in DebugUi") orelse true);
+
+    const client_options = artifact_options(b, @import("assets/ClientOptions.zon"));
     client.root_module.addOptions("ClientOptions", client_options);
 
     const wrapper: ?[]const u8 = b.option([]const u8, "command", "Wrapper command");
@@ -171,8 +160,67 @@ pub fn build(b: *std.Build) void {
         run_client.addArgs(args);
     }
 
+    return client.root_module;
+}
+
+fn build_libmine(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    const libmine = b.addModule("mine", .{
+        .optimize = optimize,
+        .target = target,
+        .root_source_file = b.path("lib/root.zig"),
+    });
+
+    const lib_options = artifact_options(b, @import("assets/LibMineOptions.zon"));
+    libmine.addOptions("Options", lib_options);
+
+    return libmine;
+}
+
+fn build_server(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    const libmine = b.modules.get("mine").?;
+    const server = b.addExecutable(.{
+        .name = "server",
+        .root_module = b.createModule(.{
+            .optimize = optimize,
+            .target = target,
+            .root_source_file = b.path("server/main.zig"),
+        }),
+    });
+    server.root_module.addImport("libmine", libmine);
+    b.installArtifact(server);
+
+    const options = artifact_options(b, @import("assets/ServerOptions.zon"));
+    server.root_module.addOptions("Options", options);
+
+    const run_server = b.addRunArtifact(server);
+    const run_step = b.step("serve", "run the server");
+    run_step.dependOn(b.getInstallStep());
+    run_step.dependOn(&run_server.step);
+    if (b.args) |args| {
+        run_server.addArgs(args);
+    }
+
+    return server.root_module;
+}
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const libmine = build_libmine(b, target, optimize);
+    const client = build_client(b, target, optimize);
+    const server = build_server(b, target, optimize);
+
     const test_step = b.step("test", "run all tests");
-    inline for (.{ server.root_module, client.root_module, lib.root_module }) |mod| {
+    inline for (.{ server, client, libmine }) |mod| {
         const test_artifact = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(test_artifact);
         test_step.dependOn(&run_tests.step);

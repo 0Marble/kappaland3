@@ -1,0 +1,44 @@
+.{
+    .{
+        .type = .bool,
+        .name = "gpu_alloc_log",
+        .desc = "Enable GpuAlloc logging",
+        .default = false,
+    },
+    .{
+        .type = .bool,
+        .name = "gl_debug",
+        .desc = "Enable OpenGL debug context",
+        .default = true,
+    },
+    .{
+        .type = .bool,
+        .name = "gl_check_errors",
+        .desc = "Check gl_GetError",
+        .default = true,
+    },
+    .{
+        .type = .bool,
+        .name = "greedy_meshing",
+        .desc = "Use greedy meshing",
+        .default = true,
+    },
+    .{
+        .type = .usize,
+        .name = "world_size",
+        .desc = "World size in chunks (x/z)",
+        .default = 16,
+    },
+    .{
+        .type = .usize,
+        .name = "world_height",
+        .desc = "World size in chunks (y)",
+        .default = 8,
+    },
+    .{
+        .type = .bool,
+        .name = "ui_store_src",
+        .desc = "Store callback source locations in DebugUi",
+        .default = true,
+    },
+}
