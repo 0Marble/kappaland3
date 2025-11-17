@@ -1,5 +1,6 @@
 # Critical
 
+- ECS nursery - systems during execution may spawn or register ecs thins which has a potential to invalidate all pointers. Make it so commands are recorded and only after `evaluate()` are executed.
 - Chunk render optimizations:
     - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server (possibly wait till 0.16 with the new async IO?)
