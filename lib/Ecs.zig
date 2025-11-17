@@ -10,9 +10,8 @@ pub const ComponentRef = u64;
 pub const EventRef = u64;
 
 pub const Error = error{
-    ComponentAlreadyDefined,
+    NameAlreadyDefined,
     SystemOrderLoop,
-    SystemAlreadyDefined,
     InvalidEntity,
     InvalidComponent,
     DeadEntity,
@@ -20,130 +19,58 @@ pub const Error = error{
     InvalidEvent,
 } || std.mem.Allocator.Error;
 
-const DecodedEventRef = union(enum) {
-    const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
+const DecodedRef = union(enum) {
+    reserved: enum(u8) { none = 0, _ },
 
-    reserved: enum(u8) { invalid = 0, _ },
-    index: u64,
+    entity: u64,
+    dense_component: u64,
+    sparse_component: u64,
+    system: u64,
+    event: u64,
 
-    pub fn decode(ref: EventRef) DecodedEventRef {
-        if (ref < OFFSET) {
-            return .{ .reserved = @enumFromInt(ref) };
-        } else {
-            return .{ .index = ref - OFFSET };
+    const OFFSET = std.math.maxInt(u64) / 4;
+
+    const ENTITY_OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
+    const DENSE_COMPONENT_OFFSET = ENTITY_OFFSET + OFFSET;
+    const SPARSE_COMPONENT_OFFSET = DENSE_COMPONENT_OFFSET + OFFSET / 2;
+    const SYSTEM_OFFSET = DENSE_COMPONENT_OFFSET + OFFSET;
+    const EVENT_OFFSET = SYSTEM_OFFSET + OFFSET;
+
+    fn is_component(self: DecodedRef) bool {
+        return self == .sparse_component or self == .dense_component;
+    }
+
+    pub fn decode(id: u64) DecodedRef {
+        switch (id) {
+            0...ENTITY_OFFSET - 1 => return DecodedRef{ .reserved = @enumFromInt(id) },
+            ENTITY_OFFSET...DENSE_COMPONENT_OFFSET - 1 => {
+                return .{ .entity = id - ENTITY_OFFSET };
+            },
+            DENSE_COMPONENT_OFFSET...SPARSE_COMPONENT_OFFSET - 1 => {
+                return .{ .dense_component = id - DENSE_COMPONENT_OFFSET };
+            },
+            SPARSE_COMPONENT_OFFSET...SYSTEM_OFFSET - 1 => {
+                return .{ .sparse_component = id - SPARSE_COMPONENT_OFFSET };
+            },
+            SYSTEM_OFFSET...EVENT_OFFSET - 1 => {
+                return .{ .system = id - SYSTEM_OFFSET };
+            },
+            else => return .{ .event = id - EVENT_OFFSET },
         }
     }
-    pub fn encode(self: DecodedEventRef) EventRef {
+
+    pub fn encode(self: DecodedRef) u64 {
         switch (self) {
             .reserved => |x| return @intFromEnum(x),
-            .index => |x| return x + OFFSET,
-        }
-    }
-};
-
-const DecodedSystemRef = union(enum) {
-    const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
-
-    reserved: enum(u8) { invalid = 0, _ },
-    index: u64,
-
-    pub fn decode(ref: SystemRef) DecodedSystemRef {
-        if (ref < OFFSET) {
-            return .{ .reserved = @enumFromInt(ref) };
-        } else {
-            return .{ .index = ref - OFFSET };
-        }
-    }
-    pub fn encode(self: DecodedSystemRef) SystemRef {
-        switch (self) {
-            .reserved => |x| return @intFromEnum(x),
-            .index => |x| return x + OFFSET,
-        }
-    }
-};
-
-const DecodedComponentRef = union(enum) {
-    const DENSE_OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
-    const SPARSE_OFFSET = (1 << 63) + 1;
-
-    reserved: enum(u8) { invalid = 0, _ },
-    dense: u64,
-    sparse: u64,
-
-    pub fn decode(ref: ComponentRef) DecodedComponentRef {
-        if (ref < DENSE_OFFSET) {
-            return .{ .reserved = @enumFromInt(ref) };
-        } else if (ref < SPARSE_OFFSET) {
-            return .{ .dense = ref - DENSE_OFFSET };
-        } else {
-            return .{ .sparse = ref - SPARSE_OFFSET };
+            .entity => |x| return x + ENTITY_OFFSET,
+            .dense_component => |x| return x + DENSE_COMPONENT_OFFSET,
+            .sparse_component => |x| return x + SPARSE_COMPONENT_OFFSET,
+            .system => |x| return x + SYSTEM_OFFSET,
+            .event => |x| return x + EVENT_OFFSET,
         }
     }
 
-    pub fn encode(self: DecodedComponentRef) ComponentRef {
-        switch (self) {
-            .reserved => |x| return @intFromEnum(x),
-            .dense => |x| return x + DENSE_OFFSET,
-            .sparse => |x| return x + SPARSE_OFFSET,
-        }
-    }
-};
-
-const DecodedEntityRef = struct {
-    const INDEX_SIZE = 56;
-    const GEN_SIZE = @typeInfo(EntityRef).int.bits - INDEX_SIZE;
-    const GenInt = std.meta.Int(.unsigned, GEN_SIZE);
-    const IndexInt = std.meta.Int(.unsigned, INDEX_SIZE);
-    const GEN_MASK = std.math.boolMask(GenInt, true);
-
-    index: Index,
-    generation: GenInt,
-
-    pub const empty: DecodedEntityRef = .{ .index = .none, .generation = 0 };
-
-    pub fn format(
-        self: @This(),
-        writer: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        try writer.print("{s}{}@{}", .{ @typeName(EntityRef), self.index, self.generation });
-    }
-
-    pub fn from_parts(index: Index, generation: GenInt) DecodedEntityRef {
-        return .{
-            .index = index,
-            .generation = generation,
-        };
-    }
-
-    pub fn increment_generation(self: DecodedEntityRef) DecodedEntityRef {
-        return .{
-            .index = self.index,
-            .generation = self.generation +% 1,
-        };
-    }
-
-    pub fn decode(id: EntityRef) DecodedEntityRef {
-        const idx = id >> GEN_SIZE;
-        return .{
-            .generation = @intCast(id & GEN_MASK),
-            .index = if (idx < Index.OFFSET) .{ .reserved = @enumFromInt(idx) } else .{ .index = idx - Index.OFFSET },
-        };
-    }
-
-    pub fn encode(self: DecodedEntityRef) EntityRef {
-        const idx = switch (self.index) {
-            .reserved => |x| @intFromEnum(x),
-            .index => |x| x + Index.OFFSET,
-        };
-        return @as(EntityRef, @intCast(self.generation)) | (@as(EntityRef, idx) << GEN_SIZE);
-    }
-
-    const Index = union(enum) {
-        const OFFSET = std.math.maxInt(@typeInfo(@FieldType(@This(), "reserved")).@"enum".tag_type) + 1;
-        reserved: enum(u8) { none = 0, _ },
-        index: usize,
-        const none: Index = .{ .reserved = .none };
-    };
+    pub const none: DecodedRef = .{ .reserved = .none };
 };
 
 const ComponentStore = struct {
@@ -154,7 +81,7 @@ const ComponentStore = struct {
         body_type: std.builtin.TypeId,
         body_size: usize,
         body_align: usize,
-        name: []const u8,
+        name: ?[]const u8,
     };
 
     info: Info,
@@ -170,7 +97,7 @@ const ComponentStore = struct {
 
     pub fn remove(self: *ComponentStore, ecs: *Ecs, idx: usize) void {
         const ref = self.get(idx);
-        ref.parent.* = DecodedEntityRef.empty.encode();
+        ref.parent.* = DecodedRef.none.encode();
         self.freelist.append(ecs.gpa, idx) catch |err| {
             Log.log(.warn, "{*}: failed to add a Component to the freelist: {}", .{ self, err });
         };
@@ -212,14 +139,12 @@ const SystemStore = struct {
     systems: std.ArrayListUnmanaged(*System),
     edge_freelist: std.ArrayListUnmanaged(*Edge),
     system_freelist: std.ArrayListUnmanaged(SystemRef),
-    arena: std.heap.ArenaAllocator,
-    names: StringStore,
     stack: std.ArrayListUnmanaged(*System),
     queue: Queue(*System),
 
     const System = struct {
         id: SystemRef,
-        name: []const u8,
+        name: ?[]const u8,
         requirements: ?*Edge,
         status: u8,
 
@@ -243,13 +168,11 @@ const SystemStore = struct {
         next: ?*Edge,
     };
 
-    pub fn init(gpa: std.mem.Allocator) SystemStore {
+    pub fn init() SystemStore {
         return .{
-            .names = .init(gpa),
             .systems = .empty,
             .system_freelist = .empty,
             .edge_freelist = .empty,
-            .arena = .init(gpa),
             .stack = .empty,
             .queue = .empty,
         };
@@ -259,37 +182,30 @@ const SystemStore = struct {
         self.systems.deinit(gpa);
         self.system_freelist.deinit(gpa);
         self.edge_freelist.deinit(gpa);
-        self.stack.deinit(self.arena.allocator());
-        self.queue.deinit(self.arena.allocator());
-        self.names.deinit(gpa);
-        self.arena.deinit();
     }
 
     pub fn get(self: *SystemStore, ref: SystemRef) *System {
-        return self.systems.items[DecodedSystemRef.decode(ref).index];
+        return self.systems.items[DecodedRef.decode(ref).system];
     }
 
-    pub fn add(self: *SystemStore, name: []const u8, query: []const ComponentRef, ecs: *Ecs) !*System {
-        const static_query = try self.arena.allocator().dupe(ComponentRef, query);
-        if (self.names.contains(name)) {
-            return Error.SystemAlreadyDefined;
-        }
-        const static_name = try self.names.ensure_stored(ecs.gpa, name);
+    pub fn add(self: *SystemStore, name: ?[]const u8, query: []const ComponentRef, ecs: *Ecs) !*System {
+        const arena = ecs.arena.allocator();
+        const static_query = try arena.dupe(ComponentRef, query);
 
         if (self.system_freelist.pop()) |old| {
             const sys: *System = self.systems.items[old];
             sys.id = old;
             sys.status = System.ALIVE_BIT;
-            sys.name = static_name;
+            sys.name = name;
             sys.query = static_query;
             sys.requirements = null;
 
             return sys;
         } else {
-            const sys: *System = try self.arena.allocator().create(System);
-            sys.id = (DecodedSystemRef{ .index = self.systems.items.len }).encode();
+            const sys: *System = try arena.create(System);
+            sys.id = (DecodedRef{ .system = self.systems.items.len }).encode();
             sys.status = System.ALIVE_BIT;
-            sys.name = static_name;
+            sys.name = name;
             sys.query = static_query;
             sys.requirements = null;
 
@@ -316,7 +232,7 @@ const SystemStore = struct {
         }
     }
 
-    pub fn eval_order(self: *SystemStore, before: SystemRef, after: SystemRef) !void {
+    pub fn eval_order(self: *SystemStore, arena: std.mem.Allocator, before: SystemRef, after: SystemRef) !void {
         const a = self.get(before);
         const b = self.get(after);
 
@@ -326,17 +242,17 @@ const SystemStore = struct {
             if (n.sys == a) return;
         }
 
-        if (try self.reachable(a, b)) return Error.SystemOrderLoop;
+        if (try self.reachable(arena, a, b)) return Error.SystemOrderLoop;
         for (self.systems.items) |s| s.status &= ~System.VISITED_BIT;
 
-        const edge = if (self.edge_freelist.pop()) |old| old else try self.arena.allocator().create(Edge);
+        const edge = if (self.edge_freelist.pop()) |old| old else try arena.create(Edge);
         edge.sys = a;
         edge.next = b.requirements;
         b.requirements = edge;
     }
 
-    fn reachable(self: *SystemStore, start: *System, target: *System) !bool {
-        const alloc = self.arena.allocator();
+    fn reachable(self: *SystemStore, gpa: std.mem.Allocator, start: *System, target: *System) !bool {
+        const alloc = gpa;
         self.stack.clearRetainingCapacity();
         start.status |= System.VISITED_BIT;
         try self.stack.append(alloc, start);
@@ -357,7 +273,7 @@ const SystemStore = struct {
     }
 
     pub fn eval(self: *SystemStore, ecs: *Ecs) !void {
-        const alloc = self.arena.allocator();
+        const alloc = ecs.arena.allocator();
         self.queue.clear();
 
         for (self.systems.items) |sys| {
@@ -411,10 +327,10 @@ const SystemStore = struct {
             var start_store: *ComponentStore = undefined;
             var start_count: usize = std.math.maxInt(usize);
             for (sys.query) |kind| {
-                const store = switch (DecodedComponentRef.decode(kind)) {
-                    .reserved => std.debug.panic("{*}: access invalid component", .{self}),
-                    .sparse => |x| &ecs.sparse_components.items[x],
-                    .dense => |x| &ecs.dense_components.items[x],
+                const store = switch (DecodedRef.decode(kind)) {
+                    .sparse_component => |x| &ecs.sparse_components.items[x],
+                    .dense_component => |x| &ecs.dense_components.items[x],
+                    else => std.debug.panic("{*}: access invalid component", .{self}),
                 };
                 if (store.count() < start_count) {
                     start_count = store.count();
@@ -423,7 +339,7 @@ const SystemStore = struct {
             }
 
             outer: for (start_store.parents.items) |parent| {
-                if (DecodedEntityRef.decode(parent).index == .reserved) continue;
+                if (DecodedRef.decode(parent) == .reserved) continue;
                 for (sys.query) |kind| {
                     if (kind == start_store.info.kind) continue;
                     if (!ecs.has_component(parent, kind)) continue :outer;
@@ -478,7 +394,7 @@ const Entity = struct {
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try DecodedEntityRef.decode(self.eid).format(writer);
+        try writer.print("{}", .{DecodedRef.decode(self.eid)});
     }
 };
 
@@ -495,9 +411,8 @@ const ComponentSet = struct {
     pub const empty: ComponentSet = .{ .sparse = null, .dense = .empty };
 
     pub fn get(self: *ComponentSet, ecs: *Ecs, kind: ComponentRef) ?usize {
-        switch (DecodedComponentRef.decode(kind)) {
-            .reserved => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
-            .sparse => {
+        switch (DecodedRef.decode(kind)) {
+            .sparse_component => {
                 var cur = self.sparse;
                 while (cur) |node| {
                     cur = node.next;
@@ -507,20 +422,20 @@ const ComponentSet = struct {
                 }
                 return null;
             },
-            .dense => |id| {
+            .dense_component => |id| {
                 if (self.dense.items.len <= id or self.dense.items[id] == 0) {
                     return null;
                 } else {
                     return self.dense.items[id] - 1;
                 }
             },
+            else => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
         }
     }
 
     pub fn add(self: *ComponentSet, ecs: *Ecs, kind: ComponentRef, idx: usize) !void {
-        switch (DecodedComponentRef.decode(kind)) {
-            .reserved => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
-            .sparse => {
+        switch (DecodedRef.decode(kind)) {
+            .sparse_component => {
                 var cur = self.sparse;
                 while (cur) |n| {
                     cur = n.next;
@@ -536,7 +451,7 @@ const ComponentSet = struct {
                 node.next = self.sparse;
                 self.sparse = node;
             },
-            .dense => |id| {
+            .dense_component => |id| {
                 if (self.dense.items.len <= id) {
                     try self.dense.appendNTimes(
                         ecs.gpa,
@@ -546,13 +461,13 @@ const ComponentSet = struct {
                 }
                 self.dense.items[id] = idx + 1;
             },
+            else => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
         }
     }
 
     pub fn remove(self: *ComponentSet, ecs: *Ecs, kind: ComponentRef) ?usize {
-        switch (DecodedComponentRef.decode(kind)) {
-            .reserved => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
-            .sparse => {
+        switch (DecodedRef.decode(kind)) {
+            .sparse_component => {
                 var prev: ?*SparseNode = null;
                 var cur = self.sparse;
                 while (cur) |n| {
@@ -574,7 +489,7 @@ const ComponentSet = struct {
                     prev = n;
                 }
             },
-            .dense => |id| {
+            .dense_component => |id| {
                 if (self.dense.items.len <= id) {
                     return null;
                 }
@@ -583,6 +498,7 @@ const ComponentSet = struct {
                 if (res == 0) return null;
                 return res - 1;
             },
+            else => std.debug.panic("{*}: invalid component, should be unreachable", .{ecs}),
         }
         return null;
     }
@@ -626,7 +542,7 @@ const ComponentSet = struct {
                             self.stage = .{ .dense = i + 1 };
                             return .{
                                 .idx = self.set.dense.items[i] - 1,
-                                .kind = (DecodedComponentRef{ .dense = i }).encode(),
+                                .kind = (DecodedRef{ .dense_component = i }).encode(),
                             };
                         }
                         i += 1;
@@ -656,10 +572,11 @@ entities: EntityStore,
 dense_components: std.ArrayListUnmanaged(ComponentStore),
 sparse_components: std.ArrayListUnmanaged(ComponentStore),
 systems: SystemStore,
-component_names: StringStore,
 gpa: std.mem.Allocator,
-
 events: std.ArrayListUnmanaged(EventData),
+
+names: std.StringHashMapUnmanaged(u64),
+arena: std.heap.ArenaAllocator,
 
 const EventData = struct {
     component: ComponentRef,
@@ -676,41 +593,55 @@ const Ecs = @This();
 pub fn init(gpa: std.mem.Allocator) Self {
     return .{
         .gpa = gpa,
-        .component_names = .init(gpa),
         .entities = .init(gpa),
-        .systems = .init(gpa),
+        .systems = .init(),
         .dense_components = .empty,
         .sparse_components = .empty,
         .events = .empty,
+        .names = .empty,
+        .arena = .init(gpa),
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.entities.deinit(self.gpa);
     self.systems.deinit(self.gpa);
-    self.component_names.deinit(self.gpa);
     for (self.dense_components.items) |*s| s.deinit(self.gpa);
     for (self.sparse_components.items) |*s| s.deinit(self.gpa);
     for (self.events.items) |*evt_data| evt_data.deinit(self.gpa);
     self.events.deinit(self.gpa);
     self.dense_components.deinit(self.gpa);
     self.sparse_components.deinit(self.gpa);
+    self.names.deinit(self.gpa);
+    self.arena.deinit();
+}
+
+const NamedEntry = struct {
+    name: ?[]const u8,
+    val: *u64,
+};
+var dummy_id: u64 = 0;
+
+fn ensure_new_name(self: *Self, name: ?[]const u8) !NamedEntry {
+    const n = name orelse return .{ .name = null, .val = &dummy_id };
+    const entry = try self.names.getOrPut(self.gpa, n);
+    if (entry.found_existing) return Error.NameAlreadyDefined;
+    entry.key_ptr.* = try self.arena.allocator().dupe(u8, n);
+    return .{ .name = entry.key_ptr.*, .val = entry.value_ptr };
 }
 
 pub fn register_component(
     self: *Self,
-    name: []const u8,
+    name: ?[]const u8,
     comptime Body: type,
     is_sparse: bool,
 ) Error!ComponentRef {
-    if (self.component_names.contains(name)) {
-        return Error.ComponentAlreadyDefined;
-    }
-    const static_name = try self.component_names.ensure_stored(self.gpa, name);
+    const named_entry = try self.ensure_new_name(name);
+
     const info = if (is_sparse) blk: {
         const info = ComponentStore.Info{
-            .kind = (DecodedComponentRef{ .sparse = self.sparse_components.items.len }).encode(),
-            .name = static_name,
+            .kind = (DecodedRef{ .sparse_component = self.sparse_components.items.len }).encode(),
+            .name = named_entry.name,
             .body_type = @typeInfo(Body),
             .body_size = @sizeOf(Body),
             .body_align = @alignOf(Body),
@@ -725,8 +656,8 @@ pub fn register_component(
         break :blk info;
     } else blk: {
         const info = ComponentStore.Info{
-            .kind = (DecodedComponentRef{ .dense = self.dense_components.items.len }).encode(),
-            .name = static_name,
+            .kind = (DecodedRef{ .dense_component = self.dense_components.items.len }).encode(),
+            .name = named_entry.name,
             .body_type = @typeInfo(Body),
             .body_size = @sizeOf(Body),
             .body_align = @alignOf(Body),
@@ -740,11 +671,12 @@ pub fn register_component(
         });
         break :blk info;
     };
+    named_entry.val.* = info.kind;
 
     Log.log(
         .debug,
-        "{*}: Registered new component: \"{s}\", kind: {}",
-        .{ self, name, DecodedComponentRef.decode(info.kind) },
+        "{*}: Registered new component: \"{?s}\", kind: {}",
+        .{ self, name, DecodedRef.decode(info.kind) },
     );
 
     return info.kind;
@@ -752,19 +684,18 @@ pub fn register_component(
 
 pub fn spawn(self: *Self) Error!EntityRef {
     if (self.entities.free_entities.pop()) |old| {
-        const eid = DecodedEntityRef.decode(old).increment_generation();
+        const eid = DecodedRef.decode(old);
         if (Options.ecs_logging) {
-            Log.log(.debug, "{*}: reusing old entity {f}", .{ self, eid });
+            Log.log(.debug, "{*}: reusing old entity {}", .{ self, eid });
         }
-        const idx = eid.index.index;
-        const e = &self.entities.entities.items[idx];
-        e.eid = eid.encode();
+        const e = &self.entities.entities.items[eid.entity];
+        e.eid = old;
         e.alive = true;
         return e.eid;
     } else {
-        const eid = DecodedEntityRef.from_parts(.{ .index = self.entities.entities.items.len }, 0);
+        const eid = DecodedRef{ .entity = self.entities.entities.items.len };
         if (Options.ecs_logging) {
-            Log.log(.debug, "{*}: spawn new entity {f}", .{ self, eid });
+            Log.log(.debug, "{*}: spawn new entity {}", .{ self, eid });
         }
         const e = Entity{
             .eid = eid.encode(),
@@ -777,17 +708,17 @@ pub fn spawn(self: *Self) Error!EntityRef {
 }
 
 fn get_entity(self: *Self, eid: EntityRef) Error!*Entity {
-    const decoded = DecodedEntityRef.decode(eid);
+    const decoded = DecodedRef.decode(eid);
     switch (decoded.index) {
-        .reserved => return Error.InvalidEntity,
-        .index => |idx| return &self.entities.entities.items[idx],
+        .entity => |idx| return &self.entities.entities.items[idx],
+        else => return Error.InvalidEntity,
     }
 }
 fn get_entity_ensure_alive(self: *Self, eid: EntityRef) Error!*Entity {
-    const decoded = DecodedEntityRef.decode(eid);
-    switch (decoded.index) {
-        .reserved => return Error.InvalidEntity,
-        .index => |idx| {
+    const decoded = DecodedRef.decode(eid);
+    switch (decoded) {
+        else => return Error.InvalidEntity,
+        .entity => |idx| {
             const e = &self.entities.entities.items[idx];
             if (e.eid != eid or !e.alive) return Error.DeadEntity;
             return e;
@@ -825,20 +756,20 @@ pub fn add_component(
 ) Error!void {
     const e = try self.get_entity_ensure_alive(eid);
     if (Options.ecs_logging) {
-        Log.log(.debug, "{*}: adding component {} to entity {f}", .{ self, DecodedComponentRef.decode(kind), e });
+        Log.log(.debug, "{*}: adding component {} to entity {f}", .{ self, DecodedRef.decode(kind), e });
     }
 
-    const store: *ComponentStore = switch (DecodedComponentRef.decode(kind)) {
-        .reserved => return Error.InvalidComponent,
-        .sparse => |idx| &self.sparse_components.items[idx],
-        .dense => |idx| &self.dense_components.items[idx],
+    const store: *ComponentStore = switch (DecodedRef.decode(kind)) {
+        else => return Error.InvalidComponent,
+        .sparse_component => |idx| &self.sparse_components.items[idx],
+        .dense_component => |idx| &self.dense_components.items[idx],
     };
 
     if (Options.ecs_typecheck) {
         if (@typeInfo(T) != store.info.body_type) {
             Log.log(.err, "{*}: failed to typecheck component {}, expected {}, got {}", .{
                 self,
-                DecodedComponentRef.decode(kind),
+                DecodedRef.decode(kind),
                 store.info.body_type,
                 std.meta.activeTag(@typeInfo(T)),
             });
@@ -854,25 +785,29 @@ pub fn add_component(
 
 pub fn remove_component(self: *Self, eid: EntityRef, kind: ComponentRef) void {
     const e = self.get_entity_ensure_alive(eid) catch |err| {
-        Log.log(.warn, "{*}: attempted to remove component from an invalid entity {d}: {}", .{ self, eid, err });
+        Log.log(.warn, "{*}: attempted to remove component from an invalid entity {}: {}", .{
+            self,
+            DecodedRef.decode(eid),
+            err,
+        });
         return;
     };
     if (Options.ecs_logging) {
-        Log.log(.debug, "{*}: removing component {} from entity {f}", .{ self, DecodedComponentRef.decode(kind), e });
+        Log.log(.debug, "{*}: removing component {} from entity {f}", .{ self, DecodedRef.decode(kind), e });
     }
-    const store = switch (DecodedComponentRef.decode(kind)) {
-        .reserved => {
+    const store = switch (DecodedRef.decode(kind)) {
+        .sparse_component => |x| &self.sparse_components.items[x],
+        .dense_component => |x| &self.dense_components.items[x],
+        else => {
             Log.log(.warn, "{*}: attempted to remove an invalid component {}", .{ self, kind });
             return;
         },
-        .sparse => |x| &self.sparse_components.items[x],
-        .dense => |x| &self.dense_components.items[x],
     };
     const idx = e.components.remove(self, kind) orelse {
         Log.log(.warn, "{*}: entity {f} did not have a component {}", .{
             self,
             e,
-            DecodedComponentRef.decode(kind),
+            DecodedRef.decode(kind),
         });
         return;
     };
@@ -881,13 +816,13 @@ pub fn remove_component(self: *Self, eid: EntityRef, kind: ComponentRef) void {
 
 pub fn has_component(self: *Self, eid: EntityRef, kind: ComponentRef) bool {
     const e = self.get_entity_ensure_alive(eid) catch |err| {
-        Log.log(.warn, "{*}: accessing an invalid entity {d}: {}", .{ self, eid, err });
+        Log.log(.warn, "{*}: accessing an invalid entity {}: {}", .{ self, DecodedRef.decode(eid), err });
         return false;
     };
     if (Options.ecs_logging) {
-        Log.log(.debug, "{*}: Check if entity {f} has component {}", .{ self, e, DecodedComponentRef.decode(kind) });
+        Log.log(.debug, "{*}: Check if entity {f} has component {}", .{ self, e, DecodedRef.decode(kind) });
     }
-    if (DecodedComponentRef.decode(kind) == .reserved) {
+    if (!DecodedRef.decode(kind).is_component()) {
         Log.log(.warn, "{*}: accessing invalid component {d}", .{ self, kind });
         return false;
     }
@@ -896,25 +831,25 @@ pub fn has_component(self: *Self, eid: EntityRef, kind: ComponentRef) bool {
 
 pub fn get_component(self: *Self, eid: EntityRef, comptime T: type, kind: ComponentRef) ?*T {
     const e = self.get_entity_ensure_alive(eid) catch |err| {
-        Log.log(.warn, "{*}: accessing an invalid entity {d}: {}", .{ self, eid, err });
+        Log.log(.warn, "{*}: accessing an invalid entity {}: {}", .{ self, DecodedRef.decode(eid), err });
         return null;
     };
     if (Options.ecs_logging) {
-        Log.log(.debug, "{*}: get component {} of entity {f}", .{ self, DecodedComponentRef.decode(kind), e });
+        Log.log(.debug, "{*}: get component {} of entity {f}", .{ self, DecodedRef.decode(kind), e });
     }
-    const store: *ComponentStore = switch (DecodedComponentRef.decode(kind)) {
-        .reserved => {
+    const store: *ComponentStore = switch (DecodedRef.decode(kind)) {
+        else => {
             Log.log(.warn, "{*}: accessing invalid component {d}", .{ self, kind });
             return null;
         },
-        .sparse => |idx| &self.sparse_components.items[idx],
-        .dense => |idx| &self.dense_components.items[idx],
+        .sparse_component => |idx| &self.sparse_components.items[idx],
+        .dense_component => |idx| &self.dense_components.items[idx],
     };
     if (Options.ecs_typecheck) {
         if (@typeInfo(T) != store.info.body_type) {
             Log.log(.err, "{*}: failed to typecheck component {}, expected {}, got {}", .{
                 self,
-                DecodedComponentRef.decode(kind),
+                DecodedRef.decode(kind),
                 store.info.body_type,
                 std.meta.activeTag(@typeInfo(T)),
             });
@@ -947,7 +882,7 @@ const ComponentIter = union(enum) {
 
 pub fn iterate_components(self: *Self, eid: EntityRef) ComponentIter {
     const e = self.get_entity_ensure_alive(eid) catch |err| {
-        Log.log(.warn, "{*}: accessing an invalid entity {d}: {}", .{ self, eid, err });
+        Log.log(.warn, "{*}: accessing an invalid entity {}: {}", .{ self, DecodedRef.decode(eid), err });
         return .invalid;
     };
     return .{ .valid = e.components.iter(self) };
@@ -956,18 +891,22 @@ pub fn iterate_components(self: *Self, eid: EntityRef) ComponentIter {
 pub fn register_system(
     self: *Self,
     comptime Ctx: type,
-    name: []const u8,
+    name: ?[]const u8,
     query: []const ComponentRef,
     ctx: Ctx,
     callback: *const fn (ctx: Ctx, ecs: *Ecs, eid: EntityRef) void,
 ) Error!SystemRef {
-    const sys = try self.systems.add(name, query, self);
+    const named_entry = try self.ensure_new_name(name);
+
+    const sys = try self.systems.add(named_entry.name, query, self);
+    named_entry.val.* = sys.id;
+
     if (@typeInfo(Ctx) == .pointer) {
         sys.data = @ptrCast(ctx);
         sys.callback = @ptrCast(callback);
     } else {
         const Data = struct { Ctx, @TypeOf(callback) };
-        const ptr = try self.systems.arena.allocator().create(Data);
+        const ptr = try self.arena.allocator().create(Data);
         ptr.* = .{ ctx, callback };
         sys.data = @ptrCast(ptr);
         sys.callback = struct {
@@ -992,7 +931,7 @@ pub fn enable_system(self: *Self, sys: SystemRef) void {
 }
 
 pub fn ensure_eval_order(self: *Self, before: SystemRef, after: SystemRef) Error!void {
-    try self.systems.eval_order(before, after);
+    try self.systems.eval_order(self.arena.allocator(), before, after);
 }
 
 pub fn evaluate(self: *Self) Error!void {
@@ -1016,10 +955,10 @@ test "Ecs.register_component" {
     const vel = try ecs.register_component("Velocity", @Vector(3, f32), false);
     const name = try ecs.register_component("Name", []const u8, false);
     const player_tag = try ecs.register_component("PlayerTag", void, true);
-    try std.testing.expectEqual(256, pos);
-    try std.testing.expectEqual(257, vel);
-    try std.testing.expectEqual(258, name);
-    try std.testing.expectEqual((1 << 63) + 1, player_tag);
+    try std.testing.expect(.dense_component == DecodedRef.decode(pos));
+    try std.testing.expect(.dense_component == DecodedRef.decode(vel));
+    try std.testing.expect(.dense_component == DecodedRef.decode(name));
+    try std.testing.expect(.sparse_component == DecodedRef.decode(player_tag));
 }
 
 test "Ecs.spawn" {
@@ -1079,21 +1018,14 @@ test "Ecs.kill" {
     ecs.kill(zombie);
 
     const player = try ecs.spawn();
-    try std.testing.expectEqual(DecodedEntityRef.decode(zombie).index, DecodedEntityRef.decode(player).index);
-    try std.testing.expectEqual(
-        DecodedEntityRef.decode(zombie).generation + 1,
-        DecodedEntityRef.decode(player).generation,
-    );
     try std.testing.expect(ecs.is_alive(player));
-    try std.testing.expect(!ecs.is_alive(zombie));
 
     try ecs.add_component(player, Vec3f, pos, .{ 0, 10, 0 });
-    try ecs.add_component(player, Vec3f, vel, .{ 0, 1, 0 });
     try ecs.add_component(player, []const u8, name, "Player");
     try ecs.add_component(player, void, player_tag, {});
 
     try std.testing.expectEqual(.{ 0, 10, 0 }, ecs.get_component(player, Vec3f, pos).?.*);
-    try std.testing.expectEqual(.{ 0, 1, 0 }, ecs.get_component(player, Vec3f, vel).?.*);
+    try std.testing.expectEqual(null, ecs.get_component(player, Vec3f, vel));
     try std.testing.expectEqualStrings("Player", ecs.get_component(player, []const u8, name).?.*);
     try std.testing.expect(ecs.has_component(player, player_tag));
 }
@@ -1247,13 +1179,17 @@ const EventComponent = struct {
     data: *anyopaque,
     callback: *const fn (*anyopaque, *anyopaque) void,
 };
-pub fn register_event(self: *Self, name: []const u8, comptime Body: type) Error!EventRef {
-    const component = try self.register_component(name, EventComponent, true);
-    const event = (DecodedEventRef{ .index = self.events.items.len }).encode();
+pub fn register_event(self: *Self, name: ?[]const u8, comptime Body: type) Error!EventRef {
+    const named_entry = try self.ensure_new_name(name);
+
+    const event = (DecodedRef{ .event = self.events.items.len }).encode();
+    named_entry.val.* = event;
+
+    const component = try self.register_component(null, EventComponent, true);
     const evt_data = try self.events.addOne(self.gpa);
     evt_data.component = component;
 
-    evt_data.system = try self.register_system(EventRef, name, &.{component}, event, &struct {
+    evt_data.system = try self.register_system(EventRef, null, &.{component}, event, &struct {
         fn callback(evt: EventRef, ecs: *Ecs, eid: EntityRef) void {
             const comp = ecs.get_event_component(evt) catch unreachable;
             const cb = ecs.get_component(eid, EventComponent, comp).?.*;
@@ -1309,46 +1245,46 @@ pub fn remove_event_listener(self: *Self, eid: EntityRef, event: EventRef) void 
 }
 
 pub fn emit_event(self: *Self, comptime Body: type, event: EventRef, body: Body) Error!void {
-    const decoded = DecodedEventRef.decode(event);
-    if (decoded != .index) {
+    const decoded = DecodedRef.decode(event);
+    if (decoded != .event) {
         Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
         return Error.InvalidEvent;
     }
-    const idx = decoded.index;
+    const idx = decoded.event;
     const evt_data = &self.events.items[idx];
     try evt_data.bodies.appendSlice(self.gpa, &std.mem.toBytes(body));
     self.enable_system(evt_data.system);
 }
 
 pub fn get_event_system(self: *Self, event: EventRef) Error!SystemRef {
-    const decoded = DecodedEventRef.decode(event);
-    if (decoded != .index) {
+    const decoded = DecodedRef.decode(event);
+    if (decoded != .event) {
         Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
         return Error.InvalidEvent;
     }
-    const idx = decoded.index;
+    const idx = decoded.event;
     const evt_data = &self.events.items[idx];
     return evt_data.system;
 }
 
 fn get_event_component(self: *Self, event: EventRef) Error!SystemRef {
-    const decoded = DecodedEventRef.decode(event);
-    if (decoded != .index) {
+    const decoded = DecodedRef.decode(event);
+    if (decoded != .event) {
         Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
         return Error.InvalidEvent;
     }
-    const idx = decoded.index;
+    const idx = decoded.event;
     const evt_data = &self.events.items[idx];
     return evt_data.component;
 }
 
 fn get_event_queue(self: *Self, comptime Body: type, event: EventRef) ?[]Body {
-    const decoded = DecodedEventRef.decode(event);
-    if (decoded != .index) {
+    const decoded = DecodedRef.decode(event);
+    if (decoded != .event) {
         Log.log(.warn, "{*}: Access invalid event {}", .{ self, decoded });
         return null;
     }
-    const idx = decoded.index;
+    const idx = decoded.event;
     const evt_data = &self.events.items[idx];
     return @ptrCast(evt_data.bodies.items);
 }

@@ -19,6 +19,11 @@
 
 # Done
 
+- 17.11.2025:
+    1. Clean up build.zig, make it easier to add compile time options to packages
+    2. ECS id mess - make all ECS id's come from the same counter, and make it easier to have globally accessable named things
+
+
 - 05.11.2025:
     1. Placing/breaking - improve the raycaster 
     2. Reintroduce block placing (got removed during the deferred shading event)
