@@ -220,9 +220,14 @@ pub fn build(b: *std.Build) void {
     const server = build_server(b, target, optimize);
 
     const test_step = b.step("test", "run all tests");
+    const llvm = b.option(bool, "llvm", "Use llvm") orelse false;
+
     inline for (.{ server, client, libmine }) |mod| {
         const test_artifact = b.addTest(.{ .root_module = mod });
+        test_artifact.use_llvm = llvm;
         const run_tests = b.addRunArtifact(test_artifact);
         test_step.dependOn(&run_tests.step);
+
+        b.installArtifact(test_artifact);
     }
 }

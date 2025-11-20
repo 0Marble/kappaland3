@@ -1177,7 +1177,7 @@ test "Ecs.add_component replacement" {
 
 const EventComponent = struct {
     data: *anyopaque,
-    callback: *const fn (*anyopaque, *anyopaque) void,
+    callback: *const fn (*anyopaque, []u8) void,
 };
 pub fn register_event(self: *Self, name: ?[]const u8, comptime Body: type) Error!EventRef {
     const named_entry = try self.ensure_new_name(name);
@@ -1194,9 +1194,10 @@ pub fn register_event(self: *Self, name: ?[]const u8, comptime Body: type) Error
             const comp = ecs.get_event_component(evt) catch unreachable;
             const cb = ecs.get_component(eid, EventComponent, comp).?.*;
             const bodies = ecs.get_event_queue(Body, evt).?;
-            for (bodies) |*b| {
-                cb.callback(cb.data, @ptrCast(b));
-            }
+            var bodies_raw_array: []u8 = undefined;
+            bodies_raw_array.len = bodies.len;
+            bodies_raw_array.ptr = @ptrCast(bodies.ptr);
+            cb.callback(cb.data, bodies_raw_array);
         }
     }.callback);
     evt_data.bodies = .empty;
@@ -1212,7 +1213,7 @@ pub fn add_event_listener(
     comptime Ctx: type,
     event: EventRef,
     ctx: Ctx,
-    callback: *const fn (Ctx, *Body) void,
+    callback: *const fn (Ctx, []Body) void,
 ) Error!void {
     const comp = try self.get_event_component(event);
     if (@typeInfo(Ctx) == .pointer) {
@@ -1231,7 +1232,7 @@ pub fn add_event_listener(
         try self.add_component(eid, EventComponent, comp, .{
             .data = @ptrCast(ctx_ref),
             .callback = @ptrCast(&struct {
-                fn heap_callback(hc: HeapCtx, body: *Body) void {
+                fn heap_callback(hc: HeapCtx, body: []Body) void {
                     hc.callback(ctx.ctx, body);
                 }
             }.heap_callback),
@@ -1299,12 +1300,12 @@ test "Ecs.register_event" {
     const PlayerEventListener = struct {
         sum: usize = 0,
         ran: bool = false,
-        fn on_event(self: *@This(), num: *usize) void {
+        fn on_event(self: *@This(), nums: []usize) void {
             if (!self.ran) {
                 self.ran = true;
                 self.sum = 0;
             }
-            self.sum += num.*;
+            for (nums) |n| self.sum += n;
         }
     };
     var listener = PlayerEventListener{};

@@ -107,32 +107,38 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
             self.mousedown_binds.deinit(App.gpa());
         }
 
-        fn on_keydown_handler(self: *Self, code: *Scancode) void {
-            const cmds = self.keydown_binds.get(code.*).?;
-            for (cmds.items) |cmd| {
-                const bind = self.cmd_binds.get(cmd).?;
-                if (bind == .normal) bind.normal(self.ctx, cmd);
-            }
-        }
-
-        fn on_mouse_move_handler(self: *Self, move: *Keys.MouseMoveEvent) void {
-            for (self.mousemove_binds.items) |cmd| {
-                const callback = self.cmd_binds.get(cmd).?;
-                switch (callback) {
-                    .mouse_move => callback.mouse_move(self.ctx, cmd, move.*),
-                    .normal => callback.normal(self.ctx, cmd),
-                    else => {},
+        fn on_keydown_handler(self: *Self, codes: []Scancode) void {
+            for (codes) |code| {
+                const cmds = self.keydown_binds.get(code).?;
+                for (cmds.items) |cmd| {
+                    const bind = self.cmd_binds.get(cmd).?;
+                    if (bind == .normal) bind.normal(self.ctx, cmd);
                 }
             }
         }
 
-        fn on_mouse_down_handler(self: *Self, down: *Keys.MouseDownEvent) void {
+        fn on_mouse_move_handler(self: *Self, moves: []Keys.MouseMoveEvent) void {
+            for (self.mousemove_binds.items) |cmd| {
+                const callback = self.cmd_binds.get(cmd).?;
+                for (moves) |move| {
+                    switch (callback) {
+                        .mouse_move => callback.mouse_move(self.ctx, cmd, move),
+                        .normal => callback.normal(self.ctx, cmd),
+                        else => {},
+                    }
+                }
+            }
+        }
+
+        fn on_mouse_down_handler(self: *Self, downs: []Keys.MouseDownEvent) void {
             for (self.mousedown_binds.items) |cmd| {
                 const callback = self.cmd_binds.get(cmd).?;
-                switch (callback) {
-                    .mouse_down => callback.mouse_down(self.ctx, cmd, down.*),
-                    .normal => callback.normal(self.ctx, cmd),
-                    else => {},
+                for (downs) |down| {
+                    switch (callback) {
+                        .mouse_down => callback.mouse_down(self.ctx, cmd, down),
+                        .normal => callback.normal(self.ctx, cmd),
+                        else => {},
+                    }
                 }
             }
         }
