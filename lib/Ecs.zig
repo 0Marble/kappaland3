@@ -1329,3 +1329,21 @@ test "Ecs.register_event" {
     try std.testing.expectEqual(60, listener.sum);
     listener.ran = false;
 }
+
+pub fn find_named_system(self: *Ecs, name: []const u8) ?SystemRef {
+    const id = self.names.get(name) orelse return null;
+    if (DecodedRef.decode(id) == .system) return id;
+    return null;
+}
+
+pub fn find_named_component(self: *Ecs, name: []const u8) ?ComponentRef {
+    const id = self.names.get(name) orelse return null;
+    if (DecodedRef.decode(id).is_component()) return id;
+    return null;
+}
+
+pub fn find_named_event(self: *Ecs, name: []const u8) ?EventRef {
+    const id = self.names.get(name) orelse return null;
+    if (DecodedRef.decode(id) == .event) return id;
+    return null;
+}
