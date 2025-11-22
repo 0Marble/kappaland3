@@ -95,26 +95,24 @@ const VERT =
 const FRAG =
     \\#version 460 core
     \\
-    \\uniform vec3 u_ambient;
-    \\uniform vec3 u_light_color;
-    \\uniform vec3 u_light_dir;
-    \\uniform vec3 u_view_pos;
+++ std.fmt.comptimePrint("#define BASE_COLOR_LOCATION {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
     \\
+++ std.fmt.comptimePrint("#define POSITION_LOCATION {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
+    \\
+++ std.fmt.comptimePrint("#define NORMAL_LOCATION {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
     \\in vec3 frag_color;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
     \\in flat ivec3 block_coords;
-    \\out vec4 out_color;
+    \\
+    \\layout (location=BASE_COLOR_LOCATION) out vec4 out_color;
+    \\layout (location=POSITION_LOCATION) out vec4 out_pos;
+    \\layout (location=NORMAL_LOCATION) out vec4 out_norm;
     \\
     \\void main() {
-    \\  vec3 ambient = u_ambient * frag_color;
-    \\
-    \\  vec3 norm = normalize(frag_norm);
-    \\  vec3 light_dir = u_light_dir;
-    \\  float diff = max(dot(norm, light_dir), 0.0);
-    \\  vec3 diffuse = u_light_color * diff * frag_color;
-    \\
-    \\  out_color = vec4(ambient + diffuse, 1);
+    \\  out_color = vec4(frag_color, 1);
+    \\  out_pos = vec4(frag_pos, 1);
+    \\  out_norm = vec4(frag_norm, 1);
     \\}
 ;
 
@@ -166,7 +164,6 @@ pub fn draw(self: *Self) !void {
     self.seen_cnt = try self.compute_seen();
     if (self.seen_cnt == 0) return;
 
-    try self.shader.set_vec3("u_view_pos", App.game_state().camera.pos);
     const vp = App.game_state().camera.as_mat();
     try self.shader.set_mat4("u_vp", vp);
 
@@ -339,9 +336,6 @@ fn init_shader(self: *Self) !void {
     };
 
     self.shader = try .init(&sources);
-    try self.shader.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
-    try self.shader.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 2, 1, 1 }));
-    try self.shader.set_vec3("u_light_color", .{ 1, 1, 0.9 });
 }
 
 const Indirect = extern struct {

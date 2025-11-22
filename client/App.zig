@@ -25,6 +25,7 @@ frame_data: FrameData,
 game: GameState,
 main_renderer: Renderer,
 debug_ui: DebugUi,
+random: std.Random.DefaultPrng,
 
 const App = @This();
 var ok = false;
@@ -92,6 +93,7 @@ fn init_game() !void {
     try app.game.init();
     app.debug_ui = try .init(app);
     try app.main_renderer.init();
+    app.random = .init(69);
 }
 
 fn init_sdl() !void {
@@ -320,4 +322,8 @@ pub fn screen_height() i32 {
 
 pub fn renderer() *Renderer {
     return &app.main_renderer;
+}
+
+pub fn rng() std.Random {
+    return app.random.random();
 }

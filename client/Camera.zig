@@ -142,16 +142,8 @@ fn recalculate(self: *Camera) void {
         .multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
     self.cached_forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
     const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
-    const f = 1.0 / @tan(self.fov * 0.5);
-    const g = f / self.aspect;
-    const proj = zm.Mat4f{ .data = .{
-        g, 0, 0,  0,
-        0, f, 0,  0,
-        0, 0, 0,  2 * NEAR,
-        0, 0, -1, 0,
-    } };
     const view = zm.Mat4f.lookAt(self.pos, self.pos + self.cached_forward, up);
-    self.cached_mat = proj.multiply(view);
+    self.cached_mat = self.proj().multiply(view);
     self.cached_inv = self.cached_mat.inverse();
     self.mat_changed = false;
 }
@@ -159,6 +151,17 @@ fn recalculate(self: *Camera) void {
 pub fn as_mat(self: *Camera) zm.Mat4f {
     self.recalculate();
     return self.cached_mat;
+}
+
+pub fn proj(self: *Camera) zm.Mat4f {
+    const f = 1.0 / @tan(self.fov * 0.5);
+    const g = f / self.aspect;
+    return zm.Mat4f{ .data = .{
+        g, 0, 0,  0,
+        0, f, 0,  0,
+        0, 0, 0,  2 * NEAR,
+        0, 0, -1, 0,
+    } };
 }
 
 pub fn view_dir(self: *Camera) zm.Vec3f {
