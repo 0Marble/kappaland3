@@ -11,6 +11,7 @@ const Mesh = @import("Mesh.zig");
 const Shader = @import("Shader.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
+const c = @import("c.zig").c;
 
 const SAMPLES_COUNT = 64;
 
@@ -40,8 +41,8 @@ render_fbo: gl.uint,
 rendered_tex: gl.uint,
 
 screen_quad: Mesh,
-postprocessing: Shader,
-rendering: Shader,
+postprocessing_pass: Shader,
+lighting_pass: Shader,
 ssao_samples: [SAMPLES_COUNT]zm.Vec3f,
 
 const Renderer = @This();
@@ -62,8 +63,8 @@ pub fn deinit(self: *Renderer) void {
     gl.DeleteTextures(1, @ptrCast(&self.base_tex));
 
     self.screen_quad.deinit();
-    self.postprocessing.deinit();
-    self.rendering.deinit();
+    self.postprocessing_pass.deinit();
+    self.lighting_pass.deinit();
 }
 
 pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
@@ -83,7 +84,7 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.render_fbo));
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
-    try self.rendering.bind();
+    try self.lighting_pass.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POSITION_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEX_UNIFORM));
@@ -92,14 +93,14 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.base_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
-    try self.rendering.set_vec3("u_view_pos", App.game_state().camera.pos);
+    try self.lighting_pass.set_vec3("u_view_pos", App.game_state().camera.pos);
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
-    try self.postprocessing.bind();
+    try self.postprocessing_pass.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + RENDERED_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.rendered_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
@@ -207,6 +208,24 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
 
 pub fn on_frame_start(self: *Renderer) !void {
     try self.block_renderer.on_frame_start();
+
+    try App.gui().add_to_frame(Renderer, "FBO", self, draw_fbo_debug, @src());
+}
+
+fn draw_fbo_debug(self: *Renderer) !void {
+    const uv_min: c.ImVec2 = .{ .x = 0, .y = 1 };
+    const uv_max: c.ImVec2 = .{ .x = 1, .y = 0 };
+    const scale = 0.1;
+    const size: c.ImVec2 = .{
+        .x = @as(f32, @floatFromInt(self.cur_width)) * scale,
+        .y = @as(f32, @floatFromInt(self.cur_height)) * scale,
+    };
+
+    inline for (.{ "position_tex", "normal_tex", "base_tex", "depth_tex" }) |name| {
+        c.igText(name);
+        const tex: c.ImTextureRef = .{ ._TexID = @intCast(@field(self, name)) };
+        c.igImage(tex, size, uv_min, uv_max);
+    }
 }
 
 fn init_buffers(self: *Renderer) !void {
@@ -239,23 +258,23 @@ fn init_screen(self: *Renderer) !void {
 
     var render_sources: [2]Shader.Source = .{
         .{ .name = "render_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
-        .{ .name = "render_frag", .sources = &.{rendering_frag}, .kind = gl.FRAGMENT_SHADER },
+        .{ .name = "render_frag", .sources = &.{lighting_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.rendering = try .init(&render_sources);
-    try self.rendering.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
-    try self.rendering.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 2, 1, 1 }));
-    try self.rendering.set_vec3("u_light_color", .{ 1, 1, 0.9 });
-    try self.rendering.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
-    try self.rendering.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
-    try self.rendering.set_int("u_base_tex", BASE_TEX_UNIFORM);
+    self.lighting_pass = try .init(&render_sources);
+    try self.lighting_pass.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
+    try self.lighting_pass.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 1, 1, 1 }));
+    try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 0.9 });
+    try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
+    try self.lighting_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
+    try self.lighting_pass.set_int("u_base_tex", BASE_TEX_UNIFORM);
 
     var post_sources: [2]Shader.Source = .{
         .{ .name = "post_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         .{ .name = "post_frag", .sources = &.{postprocessing_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.postprocessing = try .init(&post_sources);
-    try self.postprocessing.set_int("u_rendered_tex", RENDERED_TEX_UNIFORM);
-    try self.postprocessing.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
+    self.postprocessing_pass = try .init(&post_sources);
+    try self.postprocessing_pass.set_int("u_rendered_tex", RENDERED_TEX_UNIFORM);
+    try self.postprocessing_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
 }
 
 const QuadVert = struct {
@@ -296,7 +315,7 @@ const postprocessing_frag =
     \\  out_color = texture(u_rendered_tex, frag_uv);
     \\}
 ;
-const rendering_frag =
+const lighting_frag =
     \\#version 460 core
     \\in vec2 frag_uv;
     \\out vec4 out_color;

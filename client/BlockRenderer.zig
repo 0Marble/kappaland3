@@ -228,14 +228,14 @@ pub fn on_frame_start(self: *Self) !void {
 
 const raw_faces: []const u8 = blk: {
     @setEvalBranchQuota(std.math.maxInt(u32));
-    var normals_data = std.mem.zeroes([4 * BLOCK_FACE_COUNT]u32);
+    var normals_data = std.mem.zeroes([4 * BLOCK_FACE_COUNT]f32);
     for (BlockModel.normals, 0..) |normal, i| {
-        normals_data[1 + 4 * i + 0] = @bitCast(@as(f32, normal[0]));
-        normals_data[1 + 4 * i + 1] = @bitCast(@as(f32, normal[1]));
-        normals_data[1 + 4 * i + 2] = @bitCast(@as(f32, normal[2]));
+        normals_data[4 * i + 0] = normal[0];
+        normals_data[4 * i + 1] = normal[1];
+        normals_data[4 * i + 2] = normal[2];
     }
     const size = 4 * BLOCK_FACE_COUNT * VERTS_PER_FACE * World.CHUNK_SIZE * World.CHUNK_SIZE;
-    var faces_data = std.mem.zeroes([size]u32);
+    var faces_data = std.mem.zeroes([size]f32);
     for (BlockModel.faces, 0..) |face, n| {
         for (0..World.CHUNK_SIZE) |w| {
             for (0..World.CHUNK_SIZE) |h| {
@@ -245,9 +245,9 @@ const raw_faces: []const u8 = blk: {
                     var scale = World.BlockCoords{ .x = 1, .y = 1, .z = 1 };
                     @field(scale, BlockModel.scale[n][0..1]) = w + 1;
                     @field(scale, BlockModel.scale[n][1..2]) = h + 1;
-                    faces_data[4 * idx + 0] = @bitCast(vec[0] * scale.x);
-                    faces_data[4 * idx + 1] = @bitCast(vec[1] * scale.y);
-                    faces_data[4 * idx + 2] = @bitCast(vec[2] * scale.z);
+                    faces_data[4 * idx + 0] = vec[0] * scale.x;
+                    faces_data[4 * idx + 1] = vec[1] * scale.y;
+                    faces_data[4 * idx + 2] = vec[2] * scale.z;
                 }
             }
         }
@@ -303,6 +303,7 @@ fn init_buffers(self: *Self) !void {
         0,
     ));
     try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_BINDING, self.block_model_ubo));
+    Log.log(.debug, "{any}", .{@as([]const f32, @ptrCast(@alignCast(raw_faces)))[0 .. 4 * 6]});
 
     try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
     try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION));
