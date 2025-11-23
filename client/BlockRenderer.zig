@@ -55,12 +55,14 @@ const VERT =
     \\
     \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|wwwwhhhh|tttttttt
     \\                                            // per instance
-    \\uniform mat4 u_vp;
+    \\uniform mat4 u_view;
+    \\uniform mat4 u_proj;
     \\
     \\out vec3 frag_norm;
     \\out vec3 frag_color;
     \\out vec3 frag_pos;
     \\out ivec3 block_coords;
+    \\out float frag_depth;
     \\
     \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
     \\  ivec3 chunk_coords[];
@@ -86,9 +88,11 @@ const VERT =
     \\
     \\  block_coords = ivec3(x, y, z) + 16 * chunk_coords[gl_DrawID];
     \\  frag_pos = faces[face] + block_coords;
+    \\  vec4 frag_pos_view = u_view * vec4(frag_pos, 1);
+    \\  frag_depth = -frag_pos_view.z;
     \\  frag_norm = normals[n];
     \\  frag_color = vec3(x, y, z) / 16.0;
-    \\  gl_Position = u_vp * vec4(frag_pos, 1);
+    \\  gl_Position = u_proj * frag_pos_view;
     \\}
 ;
 
@@ -100,19 +104,24 @@ const FRAG =
 ++ std.fmt.comptimePrint("#define POSITION_LOCATION {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
     \\
 ++ std.fmt.comptimePrint("#define NORMAL_LOCATION {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
+    \\
+++ std.fmt.comptimePrint("#define DEPTH_LOCATION {d}\n", .{Renderer.DEPTH_TEX_ATTACHMENT}) ++
     \\in vec3 frag_color;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
+    \\in float frag_depth;
     \\in flat ivec3 block_coords;
     \\
     \\layout (location=BASE_COLOR_LOCATION) out vec4 out_color;
     \\layout (location=POSITION_LOCATION) out vec4 out_pos;
     \\layout (location=NORMAL_LOCATION) out vec4 out_norm;
+    \\layout (location=DEPTH_LOCATION) out float out_depth;
     \\
     \\void main() {
     \\  out_color = vec4(frag_color, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
+    \\  out_depth = frag_depth;
     \\}
 ;
 
@@ -164,7 +173,8 @@ pub fn draw(self: *Self) !void {
     self.seen_cnt = try self.compute_seen();
     if (self.seen_cnt == 0) return;
 
-    try self.shader.set_mat4("u_vp", App.game_state().camera.vp_mat());
+    try self.shader.set_mat4("u_view", App.game_state().camera.view_mat());
+    try self.shader.set_mat4("u_proj", App.game_state().camera.proj_mat());
 
     try gl_call(gl.BindVertexArray(self.vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));

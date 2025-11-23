@@ -108,8 +108,6 @@ fn init_sdl() !void {
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
             if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
-    try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
-    try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4));
     Log.log(.debug, "Set OpenGL attributes", .{});
 
     app.win = try sdl_call(c.SDL_CreateWindow(
@@ -128,7 +126,6 @@ fn init_gl() !void {
     try sdl_call(c.SDL_GL_MakeCurrent(app.win, app.gl_ctx));
     try sdl_call(app.gl_procs.init(&c.SDL_GL_GetProcAddress));
     gl.makeProcTableCurrent(&app.gl_procs);
-    try gl_call(gl.Enable(gl.MULTISAMPLE));
     try gl_call(gl.Enable(gl.CULL_FACE));
     try gl_call(gl.FrontFace(gl.CW));
     try gl_call(gl.Enable(gl.DEPTH_TEST));

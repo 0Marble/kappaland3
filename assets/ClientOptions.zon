@@ -41,4 +41,10 @@
         .desc = "Store callback source locations in DebugUi",
         .default = true,
     },
+    .{
+        .type = .bool,
+        .name = "enable_ssao",
+        .desc = "Enable SSAO",
+        .default = false,
+    },
 }
