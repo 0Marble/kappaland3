@@ -65,21 +65,23 @@ const VERT =
     \\uniform mat4 u_proj;
     \\
     \\out vec3 frag_norm;
+    \\out vec2 frag_uv;
     \\out vec3 frag_color;
     \\out vec3 frag_pos;
     \\out ivec3 block_coords;
     \\out float frag_depth;
-    \\out float occlusion;
+    \\out uint frag_occlusion;
     \\
     \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
     \\  ivec3 chunk_coords[];
     \\};
     \\
-    \\layout(std140, binding = BLOCK_DATA_LOCATION) uniform Block {
+    \\layout (std140, binding = BLOCK_DATA_LOCATION) uniform Block {
     \\  vec3 normals[BLOCK_FACE_COUNT];
     \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE];
     \\};
     \\vec3 colors[4] = {vec3(0,0,0),vec3(0.2,0.2,0.2),vec3(0.6,0.4,0.2),vec3(0.2,0.7,0.3)};
+    \\vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
     \\
     \\void main() {
     \\  uint x = (vert_data_a & uint(0xF0000000)) >> 28;
@@ -94,13 +96,14 @@ const VERT =
     \\  uint p = gl_VertexID;
     \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
     \\
+    \\  frag_occlusion = o;
+    \\  frag_uv = uvs[p];
     \\  block_coords = ivec3(x, y, z) + 16 * chunk_coords[gl_DrawID];
     \\  frag_pos = faces[face] + block_coords;
     \\  vec4 frag_pos_view = u_view * vec4(frag_pos, 1);
     \\  frag_depth = -frag_pos_view.z;
     \\  frag_norm = normals[n];
     \\  frag_color = vec3(x, y, z) / 16.0;
-    \\  occlusion = ((o & uint(1 << gl_VertexID)) == 0 ? 0 : 1);
     \\  gl_Position = u_proj * frag_pos_view;
     \\}
 ;
@@ -120,14 +123,43 @@ const FRAG =
     \\in vec3 frag_pos;
     \\in float frag_depth;
     \\in flat ivec3 block_coords;
+    \\in flat uint frag_occlusion;
+    \\in vec2 frag_uv;
     \\
     \\layout (location=BASE_COLOR_LOCATION) out vec4 out_color;
     \\layout (location=POSITION_LOCATION) out vec4 out_pos;
     \\layout (location=NORMAL_LOCATION) out vec4 out_norm;
     \\layout (location=DEPTH_LOCATION) out float out_depth;
     \\
+    \\uniform float u_occlusion_factor = 0.98;
+    \\uniform float u_occlusion_size = 0.4;
+    \\
+    \\float dist(vec2 p, vec2 a, vec2 b) {
+    \\    vec2 n = b - a;
+    \\    float t = dot(p - a, n) / dot(n, n);
+    \\    if (t >= 0.0 && t <= 1.0){
+    \\        vec2 q = a + t * n;
+    \\        return length(p - q);
+    \\    }
+    \\    return min(length(p - a), length(p - b));
+    \\}
+    \\float get_occlusion(uint mask, uint dir) {
+    \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
+    \\}
+    \\float occlusion(vec2 uv, uint mask) {
+    \\  float x = u_occlusion_size * 0.5;
+    \\  float l = dist(uv, vec2(0,x), vec2(0,1-x)) * (1.0 / get_occlusion(mask, 3));
+    \\  float r = dist(uv, vec2(1,x), vec2(1,1-x)) * (1.0 / get_occlusion(mask, 2));
+    \\  float t = dist(uv, vec2(x,1), vec2(1-x,1)) * (1.0 / get_occlusion(mask, 0));
+    \\  float b = dist(uv, vec2(x,0), vec2(1-x,0)) * (1.0 / get_occlusion(mask, 1));
+    \\    
+    \\  float v = clamp(min(min(l,r),min(t,b)) / u_occlusion_size, 0, 1);
+    \\  return 1+u_occlusion_factor-(1-pow(2, 10*v-10)*(1-u_occlusion_factor));
+    \\}
+    \\
     \\void main() {
-    \\  out_color = vec4(frag_color, 1);
+    \\  out_color = vec4(frag_color, 1) 
+++ (if (Options.enable_ssao) ";" else "* occlusion(frag_uv, frag_occlusion);") ++
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\  out_depth = frag_depth;
@@ -515,7 +547,7 @@ const ChunkMesh = struct {
     }
 
     const FaceSize = struct { w: usize = 0, h: usize = 0 };
-    fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace) VertexData {
+    fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace, occlusion: u4) VertexData {
         var data_a: u32 = 0;
         const x, const y, const z = .{ pos.x, pos.y, pos.z };
         const w, const h = .{ size.w, size.h };
@@ -529,7 +561,7 @@ const ChunkMesh = struct {
         data_a |= @as(u32, @intFromEnum(self.get(pos)));
 
         var data_b: u32 = 0;
-        data_b |= @as(u32, 0b1000) << 28;
+        data_b |= @as(u32, occlusion) << 28;
 
         return @as(VertexData, @intCast(data_a)) << 32 | @as(VertexData, @intCast(data_b));
     }
@@ -549,6 +581,15 @@ const ChunkMesh = struct {
         };
     }
 
+    const occlusion_mask: [BLOCK_FACE_COUNT][4]u4 = .{
+        .{ 0b0010, 0b0001, 0b1000, 0b0100 }, // front
+        .{ 0b0010, 0b0001, 0b0100, 0b1000 }, // back
+        .{ 0b0010, 0b0001, 0b0100, 0b1000 }, // right
+        .{ 0b0010, 0b0001, 0b1000, 0b0100 }, // left
+        .{ 0b0001, 0b0010, 0b1000, 0b0100 }, // top
+        .{ 0b0001, 0b0010, 0b0100, 0b1000 }, // bot
+    };
+
     fn mesh_slice(self: *ChunkMesh, comptime face: World.BlockFace, layer: usize) !void {
         const dir = BlockModel.scale[@intFromEnum(face)];
         const w_dim = dir[0..1];
@@ -564,15 +605,53 @@ const ChunkMesh = struct {
                 @field(pos, o_dim) = layer;
                 if (!self.visible(pos, face)) continue;
 
-                const size = if (Options.greedy_meshing)
-                    self.greedy_size(pos, face, &visited)
-                else
-                    self.one_by_one_size(pos, face);
-                try self.faces.append(App.gpa(), self.pack(pos, size, face));
+                // const size = if (Options.greedy_meshing)
+                //     self.greedy_size(pos, face, &visited)
+                // else
+                const size = self.one_by_one_size(pos, face, &visited);
+                const world_pos = World.world_coords(self.chunk.?.coords, pos);
+
+                var occlusion: u4 = 0;
+                const front = face.next_to(world_pos);
+
+                var below = front;
+                @field(below, h_dim) -= 1;
+                if ((self.get_at_world(below) orelse .air) != .air) {
+                    occlusion |= occlusion_mask[@intFromEnum(face)][0];
+                }
+                var above = front;
+                @field(above, h_dim) += 1;
+                if ((self.get_at_world(above) orelse .air) != .air) {
+                    occlusion |= occlusion_mask[@intFromEnum(face)][1];
+                }
+                var left = front;
+                @field(left, w_dim) -= 1;
+                if ((self.get_at_world(left) orelse .air) != .air) {
+                    occlusion |= occlusion_mask[@intFromEnum(face)][2];
+                }
+                var right = front;
+                @field(right, w_dim) += 1;
+                if ((self.get_at_world(right) orelse .air) != .air) {
+                    occlusion |= occlusion_mask[@intFromEnum(face)][3];
+                }
+
+                try self.faces.append(App.gpa(), self.pack(pos, size, face, occlusion));
             }
         }
     }
-    fn one_by_one_size(self: *ChunkMesh, origin: World.BlockCoords, comptime face: World.BlockFace) FaceSize {
+    fn get_at_world(self: *ChunkMesh, world_pos: World.WorldCoords) ?World.BlockId {
+        const chunk = World.world_to_chunk(world_pos);
+        if (!std.meta.eql(chunk, self.chunk.?.coords)) return null;
+        return self.chunk.?.get(World.world_to_block(world_pos));
+    }
+
+    fn one_by_one_size(
+        self: *ChunkMesh,
+        origin: World.BlockCoords,
+        comptime face: World.BlockFace,
+        visited: *[CHUNK_SIZE][CHUNK_SIZE]bool,
+    ) FaceSize {
+        _ = visited;
         if (self.visible(origin, face)) {
             return .{ .w = 1, .h = 1 };
         } else {
@@ -659,6 +738,18 @@ const ChunkMesh = struct {
         for (self.corners()) |p| center += p;
         center /= @splat(8);
         return .{ center[0], center[1], center[2], 8 * @sqrt(3.0) };
+    }
+
+    fn next_to(pos: World.BlockCoords, dir: World.BlockFace) ?World.BlockCoords {
+        switch (dir) {
+            .front => if (pos.z + 1 < CHUNK_SIZE) return .{ .x = pos.x, .y = pos.y, .z = pos.z + 1 },
+            .right => if (pos.x + 1 < CHUNK_SIZE) return .{ .x = pos.x + 1, .y = pos.y, .z = pos.z },
+            .up => if (pos.y + 1 < CHUNK_SIZE) return .{ .x = pos.x, .y = pos.y + 1, .z = pos.z },
+            .back => if (pos.z > 0) return .{ .x = pos.x, .y = pos.y, .z = pos.z - 1 },
+            .left => if (pos.x > 0) return .{ .x = pos.x - 1, .y = pos.y, .z = pos.z },
+            .bot => if (pos.y > 0) return .{ .x = pos.x, .y = pos.y - 1, .z = pos.z },
+        }
+        return null;
     }
 };
 

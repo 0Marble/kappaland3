@@ -26,6 +26,27 @@ pub fn Xyz(comptime T: type) type {
     };
 }
 
+pub fn Xy(comptime T: type) type {
+    return struct {
+        x: T = 0,
+        y: T = 0,
+
+        pub fn init(x: T, y: T) @This() {
+            return .{ .x = x, .y = y };
+        }
+
+        pub fn add(self: @This(), other: @This()) @This() {
+            return .{ .x = self.x + other.x, .y = self.y + other.y };
+        }
+        pub fn sub(self: @This(), other: @This()) @This() {
+            return .{ .x = self.x - other.x, .y = self.y - other.y };
+        }
+        pub fn as_vec(self: @This()) @Vector(2, T) {
+            return .{ self.x, self.y };
+        }
+    };
+}
+
 pub const MemoryUsage = struct {
     bytes: usize,
 

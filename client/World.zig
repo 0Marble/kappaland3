@@ -74,16 +74,24 @@ fn to_world_coord(pos: zm.Vec3f) WorldCoords {
     return .init(@intFromFloat(@floor(pos[0])), @intFromFloat(@floor(pos[1])), @intFromFloat(@floor(pos[2])));
 }
 
-fn world_to_chunk(w: WorldCoords) ChunkCoords {
+pub fn world_to_chunk(w: WorldCoords) ChunkCoords {
     return .init(@divFloor(w.x, CHUNK_SIZE), @divFloor(w.y, CHUNK_SIZE), @divFloor(w.z, CHUNK_SIZE));
 }
 
-fn world_to_block(w: WorldCoords) BlockCoords {
+pub fn world_to_block(w: WorldCoords) BlockCoords {
     return .init(
         @intCast(@mod(w.x, CHUNK_SIZE)),
         @intCast(@mod(w.y, CHUNK_SIZE)),
         @intCast(@mod(w.z, CHUNK_SIZE)),
     );
+}
+
+pub fn world_coords(chunk: ChunkCoords, block: BlockCoords) WorldCoords {
+    return .{
+        .x = chunk.x * CHUNK_SIZE + @as(i32, @intCast(block.x)),
+        .y = chunk.y * CHUNK_SIZE + @as(i32, @intCast(block.y)),
+        .z = chunk.z * CHUNK_SIZE + @as(i32, @intCast(block.z)),
+    };
 }
 
 const RaycastResult = struct {
@@ -134,7 +142,7 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
     return null;
 }
 
-fn get_block(self: *World, coords: WorldCoords) ?BlockId {
+pub fn get_block(self: *World, coords: WorldCoords) ?BlockId {
     const chunk = self.active.get(world_to_chunk(coords)) orelse return null;
     return chunk.get(world_to_block(coords));
 }
