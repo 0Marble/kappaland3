@@ -86,8 +86,8 @@ const VERT =
     \\
     \\  block_coords = ivec3(x, y, z) + 16 * chunk_coords[gl_DrawID];
     \\  frag_pos = faces[face] + block_coords;
-    \\  frag_color = vec3(x, y, z) / 16.0;
     \\  frag_norm = normals[n];
+    \\  frag_color = vec3(x, y, z) / 16.0;
     \\  gl_Position = u_vp * vec4(frag_pos, 1);
     \\}
 ;
@@ -164,8 +164,7 @@ pub fn draw(self: *Self) !void {
     self.seen_cnt = try self.compute_seen();
     if (self.seen_cnt == 0) return;
 
-    const vp = App.game_state().camera.as_mat();
-    try self.shader.set_mat4("u_vp", vp);
+    try self.shader.set_mat4("u_vp", App.game_state().camera.vp_mat());
 
     try gl_call(gl.BindVertexArray(self.vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
@@ -303,7 +302,6 @@ fn init_buffers(self: *Self) !void {
         0,
     ));
     try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_BINDING, self.block_model_ubo));
-    Log.log(.debug, "{any}", .{@as([]const f32, @ptrCast(@alignCast(raw_faces)))[0 .. 4 * 6]});
 
     try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
     try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION));

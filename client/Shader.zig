@@ -124,6 +124,11 @@ pub fn set_vec3(self: *Shader, name: [:0]const u8, vec: zm.Vec3f) !void {
     const loc = try self.get_uniform_location(name);
     try gl_call(gl.Uniform3f(loc, vec[0], vec[1], vec[2]));
 }
+pub fn set_vec2(self: *Shader, name: [:0]const u8, vec: zm.Vec2f) !void {
+    try self.bind();
+    const loc = try self.get_uniform_location(name);
+    try gl_call(gl.Uniform2f(loc, vec[0], vec[1]));
+}
 pub fn set_float(self: *Shader, name: [:0]const u8, x: f32) !void {
     try self.bind();
     const loc = try self.get_uniform_location(name);

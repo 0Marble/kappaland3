@@ -17,10 +17,11 @@ fov: f32,
 aspect: f32,
 controller: Controller,
 
-mat_changed: bool,
-cached_mat: zm.Mat4f,
-cached_inv: zm.Mat4f,
-cached_forward: zm.Vec3f,
+mat_changed: bool = true,
+cached_mat: zm.Mat4f = .zero(),
+cached_inv: zm.Mat4f = .zero(),
+cached_forward: zm.Vec3f = @splat(0),
+cached_view: zm.Mat4f = .zero(),
 
 const Camera = @This();
 const Controls = enum(u32) {
@@ -41,10 +42,6 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .angles = @splat(0),
         .pos = @splat(0),
         .controller = undefined,
-        .mat_changed = true,
-        .cached_mat = .zero(),
-        .cached_inv = .zero(),
-        .cached_forward = @splat(0),
     };
     try self.controller.init(self);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_W), .front);
@@ -142,18 +139,23 @@ fn recalculate(self: *Camera) void {
         .multiply(zm.Mat4f.rotation(.{ 1, 0, 0 }, self.angles[0]));
     self.cached_forward = zm.vec.xyz(rot.multiplyVec4(.{ 0, 0, -1, 1 }));
     const up = zm.vec.xyz(rot.multiplyVec4(.{ 0, 1, 0, 1 }));
-    const view = zm.Mat4f.lookAt(self.pos, self.pos + self.cached_forward, up);
-    self.cached_mat = self.proj().multiply(view);
+    self.cached_view = zm.Mat4f.lookAt(self.pos, self.pos + self.cached_forward, up);
+    self.cached_mat = self.proj_mat().multiply(self.cached_view);
     self.cached_inv = self.cached_mat.inverse();
     self.mat_changed = false;
 }
 
-pub fn as_mat(self: *Camera) zm.Mat4f {
+pub fn vp_mat(self: *Camera) zm.Mat4f {
     self.recalculate();
     return self.cached_mat;
 }
 
-pub fn proj(self: *Camera) zm.Mat4f {
+pub fn view_mat(self: *Camera) zm.Mat4f {
+    self.recalculate();
+    return self.cached_view;
+}
+
+pub fn proj_mat(self: *Camera) zm.Mat4f {
     const f = 1.0 / @tan(self.fov * 0.5);
     const g = f / self.aspect;
     return zm.Mat4f{ .data = .{
@@ -184,7 +186,7 @@ pub fn screen_to_world_dir(self: *Camera, px: f32, py: f32) zm.Vec3f {
 }
 
 pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
-    const mat = self.as_mat();
+    const mat = self.vp_mat();
     var ndc = mat.multiplyVec4(.{ point[0], point[1], point[2], 1.0 });
     ndc /= @splat(ndc[3]);
     return @abs(ndc[0]) < 1 and @abs(ndc[1]) < 1 and ndc[2] > 0;
