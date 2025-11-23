@@ -18,8 +18,9 @@ const c = @import("c.zig").c;
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
 const EXPECTED_LOADED_CHUNKS_COUNT = World.DIM * World.DIM * World.HEIGHT;
-const MINIMAL_MESH_SIZE = 4 * 1024;
-const VERT_DATA_LOCATION = 0;
+const MINIMAL_MESH_SIZE = @sizeOf(VertexData) * 1024;
+const VERT_DATA_LOCATION_A = 0;
+const VERT_DATA_LOCATION_B = 1;
 const CHUNK_DATA_BINDING = 1;
 const BLOCK_DATA_BINDING = 3;
 const VERT_DATA_BINDING = 4;
@@ -30,6 +31,8 @@ const W_OFFSET = VERTS_PER_FACE * CHUNK_SIZE;
 const H_OFFSET = VERTS_PER_FACE;
 const P_OFFSET = 1;
 
+const VertexData = u64;
+
 const VERT =
     \\#version 460 core
     \\
@@ -37,7 +40,9 @@ const VERT =
     \\
 ++ std.fmt.comptimePrint("#define VERTS_PER_FACE {d}\n", .{VERTS_PER_FACE}) ++
     \\
-++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION {d}\n", .{VERT_DATA_LOCATION}) ++
+++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION_A {d}\n", .{VERT_DATA_LOCATION_A}) ++
+    \\
+++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION_B {d}\n", .{VERT_DATA_LOCATION_B}) ++
     \\
 ++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_BINDING}) ++
     \\
@@ -53,7 +58,8 @@ const VERT =
     \\
 ++ std.fmt.comptimePrint("#define P_OFFSET {d}\n", .{P_OFFSET}) ++
     \\
-    \\layout (location = VERT_DATA_LOCATION) in uint vert_data;    // xxxxyyyy|zzzz?nnn|wwwwhhhh|tttttttt
+    \\layout (location = VERT_DATA_LOCATION_A) in uint vert_data_a;    // xxxxyyyy|zzzz?nnn|wwwwhhhh|tttttttt
+    \\layout (location = VERT_DATA_LOCATION_B) in uint vert_data_b;    // oooo????|????????|????????|????????
     \\                                            // per instance
     \\uniform mat4 u_view;
     \\uniform mat4 u_proj;
@@ -63,6 +69,7 @@ const VERT =
     \\out vec3 frag_pos;
     \\out ivec3 block_coords;
     \\out float frag_depth;
+    \\out float occlusion;
     \\
     \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
     \\  ivec3 chunk_coords[];
@@ -75,13 +82,14 @@ const VERT =
     \\vec3 colors[4] = {vec3(0,0,0),vec3(0.2,0.2,0.2),vec3(0.6,0.4,0.2),vec3(0.2,0.7,0.3)};
     \\
     \\void main() {
-    \\  uint x = (vert_data & uint(0xF0000000)) >> 28;
-    \\  uint y = (vert_data & uint(0x0F000000)) >> 24;
-    \\  uint z = (vert_data & uint(0x00F00000)) >> 20;
-    \\  uint n = (vert_data & uint(0x000F0000)) >> 16;
-    \\  uint w = (vert_data & uint(0x0000F000)) >> 12;
-    \\  uint h = (vert_data & uint(0x00000F00)) >> 8;
-    \\  uint t = (vert_data & uint(0x000000FF));
+    \\  uint x = (vert_data_a & uint(0xF0000000)) >> 28;
+    \\  uint y = (vert_data_a & uint(0x0F000000)) >> 24;
+    \\  uint z = (vert_data_a & uint(0x00F00000)) >> 20;
+    \\  uint n = (vert_data_a & uint(0x000F0000)) >> 16;
+    \\  uint w = (vert_data_a & uint(0x0000F000)) >> 12;
+    \\  uint h = (vert_data_a & uint(0x00000F00)) >> 8;
+    \\  uint t = (vert_data_a & uint(0x000000FF));
+    \\  uint o = (vert_data_b & uint(0xF0000000)) >> 28;
     \\
     \\  uint p = gl_VertexID;
     \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
@@ -92,6 +100,7 @@ const VERT =
     \\  frag_depth = -frag_pos_view.z;
     \\  frag_norm = normals[n];
     \\  frag_color = vec3(x, y, z) / 16.0;
+    \\  occlusion = ((o & uint(1 << gl_VertexID)) == 0 ? 0 : 1);
     \\  gl_Position = u_proj * frag_pos_view;
     \\}
 ;
@@ -313,10 +322,16 @@ fn init_buffers(self: *Self) !void {
     ));
     try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_BINDING, self.block_model_ubo));
 
-    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
-    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION));
-    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION, 1, gl.UNSIGNED_INT, 0));
-    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION, VERT_DATA_BINDING));
+    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(VertexData)));
+
+    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION_A));
+    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION_A, 1, gl.UNSIGNED_INT, 4));
+    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION_A, VERT_DATA_BINDING));
+
+    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION_B));
+    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION_B, 1, gl.UNSIGNED_INT, 0));
+    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION_B, VERT_DATA_BINDING));
+
     try gl_call(gl.VertexBindingDivisor(VERT_DATA_BINDING, 1));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
@@ -396,7 +411,7 @@ fn compute_seen(self: *Self) !usize {
         indirect[i] = Indirect{
             .count = 6,
             .instance_count = @intCast(mesh.faces.items.len),
-            .base_instance = @intCast(@divExact(range.offset, 4)),
+            .base_instance = @intCast(@divExact(range.offset, @sizeOf(VertexData))),
             .base_vertex = 0,
             .first_index = 0,
         };
@@ -442,7 +457,7 @@ fn compute_seen(self: *Self) !usize {
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
-    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(u32)));
+    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(VertexData)));
     try gl_call(gl.BindVertexArray(0));
 
     return counter;
@@ -454,7 +469,7 @@ const ChunkMesh = struct {
     const Z_OFFSET = Chunk.Z_OFFSET;
 
     chunk: ?*Chunk,
-    faces: std.ArrayListUnmanaged(u32),
+    faces: std.ArrayListUnmanaged(VertexData),
     handle: GpuAlloc.Handle,
 
     fn create() !*ChunkMesh {
@@ -500,20 +515,23 @@ const ChunkMesh = struct {
     }
 
     const FaceSize = struct { w: usize = 0, h: usize = 0 };
-    fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace) u32 {
-        var res: u32 = 0;
+    fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace) VertexData {
+        var data_a: u32 = 0;
         const x, const y, const z = .{ pos.x, pos.y, pos.z };
         const w, const h = .{ size.w, size.h };
 
-        res |= @as(u32, @intCast(x)) << 28;
-        res |= @as(u32, @intCast(y)) << 24;
-        res |= @as(u32, @intCast(z)) << 20;
-        res |= @as(u32, @intFromEnum(face)) << 16;
-        res |= @as(u32, @intCast(w - 1)) << 12;
-        res |= @as(u32, @intCast(h - 1)) << 8;
-        res |= @as(u32, @intFromEnum(self.get(pos)));
+        data_a |= @as(u32, @intCast(x)) << 28;
+        data_a |= @as(u32, @intCast(y)) << 24;
+        data_a |= @as(u32, @intCast(z)) << 20;
+        data_a |= @as(u32, @intFromEnum(face)) << 16;
+        data_a |= @as(u32, @intCast(w - 1)) << 12;
+        data_a |= @as(u32, @intCast(h - 1)) << 8;
+        data_a |= @as(u32, @intFromEnum(self.get(pos)));
 
-        return res;
+        var data_b: u32 = 0;
+        data_b |= @as(u32, 0b1000) << 28;
+
+        return @as(VertexData, @intCast(data_a)) << 32 | @as(VertexData, @intCast(data_b));
     }
 
     fn visible(self: *ChunkMesh, pos: World.BlockCoords, face: World.BlockFace) bool {
@@ -645,7 +663,7 @@ const ChunkMesh = struct {
 };
 
 fn update_mesh(self: *Self, mesh: *ChunkMesh) !void {
-    const actual_size = mesh.faces.items.len * @sizeOf(u32);
+    const actual_size = mesh.faces.items.len * @sizeOf(VertexData);
     const requested_size = @max(MINIMAL_MESH_SIZE, actual_size);
     if (mesh.handle == .invalid) {
         mesh.handle = try self.faces.alloc(requested_size, .@"4");
