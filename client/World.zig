@@ -117,16 +117,23 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
 
     var iter_cnt: usize = 0;
     while (cur_t <= max_t) : (iter_cnt += 1) {
-        std.debug.assert(iter_cnt < 100);
+        if (iter_cnt >= 100) {
+            Log.log(.warn, "The raycasting bug: {}", .{ray});
+            Log.log(.warn, "Goodbye!", .{});
+            std.debug.assert(false);
+        }
 
         const cur_pos = r.at(cur_t);
 
         const dx = @select(f32, @ceil(cur_pos) == cur_pos, one, @ceil(cur_pos) - cur_pos);
         const dt = dx / r.direction;
 
-        var j: usize = 0;
-        if (dt[j] > dt[1]) j = 1;
-        if (dt[j] > dt[2]) j = 2;
+        const eps = 1e-4;
+        var min_dim: ?usize = null;
+        for (0..3) |i| {
+            if ((min_dim == null or dt[min_dim.?] > dt[i]) and @abs(dt[i]) > eps) min_dim = i;
+        }
+        const j = if (min_dim) |m| m else return null;
 
         const cur_block = to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
         const block = self.get_block(cur_block);

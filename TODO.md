@@ -18,6 +18,16 @@
 - Ambient occlusion - right now the block lighting is very flat, its hard to see anything
 - How does transparensy, non-block models, textures work?
 
+# Debt
+
+- crash:
+    1. src: `GpuAlloc.zig:171:9`, error: `8246:824c:1:9146: GL_INVALID_VALUE in glCopyBufferSubData(overlapping src/dst)`
+    2. Happens if you just keep placing a bunch of blocks, running around in a circle.
+- visual: Face AO does not take neighbouring chunks into account
+- visual/probably-unfixable: SSAO cutoff, i.e. when you get close to a block face and slowly rotate the camera
+- fps: what is the state of the game on iGPU?
+- build: we depend on system install of SDL3.
+
 # Done
 
 - 30.11.2025:
@@ -26,6 +36,7 @@
     structured format. That being said, a better option may be to put the `client.zon` file into `assets`, and use it to genetate
     a basic `settings.txt` file. That way we can build the defaults into the binary (i.e. the user may delete and break everything).
     It also simplifies serialization (right now unsupported).
+    3. Seemingly fixed the raycast bug, buy setting a minimum amout of `dt`.
 
 - 23.11.2025:
     1. Implemented SSAO, this technique really needs some parameter fine-tuning to get rid of noise
