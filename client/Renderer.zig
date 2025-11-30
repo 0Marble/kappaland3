@@ -13,8 +13,8 @@ const zm = @import("zm");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
 
-const SSAO_SAMPLES_COUNT = 16;
-const NOISE_SIZE = 16;
+const SSAO_SAMPLES_COUNT = 8;
+const NOISE_SIZE = 4;
 
 pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
@@ -528,8 +528,8 @@ const ssao_frag =
     \\uniform sampler2D u_depth_tex;
     \\
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
-    \\uniform float u_radius = 1.0 / 4.0;
-    \\uniform float u_bias = 0.15;
+    \\uniform float u_radius = 1.0 / 8.0;
+    \\uniform float u_bias = 0.1;
     \\uniform vec2 u_noise_scale;
     \\uniform mat4 u_vp;
     \\uniform mat4 u_view;

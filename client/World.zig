@@ -115,7 +115,10 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
     }
     var prev_block = to_world_coord(ray.origin);
 
-    while (cur_t <= max_t) {
+    var iter_cnt: usize = 0;
+    while (cur_t <= max_t) : (iter_cnt += 1) {
+        std.debug.assert(iter_cnt < 100);
+
         const cur_pos = r.at(cur_t);
 
         const dx = @select(f32, @ceil(cur_pos) == cur_pos, one, @ceil(cur_pos) - cur_pos);

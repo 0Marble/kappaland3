@@ -118,6 +118,12 @@ const FRAG =
 ++ std.fmt.comptimePrint("#define NORMAL_LOCATION {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
     \\
 ++ std.fmt.comptimePrint("#define DEPTH_LOCATION {d}\n", .{Renderer.DEPTH_TEX_ATTACHMENT}) ++
+    \\
+    \\#define AO_LEFT 3
+    \\#define AO_RIGHT 2
+    \\#define AO_TOP 1
+    \\#define AO_BOT 0
+    \\
     \\in vec3 frag_color;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
@@ -131,35 +137,21 @@ const FRAG =
     \\layout (location=NORMAL_LOCATION) out vec4 out_norm;
     \\layout (location=DEPTH_LOCATION) out float out_depth;
     \\
-    \\uniform float u_occlusion_factor = 0.98;
-    \\uniform float u_occlusion_size = 0.4;
+    \\uniform float u_occlusion_factor = 0.7;
     \\
-    \\float dist(vec2 p, vec2 a, vec2 b) {
-    \\    vec2 n = b - a;
-    \\    float t = dot(p - a, n) / dot(n, n);
-    \\    if (t >= 0.0 && t <= 1.0){
-    \\        vec2 q = a + t * n;
-    \\        return length(p - q);
-    \\    }
-    \\    return min(length(p - a), length(p - b));
-    \\}
     \\float get_occlusion(uint mask, uint dir) {
     \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
     \\}
     \\float occlusion(vec2 uv, uint mask) {
-    \\  float x = u_occlusion_size * 0.5;
-    \\  float l = dist(uv, vec2(0,x), vec2(0,1-x)) * (1.0 / get_occlusion(mask, 3));
-    \\  float r = dist(uv, vec2(1,x), vec2(1,1-x)) * (1.0 / get_occlusion(mask, 2));
-    \\  float t = dist(uv, vec2(x,1), vec2(1-x,1)) * (1.0 / get_occlusion(mask, 0));
-    \\  float b = dist(uv, vec2(x,0), vec2(1-x,0)) * (1.0 / get_occlusion(mask, 1));
-    \\    
-    \\  float v = clamp(min(min(l,r),min(t,b)) / u_occlusion_size, 0, 1);
-    \\  return 1+u_occlusion_factor-(1-pow(2, 10*v-10)*(1-u_occlusion_factor));
+    \\  float l = get_occlusion(mask, AO_LEFT) * (1 - uv.x) * (1 - u_occlusion_factor);
+    \\  float r = get_occlusion(mask, AO_RIGHT) * uv.x * (1 - u_occlusion_factor);
+    \\  float t = get_occlusion(mask, AO_TOP) * (1 - uv.y) * (1 - u_occlusion_factor);
+    \\  float b = get_occlusion(mask, AO_BOT) * uv.y * (1 - u_occlusion_factor);
+    \\  return 1 - (l + r + t + b) / 4;
     \\}
     \\
     \\void main() {
-    \\  out_color = vec4(frag_color, 1) 
-++ (if (Options.enable_ssao) ";" else "* occlusion(frag_uv, frag_occlusion);") ++
+    \\  out_color = vec4(frag_color, 1) * occlusion(frag_uv, frag_occlusion);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\  out_depth = frag_depth;
