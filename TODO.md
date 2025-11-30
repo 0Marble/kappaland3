@@ -37,6 +37,9 @@
     a basic `settings.txt` file. That way we can build the defaults into the binary (i.e. the user may delete and break everything).
     It also simplifies serialization (right now unsupported).
     3. Seemingly fixed the raycast bug, buy setting a minimum amout of `dt`.
+    4. SSAO: fixed a floating point precision issue: going over powers of 2 created banding artifacts.
+    5. SSAO: using SSAO only within some distance range (i.e. 5-30 blocks). 
+    SSAO improves image clarity quite a bit when it is just in the background, but being close-up, there are very notisable artifacts.
 
 - 23.11.2025:
     1. Implemented SSAO, this technique really needs some parameter fine-tuning to get rid of noise
