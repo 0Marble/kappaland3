@@ -14,6 +14,7 @@ const gl_call = util.gl_call;
 const Renderer = @import("Renderer.zig");
 const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
+const Ecs = @import("libmine").Ecs;
 
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
@@ -138,6 +139,7 @@ const FRAG =
     \\layout (location=DEPTH_LOCATION) out float out_depth;
     \\
     \\uniform float u_occlusion_factor = 0.7;
+    \\uniform bool u_enable_face_occlusion = true;
     \\
     \\float get_occlusion(uint mask, uint dir) {
     \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
@@ -151,7 +153,7 @@ const FRAG =
     \\}
     \\
     \\void main() {
-    \\  out_color = vec4(frag_color, 1) * occlusion(frag_uv, frag_occlusion);
+    \\  out_color = vec4(frag_color, 1) * (u_enable_face_occlusion ? occlusion(frag_uv, frag_occlusion) : 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\  out_depth = frag_depth;
@@ -173,6 +175,8 @@ freelist: std.ArrayListUnmanaged(*ChunkMesh),
 triangle_count: usize,
 seen_cnt: usize,
 
+eid: Ecs.EntityRef,
+
 const Self = @This();
 
 pub fn init(self: *Self) !void {
@@ -184,6 +188,37 @@ pub fn init(self: *Self) !void {
 
     try self.init_buffers();
     try self.init_shader();
+
+    self.eid = try App.ecs().spawn();
+    try self.on_setting_change_set_uniform(".main.renderer.face_ao", "shader", "u_enable_face_occlusion", bool);
+}
+
+fn on_setting_change_set_uniform(
+    self: *Self,
+    setting: []const u8,
+    comptime pass_name: []const u8,
+    comptime uniform: [:0]const u8,
+    comptime T: type,
+) !void {
+    const evt = try App.settings().settings_change_event(T, setting);
+    try App.ecs().add_event_listener(self.eid, T, *Self, evt, self, &(struct {
+        fn callback(this: *Self, vals: []T) void {
+            if (Options.renderer_log_settings_changed) {
+                Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
+            }
+            const last = vals[vals.len - 1];
+            const pass: *Shader = &@field(this, pass_name);
+            const res = switch (T) {
+                bool => pass.set_uint(uniform, if (last) 1 else 0),
+                i32 => pass.set_int(uniform, last),
+                f32 => pass.set_float(uniform, last),
+                else => @compileError("Unsupported uniform type: " ++ @typeName(T)),
+            };
+            res catch |err| {
+                Log.log(.warn, "Couldn't set '{s}' uniform for pass '{s}': {}", .{ uniform, pass_name, err });
+            };
+        }
+    }.callback));
 }
 
 pub fn deinit(self: *Self) void {

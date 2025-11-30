@@ -53,4 +53,10 @@
         .desc = "Settings file default location",
         .default = "./client.zon",
     },
+    .{
+        .type = .bool,
+        .name = "renderer_log_settings_changed",
+        .desc = "renderer_log_settings_changed",
+        .default = false,
+    },
 }

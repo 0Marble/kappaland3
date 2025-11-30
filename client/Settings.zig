@@ -201,6 +201,7 @@ const Scanner = struct {
         const children = children_idx.get(self.zoir).array_literal;
 
         try self.stack.append(App.frame_alloc(), idx);
+        defer _ = self.stack.pop();
 
         for (0..children.len) |i| {
             try self.scan_node(children.at(@intCast(i)));

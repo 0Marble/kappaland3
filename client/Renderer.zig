@@ -73,6 +73,7 @@ pub fn init(self: *Renderer) !void {
     try self.on_setting_change_set_uniform(".main.renderer.ssao.blur", "ssao_blur_pass", "u_blur", i32);
     try self.on_setting_change_set_uniform(".main.renderer.ssao.radius", "ssao_pass", "u_radius", f32);
     try self.on_setting_change_set_uniform(".main.renderer.ssao.bias", "ssao_pass", "u_bias", f32);
+    try self.on_setting_change_set_uniform(".main.renderer.ssao.cutoff", "ssao_pass", "u_cutoff", f32);
 }
 
 fn on_setting_change_set_uniform(
@@ -85,7 +86,9 @@ fn on_setting_change_set_uniform(
     const evt = try App.settings().settings_change_event(T, setting);
     try App.ecs().add_event_listener(self.renderer_eid, T, *Renderer, evt, self, &(struct {
         fn callback(this: *Renderer, vals: []T) void {
-            Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
+            if (Options.renderer_log_settings_changed) {
+                Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
+            }
             const last = vals[vals.len - 1];
             const pass: *Shader = &@field(this, pass_name);
             const res = switch (T) {
@@ -464,12 +467,15 @@ fn init_screen(self: *Renderer) !void {
     try self.ssao_blur_pass.set_int("u_tex", SSAO_TEX_UNIFORM);
 
     for (0..SSAO_SAMPLES_COUNT) |i| {
-        self.ssao_samples[i] = zm.vec.normalize(zm.Vec3f{
-            App.rng().float(f32) * 2 - 1,
-            App.rng().float(f32) * 2 - 1,
-            App.rng().float(f32),
+        const phi = App.rng().float(f32) * std.math.pi * 0.4;
+        const theta = App.rng().float(f32) * std.math.pi * 2.0;
+        const r = App.rng().float(f32);
+        const vec = zm.vec.normalize(zm.Vec3f{
+            r * @sin(phi) * @cos(theta),
+            r * @sin(phi) * @sin(theta),
+            r * @cos(phi),
         });
-        self.ssao_samples[i] *= @splat(App.rng().float(f32));
+        self.ssao_samples[i] = vec;
         const name = try std.fmt.allocPrintSentinel(App.frame_alloc(), "u_ssao_samples[{d}]", .{i}, 0);
         try self.ssao_pass.set_vec3(name, self.ssao_samples[i]);
     }
