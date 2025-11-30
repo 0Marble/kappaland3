@@ -70,7 +70,6 @@ pub fn init(self: *Renderer) !void {
     try self.on_setting_change_set_uniform(".main.renderer.ssao.blur", "ssao_blur_pass", "u_blur", i32);
     try self.on_setting_change_set_uniform(".main.renderer.ssao.radius", "ssao_pass", "u_radius", f32);
     try self.on_setting_change_set_uniform(".main.renderer.ssao.bias", "ssao_pass", "u_bias", f32);
-    try self.on_setting_change_set_uniform(".main.renderer.ssao.cutoff", "ssao_pass", "u_cutoff", f32);
 }
 
 fn on_setting_change_set_uniform(
@@ -536,20 +535,21 @@ const ssao_frag =
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
     \\uniform float u_radius = 1.0 / 8.0;
     \\uniform float u_bias = 0.1;
-    \\uniform float u_cutoff = 0.1;
+    \\uniform vec2 u_range = vec2(5, 30);
     \\uniform vec2 u_noise_scale;
     \\uniform mat4 u_proj;
     \\
     \\void main() {
+    \\  out_ao = 0;
     \\  vec3 frag_pos = texture(u_pos_tex, frag_uv).xyz;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float frag_depth = -frag_pos.z;
+    \\  if (frag_depth < u_range.x || frag_depth > u_range.y) return;
     \\  vec3 random_vec = texture(u_noise_tex, frag_uv * u_noise_scale).xyz;
     \\
     \\  vec3 tangent = normalize(random_vec - frag_norm * dot(random_vec, frag_norm));
     \\  vec3 bitangent = cross(frag_norm, tangent);
     \\  mat3 TBN = mat3(tangent, bitangent, frag_norm);
-    \\  out_ao = 0;
     \\
     \\  for (int i = 0; i < SAMPLES_COUNT; i++) {
     \\    vec4 sample_uv = u_proj * vec4((TBN * u_ssao_samples[i]) * u_radius + frag_pos, 1);
@@ -559,8 +559,7 @@ const ssao_frag =
     \\    float t = smoothstep(0.0, 1.0, u_radius / abs(sample_depth - frag_depth));
     \\    out_ao += (sample_depth + u_bias < frag_depth ? 1 : 0) * t;
     \\  }
-    \\  out_ao = out_ao / SAMPLES_COUNT; 
-    \\  out_ao = (out_ao < u_cutoff ? 0 : out_ao);
+    \\  out_ao = (out_ao / SAMPLES_COUNT) * smoothstep(u_range.x, u_range.y, frag_depth); 
     \\}
 ;
 
