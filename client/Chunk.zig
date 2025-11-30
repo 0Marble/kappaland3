@@ -2,6 +2,7 @@ const World = @import("World.zig");
 const std = @import("std");
 const App = @import("App.zig");
 const zm = @import("zm");
+const Options = @import("ClientOptions");
 
 const Stage = enum { dead, generating, meshing, active };
 
@@ -60,7 +61,8 @@ pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
 }
 
 fn generate(self: *Chunk) void {
-    self.generate_flat();
+    const fptr = @field(Chunk, "generate_" ++ Options.world_gen);
+    @call(.auto, fptr, .{self});
 }
 
 fn generate_grid(self: *Chunk) void {

@@ -47,4 +47,10 @@
         .desc = "Enable SSAO",
         .default = false,
     },
+    .{
+        .type = .str,
+        .name = "world_gen",
+        .desc = "Choose world generator: flat | balls | wavy | grid",
+        .default = "flat",
+    },
 }
