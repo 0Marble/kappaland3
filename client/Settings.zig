@@ -38,16 +38,28 @@ fn on_imgui_impl(self: *Settings) !void {
     var it = self.settings.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
+        const c_name: c_str = @ptrCast(name);
         const val = entry.value_ptr;
         switch (val.*) {
             .checkbox => {
-                if (c.igCheckbox(@as(c_str, @ptrCast(name)), &val.checkbox.value)) {
+                if (c.igCheckbox(c_name, &val.checkbox.value)) {
+                    try self.changed.put(App.frame_alloc(), name, {});
+                }
+            },
+            .int_slider => {
+                if (c.igSliderInt(c_name, &val.int_slider.value, val.int_slider.min, val.int_slider.max, "%d", 0)) {
+                    try self.changed.put(App.frame_alloc(), name, {});
+                }
+            },
+            .float_slider => {
+                if (c.igSliderFloat(c_name, &val.float_slider.value, val.float_slider.min, val.float_slider.max, "%.2f", 0)) {
                     try self.changed.put(App.frame_alloc(), name, {});
                 }
             },
 
             else => c.igText(
-                "Invalid: %s",
+                "%s: todo %s",
+                c_name,
                 @as(c_str, @ptrCast(@tagName(std.meta.activeTag(val.*)))),
             ),
         }
@@ -57,6 +69,8 @@ fn on_imgui_impl(self: *Settings) !void {
 const Node = union(enum) {
     section: void,
     checkbox: struct { value: bool },
+    int_slider: struct { min: i32, max: i32, value: i32 },
+    float_slider: struct { min: f32, max: f32, value: f32 },
 };
 
 const Scanner = struct {
@@ -137,24 +151,6 @@ const Scanner = struct {
 
         const name = (try self.calc_current_name(idx)) orelse return;
         try self.map.put(App.static_alloc(), name, @unionInit(Node, @tagName(tag), parsed));
-    }
-
-    fn scan_checkbox(self: *Scanner, idx: ZonIndex) OOM!void {
-        const value = self.get_child(idx, "value") orelse return;
-
-        const val = switch (value.get(self.zoir)) {
-            .true => true,
-            .false => false,
-            else => {
-                self.report_error(idx, "Value should be a bool", .{});
-                return;
-            },
-        };
-        const name = (try self.calc_current_name(idx)) orelse {
-            return;
-        };
-
-        try self.map.put(App.static_alloc(), name, Node{ .checkbox = val });
     }
 
     fn calc_current_name(self: *Scanner, last: ZonIndex) OOM!?[:0]const u8 {
