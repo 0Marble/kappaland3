@@ -20,7 +20,6 @@ const NOISE_SIZE = 4;
 pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
 pub const BASE_TEX_ATTACHMENT = 2;
-pub const DEPTH_TEX_ATTACHMENT = 3;
 pub const SSAO_TEX_ATTACHMENT = 0;
 const RENDERED_TEX_ATTACHMENT = 0;
 
@@ -28,7 +27,6 @@ const POSITION_TEX_UNIFORM = 0;
 const NORMAL_TEX_UNIFORM = 1;
 const BASE_TEX_UNIFORM = 2;
 const SSAO_TEX_UNIFORM = 3;
-const DEPTH_TEX_UNIFORM = 4;
 const RENDERED_TEX_UNIFORM = 5;
 const NOISE_TEX_UNIFORM = 6;
 
@@ -40,7 +38,6 @@ cur_width: i32,
 cur_height: i32,
 
 g_buffer_fbo: gl.uint,
-depth_tex: gl.uint,
 depth_rbo: gl.uint,
 position_tex: gl.uint,
 normal_tex: gl.uint,
@@ -114,7 +111,6 @@ pub fn deinit(self: *Renderer) void {
     gl.DeleteRenderbuffers(1, @ptrCast(&self.depth_rbo));
 
     gl.DeleteTextures(1, @ptrCast(&self.rendered_tex));
-    gl.DeleteTextures(1, @ptrCast(&self.depth_tex));
     gl.DeleteTextures(1, @ptrCast(&self.position_tex));
     gl.DeleteTextures(1, @ptrCast(&self.normal_tex));
     gl.DeleteTextures(1, @ptrCast(&self.base_tex));
@@ -150,7 +146,7 @@ pub fn draw(self: *Renderer) !void {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
         try gl_call(gl.Disable(gl.DEPTH_TEST));
         try self.ssao_pass.bind();
-        try self.ssao_pass.set_mat4("u_vp", App.game_state().camera.vp_mat());
+        try self.ssao_pass.set_mat4("u_proj", App.game_state().camera.proj_mat());
         try self.ssao_pass.set_vec2("u_noise_scale", .{
             @as(f32, @floatFromInt(self.cur_width)) / NOISE_SIZE,
             @as(f32, @floatFromInt(self.cur_height)) / NOISE_SIZE,
@@ -161,8 +157,6 @@ pub fn draw(self: *Renderer) !void {
         try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.normal_tex));
         try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NOISE_TEX_UNIFORM));
         try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.noise_tex));
-        try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
-        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
         try self.screen_quad.draw(gl.TRIANGLES);
 
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_blur_fbo));
@@ -179,6 +173,9 @@ pub fn draw(self: *Renderer) !void {
 
     try self.lighting_pass.bind();
     try self.lighting_pass.set_vec3("u_view_pos", App.game_state().camera.pos);
+    const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
+    const light_dir = App.game_state().camera.view_mat().multiplyVec4(light_dir_world);
+    try self.lighting_pass.set_vec3("u_light_dir", zm.vec.xyz(light_dir));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POSITION_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEX_UNIFORM));
@@ -190,8 +187,6 @@ pub fn draw(self: *Renderer) !void {
         try gl_call(gl.ActiveTexture(gl.TEXTURE0 + SSAO_TEX_UNIFORM));
         try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_blur_tex));
     }
-    try gl_call(gl.ActiveTexture(gl.TEXTURE0 + DEPTH_TEX_UNIFORM));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
@@ -250,20 +245,6 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
         0,
     ));
 
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.depth_tex));
-    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.R16F, w, h, 0, gl.RED, gl.FLOAT, null));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE));
-    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE));
-    try gl_call(gl.FramebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0 + DEPTH_TEX_ATTACHMENT,
-        gl.TEXTURE_2D,
-        self.depth_tex,
-        0,
-    ));
-
     try gl_call(gl.BindRenderbuffer(gl.RENDERBUFFER, self.depth_rbo));
     try gl_call(gl.RenderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT, w, h));
     try gl_call(gl.FramebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, self.depth_rbo));
@@ -272,7 +253,6 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
         gl.COLOR_ATTACHMENT0 + POSITION_TEX_ATTACHMENT,
         gl.COLOR_ATTACHMENT0 + NORMAL_TEX_ATTACHMENT,
         gl.COLOR_ATTACHMENT0 + BASE_TEX_ATTACHMENT,
-        gl.COLOR_ATTACHMENT0 + DEPTH_TEX_ATTACHMENT,
     };
     try gl_call(gl.DrawBuffers(@intCast(g_buffer_draw_buffers.len), @ptrCast(g_buffer_draw_buffers)));
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
@@ -363,7 +343,6 @@ fn draw_fbo_debug(self: *Renderer) !void {
         "position_tex",
         "normal_tex",
         "base_tex",
-        "depth_tex",
         "ssao_tex",
         "ssao_blur_tex",
     });
@@ -383,7 +362,6 @@ fn init_buffers(self: *Renderer) !void {
 
     try gl_call(gl.GenRenderbuffers(1, @ptrCast(&self.depth_rbo)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.rendered_tex)));
-    try gl_call(gl.GenTextures(1, @ptrCast(&self.depth_tex)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.position_tex)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.normal_tex)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.base_tex)));
@@ -434,7 +412,6 @@ fn init_screen(self: *Renderer) !void {
     };
     self.lighting_pass = try .init(&render_sources);
     try self.lighting_pass.set_vec3("u_ambient", .{ 0.3, 0.3, 0.3 });
-    try self.lighting_pass.set_vec3("u_light_dir", zm.vec.normalize(zm.Vec3f{ 1, 1, 1 }));
     try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 0.9 });
     try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
@@ -447,7 +424,6 @@ fn init_screen(self: *Renderer) !void {
     };
     self.postprocessing_pass = try .init(&post_sources);
     try self.postprocessing_pass.set_int("u_rendered_tex", RENDERED_TEX_UNIFORM);
-    try self.postprocessing_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
 
     var ssao_sources: [2]Shader.Source = .{
         .{ .name = "ssao_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
@@ -457,7 +433,6 @@ fn init_screen(self: *Renderer) !void {
     try self.ssao_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.ssao_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
     try self.ssao_pass.set_int("u_noise_tex", NOISE_TEX_UNIFORM);
-    try self.ssao_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
 
     var ssao_blur_sources: [2]Shader.Source = .{
         .{ .name = "ssao_blur_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
@@ -557,34 +532,30 @@ const ssao_frag =
     \\uniform sampler2D u_pos_tex;
     \\uniform sampler2D u_normal_tex;
     \\uniform sampler2D u_noise_tex;
-    \\uniform sampler2D u_depth_tex;
     \\
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
     \\uniform float u_radius = 1.0 / 8.0;
     \\uniform float u_bias = 0.1;
     \\uniform float u_cutoff = 0.1;
     \\uniform vec2 u_noise_scale;
-    \\uniform mat4 u_vp;
-    \\uniform mat4 u_view;
+    \\uniform mat4 u_proj;
     \\
     \\void main() {
     \\  vec3 frag_pos = texture(u_pos_tex, frag_uv).xyz;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
-    \\  float frag_depth = texture(u_depth_tex, frag_uv).x;
+    \\  float frag_depth = -frag_pos.z;
     \\  vec3 random_vec = texture(u_noise_tex, frag_uv * u_noise_scale).xyz;
     \\
     \\  vec3 tangent = normalize(random_vec - frag_norm * dot(random_vec, frag_norm));
     \\  vec3 bitangent = cross(frag_norm, tangent);
     \\  mat3 TBN = mat3(tangent, bitangent, frag_norm);
     \\  out_ao = 0;
-    \\  float avg_depth = 0;
     \\
     \\  for (int i = 0; i < SAMPLES_COUNT; i++) {
-    \\    vec4 sample_uv = u_vp * vec4((TBN * u_ssao_samples[i]) * u_radius + frag_pos, 1);
+    \\    vec4 sample_uv = u_proj * vec4((TBN * u_ssao_samples[i]) * u_radius + frag_pos, 1);
     \\    sample_uv /= sample_uv.w; 
     \\    sample_uv = sample_uv * 0.5 + 0.5;
-    \\    float sample_depth = texture(u_depth_tex, sample_uv.xy).x;
-    \\    avg_depth += sample_depth;
+    \\    float sample_depth = -texture(u_pos_tex, sample_uv.xy).z;
     \\    float t = smoothstep(0.0, 1.0, u_radius / abs(sample_depth - frag_depth));
     \\    out_ao += (sample_depth + u_bias < frag_depth ? 1 : 0) * t;
     \\  }
