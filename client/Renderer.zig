@@ -16,6 +16,7 @@ const Ecs = @import("libmine").Ecs;
 
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
+const SSAO_SETTINGS = ".main.renderer.ssao";
 
 pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
@@ -29,8 +30,6 @@ const BASE_TEX_UNIFORM = 2;
 const SSAO_TEX_UNIFORM = 3;
 const RENDERED_TEX_UNIFORM = 5;
 const NOISE_TEX_UNIFORM = 6;
-
-const SSAO_ENABLE_SETTING_NAME = ".main.renderer.ssao.enable";
 
 block_renderer: BlockRenderer,
 
@@ -61,15 +60,22 @@ renderer_eid: Ecs.EntityRef,
 
 const Renderer = @This();
 pub fn init(self: *Renderer) !void {
+    try self.init_settings();
     try self.init_buffers();
     try self.block_renderer.init();
     try self.init_screen();
+}
 
+fn init_settings(self: *Renderer) !void {
     self.renderer_eid = try App.ecs().spawn();
-    try self.on_setting_change_set_uniform(SSAO_ENABLE_SETTING_NAME, "lighting_pass", "u_ssao_enabled", bool);
-    try self.on_setting_change_set_uniform(".main.renderer.ssao.blur", "ssao_blur_pass", "u_blur", i32);
-    try self.on_setting_change_set_uniform(".main.renderer.ssao.radius", "ssao_pass", "u_radius", f32);
-    try self.on_setting_change_set_uniform(".main.renderer.ssao.bias", "ssao_pass", "u_bias", f32);
+
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".enable", "lighting_pass", "u_ssao_enabled", bool);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".blur", "ssao_blur_pass", "u_blur", i32);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".radius", "ssao_pass", "u_radius", f32);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".bias", "ssao_pass", "u_bias", f32);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_min", "ssao_pass", "u_range_min", f32);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_max", "ssao_pass", "u_range_max", f32);
+    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".use_range", "ssao_pass", "u_use_range", bool);
 }
 
 fn on_setting_change_set_uniform(
@@ -130,7 +136,7 @@ pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
 }
 
 pub fn draw(self: *Renderer) !void {
-    const enable_ssao = App.settings().get_value(bool, SSAO_ENABLE_SETTING_NAME) orelse false;
+    const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable") orelse false;
 
     try gl_call(gl.ClearDepth(0.0));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
@@ -535,16 +541,18 @@ const ssao_frag =
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
     \\uniform float u_radius = 1.0 / 8.0;
     \\uniform float u_bias = 0.1;
-    \\uniform vec2 u_range = vec2(5, 30);
+    \\uniform float u_range_min = 5.0;
+    \\uniform float u_range_max = 30.0;
     \\uniform vec2 u_noise_scale;
     \\uniform mat4 u_proj;
+    \\uniform bool u_use_range = true;
     \\
     \\void main() {
     \\  out_ao = 0;
     \\  vec3 frag_pos = texture(u_pos_tex, frag_uv).xyz;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float frag_depth = -frag_pos.z;
-    \\  if (frag_depth < u_range.x || frag_depth > u_range.y) return;
+    \\  if (u_use_range && (frag_depth < u_range_min || frag_depth > u_range_max)) return;
     \\  vec3 random_vec = texture(u_noise_tex, frag_uv * u_noise_scale).xyz;
     \\
     \\  vec3 tangent = normalize(random_vec - frag_norm * dot(random_vec, frag_norm));
@@ -559,7 +567,7 @@ const ssao_frag =
     \\    float t = smoothstep(0.0, 1.0, u_radius / abs(sample_depth - frag_depth));
     \\    out_ao += (sample_depth + u_bias < frag_depth ? 1 : 0) * t;
     \\  }
-    \\  out_ao = (out_ao / SAMPLES_COUNT) * smoothstep(u_range.x, u_range.y, frag_depth); 
+    \\  out_ao = (out_ao / SAMPLES_COUNT) * (u_use_range ? smoothstep(u_range_min, u_range_max, frag_depth) : 1); 
     \\}
 ;
 

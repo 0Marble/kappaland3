@@ -183,6 +183,7 @@ pub fn init(self: *Self) !void {
 
     self.eid = try App.ecs().spawn();
     try self.on_setting_change_set_uniform(".main.renderer.face_ao", "shader", "u_enable_face_occlusion", bool);
+    try self.on_setting_change_set_uniform(".main.renderer.face_ao_factor", "shader", "u_occlusion_factor", f32);
 }
 
 fn on_setting_change_set_uniform(
