@@ -10,7 +10,6 @@
     2. Pack vertex attribs xxxxyyyy|zzzz?nnn|tttttttt|wwhhllll with 4 bits of light level - no colored lights, more difficult to support u16-based texture indices in the future
     3. Calculate everything in the fragment shader - have a buffer with concated per-chunk light block data, and another one with chunk light-buf offsets. If we have enough gpu it is the easiest approach
     4. Deferred shading - have a completely different shader pass that computes "light meshes", i.e. draws just the light-enduced color of the block faces. We render it to a gpu texture, and then use later for final calculations
-- Runtime settings: think about changing settings dynamically
 
 # Non-critical
 
@@ -23,6 +22,10 @@
 
 - 30.11.2025:
     1. Improved per-face-side AO, now it is not jarring!
+    2. Runtime settings: think about changing settings dynamically. Now we have a `client.zon` file that contains all settings in
+    structured format. That being said, a better option may be to put the `client.zon` file into `assets`, and use it to genetate
+    a basic `settings.txt` file. That way we can build the defaults into the binary (i.e. the user may delete and break everything).
+    It also simplifies serialization (right now unsupported).
 
 - 23.11.2025:
     1. Implemented SSAO, this technique really needs some parameter fine-tuning to get rid of noise
