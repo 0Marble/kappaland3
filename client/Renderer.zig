@@ -12,6 +12,7 @@ const Shader = @import("Shader.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
+const Ecs = @import("libmine").Ecs;
 
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
@@ -30,6 +31,8 @@ const SSAO_TEX_UNIFORM = 3;
 const DEPTH_TEX_UNIFORM = 4;
 const RENDERED_TEX_UNIFORM = 5;
 const NOISE_TEX_UNIFORM = 6;
+
+const SSAO_ENABLE_SETTING_NAME = ".main.renderer.ssao.enable";
 
 block_renderer: BlockRenderer,
 
@@ -57,21 +60,53 @@ ssao_blur_pass: Shader,
 lighting_pass: Shader,
 ssao_samples: [SSAO_SAMPLES_COUNT]zm.Vec3f,
 
+renderer_eid: Ecs.EntityRef,
+
 const Renderer = @This();
 pub fn init(self: *Renderer) !void {
     try self.init_buffers();
     try self.block_renderer.init();
     try self.init_screen();
+
+    self.renderer_eid = try App.ecs().spawn();
+    try self.on_setting_change_set_uniform(SSAO_ENABLE_SETTING_NAME, "lighting_pass", "u_ssao_enabled", bool);
+    try self.on_setting_change_set_uniform(".main.renderer.ssao.blur", "ssao_blur_pass", "u_blur", i32);
+    try self.on_setting_change_set_uniform(".main.renderer.ssao.radius", "ssao_pass", "u_radius", f32);
+    try self.on_setting_change_set_uniform(".main.renderer.ssao.bias", "ssao_pass", "u_bias", f32);
+}
+
+fn on_setting_change_set_uniform(
+    self: *Renderer,
+    setting: []const u8,
+    comptime pass_name: []const u8,
+    comptime uniform: [:0]const u8,
+    comptime T: type,
+) !void {
+    const evt = try App.settings().settings_change_event(T, setting);
+    try App.ecs().add_event_listener(self.renderer_eid, T, *Renderer, evt, self, &(struct {
+        fn callback(this: *Renderer, vals: []T) void {
+            Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
+            const last = vals[vals.len - 1];
+            const pass: *Shader = &@field(this, pass_name);
+            const res = switch (T) {
+                bool => pass.set_uint(uniform, if (last) 1 else 0),
+                i32 => pass.set_int(uniform, last),
+                f32 => pass.set_float(uniform, last),
+                else => @compileError("Unsupported uniform type: " ++ @typeName(T)),
+            };
+            res catch |err| {
+                Log.log(.warn, "Couldn't set '{s}' uniform for pass '{s}': {}", .{ uniform, pass_name, err });
+            };
+        }
+    }.callback));
 }
 
 pub fn deinit(self: *Renderer) void {
     self.block_renderer.deinit();
     gl.DeleteFramebuffers(1, @ptrCast(&self.g_buffer_fbo));
     gl.DeleteFramebuffers(1, @ptrCast(&self.render_fbo));
-    if (Options.enable_ssao) {
-        gl.DeleteFramebuffers(1, @ptrCast(&self.ssao_fbo));
-        gl.DeleteFramebuffers(1, @ptrCast(&self.ssao_blur_fbo));
-    }
+    gl.DeleteFramebuffers(1, @ptrCast(&self.ssao_fbo));
+    gl.DeleteFramebuffers(1, @ptrCast(&self.ssao_blur_fbo));
 
     gl.DeleteRenderbuffers(1, @ptrCast(&self.depth_rbo));
 
@@ -81,19 +116,15 @@ pub fn deinit(self: *Renderer) void {
     gl.DeleteTextures(1, @ptrCast(&self.normal_tex));
     gl.DeleteTextures(1, @ptrCast(&self.base_tex));
 
-    if (Options.enable_ssao) {
-        gl.DeleteTextures(1, @ptrCast(&self.ssao_tex));
-        gl.DeleteTextures(1, @ptrCast(&self.ssao_blur_tex));
-        gl.DeleteTextures(1, @ptrCast(&self.noise_tex));
-    }
+    gl.DeleteTextures(1, @ptrCast(&self.ssao_tex));
+    gl.DeleteTextures(1, @ptrCast(&self.ssao_blur_tex));
+    gl.DeleteTextures(1, @ptrCast(&self.noise_tex));
 
     self.screen_quad.deinit();
     self.postprocessing_pass.deinit();
     self.lighting_pass.deinit();
-    if (Options.enable_ssao) {
-        self.ssao_pass.deinit();
-        self.ssao_blur_pass.deinit();
-    }
+    self.ssao_pass.deinit();
+    self.ssao_blur_pass.deinit();
 }
 
 pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
@@ -101,6 +132,8 @@ pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
 }
 
 pub fn draw(self: *Renderer) !void {
+    const enable_ssao = App.settings().get_value(bool, SSAO_ENABLE_SETTING_NAME) orelse false;
+
     try gl_call(gl.ClearDepth(0.0));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
     try gl_call(gl.Enable(gl.DEPTH_TEST));
@@ -110,7 +143,7 @@ pub fn draw(self: *Renderer) !void {
 
     try self.block_renderer.draw();
 
-    if (Options.enable_ssao) {
+    if (enable_ssao) {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
         try gl_call(gl.Disable(gl.DEPTH_TEST));
         try self.ssao_pass.bind();
@@ -149,7 +182,8 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.normal_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BASE_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.base_tex));
-    if (Options.enable_ssao) {
+
+    if (enable_ssao) {
         try gl_call(gl.ActiveTexture(gl.TEXTURE0 + SSAO_TEX_UNIFORM));
         try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_blur_tex));
     }
@@ -242,50 +276,48 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
         Log.log(.warn, "{*}: framebuffer 'g_buffer' incomplete!", .{self});
     }
 
-    if (Options.enable_ssao) {
-        try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
+    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
 
-        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_tex));
-        try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.R16, w, h, 0, gl.RED, gl.FLOAT, null));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-        try gl_call(gl.FramebufferTexture2D(
-            gl.FRAMEBUFFER,
-            gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
-            gl.TEXTURE_2D,
-            self.ssao_tex,
-            0,
-        ));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_tex));
+    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.R16, w, h, 0, gl.RED, gl.FLOAT, null));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
+    try gl_call(gl.FramebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
+        gl.TEXTURE_2D,
+        self.ssao_tex,
+        0,
+    ));
 
-        const ssao_draw_buffers: []const gl.uint = &.{
-            gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
-        };
-        try gl_call(gl.DrawBuffers(@intCast(ssao_draw_buffers.len), @ptrCast(ssao_draw_buffers)));
-        if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-            Log.log(.warn, "{*}: framebuffer 'ssao_fbo' incomplete!", .{self});
-        }
+    const ssao_draw_buffers: []const gl.uint = &.{
+        gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
+    };
+    try gl_call(gl.DrawBuffers(@intCast(ssao_draw_buffers.len), @ptrCast(ssao_draw_buffers)));
+    if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
+        Log.log(.warn, "{*}: framebuffer 'ssao_fbo' incomplete!", .{self});
+    }
 
-        try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_blur_fbo));
+    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_blur_fbo));
 
-        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_blur_tex));
-        try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.R16, w, h, 0, gl.RED, gl.FLOAT, null));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-        try gl_call(gl.FramebufferTexture2D(
-            gl.FRAMEBUFFER,
-            gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
-            gl.TEXTURE_2D,
-            self.ssao_blur_tex,
-            0,
-        ));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_blur_tex));
+    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.R16, w, h, 0, gl.RED, gl.FLOAT, null));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
+    try gl_call(gl.FramebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
+        gl.TEXTURE_2D,
+        self.ssao_blur_tex,
+        0,
+    ));
 
-        const ssao_blur_draw_buffers: []const gl.uint = &.{
-            gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
-        };
-        try gl_call(gl.DrawBuffers(@intCast(ssao_blur_draw_buffers.len), @ptrCast(ssao_blur_draw_buffers)));
-        if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-            Log.log(.warn, "{*}: framebuffer 'ssao_blur_fbo' incomplete!", .{self});
-        }
+    const ssao_blur_draw_buffers: []const gl.uint = &.{
+        gl.COLOR_ATTACHMENT0 + SSAO_TEX_ATTACHMENT,
+    };
+    try gl_call(gl.DrawBuffers(@intCast(ssao_blur_draw_buffers.len), @ptrCast(ssao_blur_draw_buffers)));
+    if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
+        Log.log(.warn, "{*}: framebuffer 'ssao_blur_fbo' incomplete!", .{self});
     }
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.render_fbo));
@@ -324,10 +356,14 @@ fn draw_fbo_debug(self: *Renderer) !void {
         .y = @as(f32, @floatFromInt(self.cur_height)) * scale,
     };
 
-    const textures: []const [:0]const u8 = &(.{ "position_tex", "normal_tex", "base_tex", "depth_tex" } ++ if (Options.enable_ssao)
-        .{ "ssao_tex", "ssao_blur_tex" }
-    else
-        .{});
+    const textures: []const [:0]const u8 = &(.{
+        "position_tex",
+        "normal_tex",
+        "base_tex",
+        "depth_tex",
+        "ssao_tex",
+        "ssao_blur_tex",
+    });
 
     inline for (textures) |name| {
         c.igText(name);
@@ -339,10 +375,8 @@ fn draw_fbo_debug(self: *Renderer) !void {
 fn init_buffers(self: *Renderer) !void {
     try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.g_buffer_fbo)));
     try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.render_fbo)));
-    if (Options.enable_ssao) {
-        try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.ssao_fbo)));
-        try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.ssao_blur_fbo)));
-    }
+    try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.ssao_fbo)));
+    try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.ssao_blur_fbo)));
 
     try gl_call(gl.GenRenderbuffers(1, @ptrCast(&self.depth_rbo)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.rendered_tex)));
@@ -351,38 +385,34 @@ fn init_buffers(self: *Renderer) !void {
     try gl_call(gl.GenTextures(1, @ptrCast(&self.normal_tex)));
     try gl_call(gl.GenTextures(1, @ptrCast(&self.base_tex)));
 
-    if (Options.enable_ssao) {
-        try gl_call(gl.GenTextures(1, @ptrCast(&self.ssao_tex)));
-        try gl_call(gl.GenTextures(1, @ptrCast(&self.ssao_blur_tex)));
-        try gl_call(gl.GenTextures(1, @ptrCast(&self.noise_tex)));
+    try gl_call(gl.GenTextures(1, @ptrCast(&self.ssao_tex)));
+    try gl_call(gl.GenTextures(1, @ptrCast(&self.ssao_blur_tex)));
+    try gl_call(gl.GenTextures(1, @ptrCast(&self.noise_tex)));
+
+    var noise = std.mem.zeroes([NOISE_SIZE * NOISE_SIZE * 4]f32);
+    for (0..NOISE_SIZE * NOISE_SIZE) |i| {
+        noise[4 * i + 0] = App.rng().float(f32) * 2 - 1;
+        noise[4 * i + 1] = App.rng().float(f32) * 2 - 1;
+        noise[4 * i + 2] = App.rng().float(f32) * 2 - 1;
+        noise[4 * i + 3] = 1;
     }
 
-    if (Options.enable_ssao) {
-        var noise = std.mem.zeroes([NOISE_SIZE * NOISE_SIZE * 4]f32);
-        for (0..NOISE_SIZE * NOISE_SIZE) |i| {
-            noise[4 * i + 0] = App.rng().float(f32) * 2 - 1;
-            noise[4 * i + 1] = App.rng().float(f32) * 2 - 1;
-            noise[4 * i + 2] = App.rng().float(f32) * 2 - 1;
-            noise[4 * i + 3] = 1;
-        }
-
-        try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.noise_tex));
-        try gl_call(gl.TexImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.RGBA16F,
-            NOISE_SIZE,
-            NOISE_SIZE,
-            0,
-            gl.RGBA,
-            gl.FLOAT,
-            @ptrCast(&noise),
-        ));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT));
-        try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT));
-    }
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.noise_tex));
+    try gl_call(gl.TexImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        NOISE_SIZE,
+        NOISE_SIZE,
+        0,
+        gl.RGBA,
+        gl.FLOAT,
+        @ptrCast(&noise),
+    ));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT));
 
     try self.resize_framebuffers(640, 480);
 }
@@ -406,9 +436,7 @@ fn init_screen(self: *Renderer) !void {
     try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_base_tex", BASE_TEX_UNIFORM);
-    if (Options.enable_ssao) {
-        try self.lighting_pass.set_int("u_ssao_tex", SSAO_TEX_UNIFORM);
-    }
+    try self.lighting_pass.set_int("u_ssao_tex", SSAO_TEX_UNIFORM);
 
     var post_sources: [2]Shader.Source = .{
         .{ .name = "post_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
@@ -418,34 +446,32 @@ fn init_screen(self: *Renderer) !void {
     try self.postprocessing_pass.set_int("u_rendered_tex", RENDERED_TEX_UNIFORM);
     try self.postprocessing_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
 
-    if (Options.enable_ssao) {
-        var ssao_sources: [2]Shader.Source = .{
-            .{ .name = "ssao_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
-            .{ .name = "ssao_frag", .sources = &.{ssao_frag}, .kind = gl.FRAGMENT_SHADER },
-        };
-        self.ssao_pass = try .init(&ssao_sources);
-        try self.ssao_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
-        try self.ssao_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
-        try self.ssao_pass.set_int("u_noise_tex", NOISE_TEX_UNIFORM);
-        try self.ssao_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
+    var ssao_sources: [2]Shader.Source = .{
+        .{ .name = "ssao_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
+        .{ .name = "ssao_frag", .sources = &.{ssao_frag}, .kind = gl.FRAGMENT_SHADER },
+    };
+    self.ssao_pass = try .init(&ssao_sources);
+    try self.ssao_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
+    try self.ssao_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
+    try self.ssao_pass.set_int("u_noise_tex", NOISE_TEX_UNIFORM);
+    try self.ssao_pass.set_int("u_depth_tex", DEPTH_TEX_UNIFORM);
 
-        var ssao_blur_sources: [2]Shader.Source = .{
-            .{ .name = "ssao_blur_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
-            .{ .name = "ssao_blur_frag", .sources = &.{blur_frag}, .kind = gl.FRAGMENT_SHADER },
-        };
-        self.ssao_blur_pass = try .init(&ssao_blur_sources);
-        try self.ssao_blur_pass.set_int("u_tex", SSAO_TEX_UNIFORM);
+    var ssao_blur_sources: [2]Shader.Source = .{
+        .{ .name = "ssao_blur_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
+        .{ .name = "ssao_blur_frag", .sources = &.{blur_frag}, .kind = gl.FRAGMENT_SHADER },
+    };
+    self.ssao_blur_pass = try .init(&ssao_blur_sources);
+    try self.ssao_blur_pass.set_int("u_tex", SSAO_TEX_UNIFORM);
 
-        for (0..SSAO_SAMPLES_COUNT) |i| {
-            self.ssao_samples[i] = zm.vec.normalize(zm.Vec3f{
-                App.rng().float(f32) * 2 - 1,
-                App.rng().float(f32) * 2 - 1,
-                App.rng().float(f32),
-            });
-            self.ssao_samples[i] *= @splat(App.rng().float(f32));
-            const name = try std.fmt.allocPrintSentinel(App.frame_alloc(), "u_ssao_samples[{d}]", .{i}, 0);
-            try self.ssao_pass.set_vec3(name, self.ssao_samples[i]);
-        }
+    for (0..SSAO_SAMPLES_COUNT) |i| {
+        self.ssao_samples[i] = zm.vec.normalize(zm.Vec3f{
+            App.rng().float(f32) * 2 - 1,
+            App.rng().float(f32) * 2 - 1,
+            App.rng().float(f32),
+        });
+        self.ssao_samples[i] *= @splat(App.rng().float(f32));
+        const name = try std.fmt.allocPrintSentinel(App.frame_alloc(), "u_ssao_samples[{d}]", .{i}, 0);
+        try self.ssao_pass.set_vec3(name, self.ssao_samples[i]);
     }
 }
 
@@ -500,13 +526,13 @@ const lighting_frag =
     \\uniform vec3 u_light_color;
     \\uniform vec3 u_light_dir;
     \\uniform vec3 u_view_pos;
+    \\uniform bool u_ssao_enabled;
     \\
     \\void main() {
     \\  vec3 frag_color = texture(u_base_tex, frag_uv).rgb;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float ssao = texture(u_ssao_tex, frag_uv).x;
-    \\  vec3 ambient = u_ambient * frag_color
-++ (if (Options.enable_ssao) " * (1 - ssao);" else ";") ++
+    \\  vec3 ambient = u_ambient * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
     \\
     \\  vec3 norm = normalize(frag_norm);
     \\  vec3 light_dir = u_light_dir;
@@ -530,6 +556,7 @@ const ssao_frag =
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
     \\uniform float u_radius = 1.0 / 8.0;
     \\uniform float u_bias = 0.1;
+    \\uniform float u_cutoff = 0.1;
     \\uniform vec2 u_noise_scale;
     \\uniform mat4 u_vp;
     \\uniform mat4 u_view;
@@ -556,6 +583,7 @@ const ssao_frag =
     \\    out_ao += (sample_depth + u_bias < frag_depth ? 1 : 0) * t;
     \\  }
     \\  out_ao = out_ao / SAMPLES_COUNT; 
+    \\  out_ao = (out_ao < u_cutoff ? 0 : out_ao);
     \\}
 ;
 

@@ -4,10 +4,11 @@ const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const Log = @import("libmine").Log;
+const Ecs = @import("libmine").Ecs;
 
 file_name: []const u8,
 settings: Map,
-changed: std.StringHashMapUnmanaged(void),
+events: std.StringHashMapUnmanaged(Ecs.EventRef),
 
 const Map = std.StringArrayHashMapUnmanaged(Node);
 
@@ -28,13 +29,87 @@ pub fn deinit(self: *Settings) void {
     _ = self;
 }
 
+pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const u8) !Ecs.EventRef {
+    const node: ?Node = if (self.settings.get(name)) |n| blk: {
+        switch (std.meta.activeTag(n)) {
+            .section => {},
+            inline else => |tag| {
+                const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
+                if (Value != Body) {
+                    Log.log(.warn, "Type mismatch for setting '{s}', expected {s} got {s}", .{
+                        name,
+                        @typeName(Value),
+                        @typeName(Body),
+                    });
+                    break :blk null;
+                }
+            },
+        }
+        break :blk n;
+    } else blk: {
+        Log.log(.warn, "Listening for non-existant settings '{s}'", .{name});
+        break :blk null;
+    };
+
+    const entry = try self.events.getOrPut(App.static_alloc(), name);
+    if (entry.found_existing) return entry.value_ptr.*;
+
+    const evt = try App.ecs().register_event(null, Body);
+    entry.value_ptr.* = evt;
+
+    if (node) |n| {
+        switch (std.meta.activeTag(n)) {
+            .section => {},
+            inline else => |tag| {
+                if (Body == @FieldType(@FieldType(Node, @tagName(tag)), "value")) {
+                    try App.ecs().emit_event(Body, evt, @field(@field(n, @tagName(tag)), "value"));
+                }
+            },
+        }
+    }
+
+    return evt;
+}
+
+pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
+    const node = self.settings.get(name) orelse {
+        Log.log(.warn, "Attempted to access non-existant setting: {s}", .{name});
+        return null;
+    };
+    switch (std.meta.activeTag(node)) {
+        .section => unreachable,
+        inline else => |tag| {
+            const Body = @FieldType(Node, @tagName(tag));
+            const Value = @FieldType(Body, "value");
+            if (Value != T) {
+                Log.log(.warn, "Setting '{s}' type mismatch, expected {s} got {s}", .{ name, @typeName(Value), @typeName(T) });
+                return null;
+            }
+
+            return @field(@field(node, @tagName(tag)), "value");
+        },
+    }
+}
+
 pub fn on_imgui(self: *Settings) !void {
     try App.gui().add_to_frame(Settings, "Settings", self, on_imgui_impl, @src());
 }
 
-fn on_imgui_impl(self: *Settings) !void {
-    self.changed = .empty;
+fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
+    switch (std.meta.activeTag(node.*)) {
+        .section => {},
+        inline else => |tag| {
+            const evt = self.events.get(name) orelse return;
+            const Body = @FieldType(Node, @tagName(tag));
+            const Value = @FieldType(Body, "value");
+            App.ecs().emit_event(Value, evt, @field(@field(node, @tagName(tag)), "value")) catch |err| {
+                Log.log(.warn, "Settings.emit_on_changed: {s}: Ecs.emit_event: {}", .{ name, err });
+            };
+        },
+    }
+}
 
+fn on_imgui_impl(self: *Settings) !void {
     var it = self.settings.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -43,17 +118,17 @@ fn on_imgui_impl(self: *Settings) !void {
         switch (val.*) {
             .checkbox => {
                 if (c.igCheckbox(c_name, &val.checkbox.value)) {
-                    try self.changed.put(App.frame_alloc(), name, {});
+                    self.emit_on_changed(name, val);
                 }
             },
             .int_slider => {
                 if (c.igSliderInt(c_name, &val.int_slider.value, val.int_slider.min, val.int_slider.max, "%d", 0)) {
-                    try self.changed.put(App.frame_alloc(), name, {});
+                    self.emit_on_changed(name, val);
                 }
             },
             .float_slider => {
                 if (c.igSliderFloat(c_name, &val.float_slider.value, val.float_slider.min, val.float_slider.max, "%.2f", 0)) {
-                    try self.changed.put(App.frame_alloc(), name, {});
+                    self.emit_on_changed(name, val);
                 }
             },
 
@@ -104,7 +179,7 @@ const Scanner = struct {
         return .{
             .file_name = file_name,
             .settings = scanner.map,
-            .changed = .empty,
+            .events = .empty,
         };
     }
 

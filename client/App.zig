@@ -27,7 +27,7 @@ game: GameState,
 main_renderer: Renderer,
 debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
-settings: Settings,
+settings_store: Settings,
 
 const App = @This();
 var ok = false;
@@ -88,7 +88,7 @@ fn init_memory() !void {
     app.temp_memory = .init(gpa());
     app.frame_memory = .init(gpa());
     app.static_memory = .init(gpa());
-    app.settings = try .init();
+    app.settings_store = try .init();
 }
 
 fn init_game() !void {
@@ -175,7 +175,7 @@ pub fn deinit() void {
     app.game.deinit();
     app.debug_ui.deinit();
     app.main_renderer.deinit();
-    app.settings.deinit();
+    app.settings_store.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -240,7 +240,7 @@ pub fn run() !void {
                 c.igText("%s", mem_str);
             }
         }.callback, @src());
-        try app.settings.on_imgui();
+        try app.settings_store.on_imgui();
 
         try app.game.on_frame_start();
         try app.main_renderer.on_frame_start();
@@ -335,4 +335,8 @@ pub fn renderer() *Renderer {
 
 pub fn rng() std.Random {
     return app.random.random();
+}
+
+pub fn settings() *Settings {
+    return &app.settings_store;
 }
