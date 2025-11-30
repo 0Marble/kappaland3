@@ -12,6 +12,7 @@ const Ecs = @import("libmine").Ecs;
 const Options = @import("ClientOptions");
 pub const DebugUi = @import("DebugUi.zig");
 pub const Renderer = @import("Renderer.zig");
+pub const Settings = @import("Settings.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -26,6 +27,7 @@ game: GameState,
 main_renderer: Renderer,
 debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
+settings: Settings,
 
 const App = @This();
 var ok = false;
@@ -86,6 +88,7 @@ fn init_memory() !void {
     app.temp_memory = .init(gpa());
     app.frame_memory = .init(gpa());
     app.static_memory = .init(gpa());
+    app.settings = try .init();
 }
 
 fn init_game() !void {
@@ -172,6 +175,7 @@ pub fn deinit() void {
     app.game.deinit();
     app.debug_ui.deinit();
     app.main_renderer.deinit();
+    app.settings.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -205,6 +209,10 @@ pub fn frame_alloc() std.mem.Allocator {
     return app.frame_memory.allocator();
 }
 
+pub fn static_alloc() std.mem.Allocator {
+    return app.static_memory.allocator();
+}
+
 pub fn run() !void {
     while (true) {
         app.frame_data.on_frame_start();
@@ -215,20 +223,24 @@ pub fn run() !void {
             fn callback(self: *App) !void {
                 const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                     frame_alloc(),
-                    "CPU Memory (total): {f}",
-                    .{util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes)},
+                    \\CPU Memory:
+                    \\    total:         {f}
+                    \\    frame_memory:  {f}
+                    \\    static_memory: {f}
+                    \\    temp_memory:   {f}
+                ,
+                    .{
+                        util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
+                        util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
+                        util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
+                        util.MemoryUsage.from_bytes(self.temp_memory.queryCapacity()),
+                    },
                     0,
                 ));
                 c.igText("%s", mem_str);
-                const mem_str_arena: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-                    frame_alloc(),
-                    "CPU Memory (frame arena): {f}",
-                    .{util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity())},
-                    0,
-                ));
-                c.igText("%s", mem_str_arena);
             }
         }.callback, @src());
+        try app.settings.on_imgui();
 
         try app.game.on_frame_start();
         try app.main_renderer.on_frame_start();

@@ -8,3 +8,5 @@ pub const c = @cImport({
     @cInclude("cimgui.h");
     @cInclude("cimgui_impl.h");
 });
+
+pub const c_str = [*:0]const u8;

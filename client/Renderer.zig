@@ -570,8 +570,8 @@ const blur_frag =
     \\
     \\void main() {
     \\  vec4 sum = vec4(0, 0, 0, 0);
-    \\  for (int dx = -u_blur; dx < u_blur; dx++) {
-    \\    for (int dy = -u_blur; dy < u_blur; dy++) {
+    \\  for (int dx = -u_blur; dx <= u_blur; dx++) {
+    \\    for (int dy = -u_blur; dy <= u_blur; dy++) {
     \\       sum += texture(u_tex, frag_uv + vec2(dx, dy) / u_tex_size);
     \\    }
     \\  }

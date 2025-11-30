@@ -53,4 +53,10 @@
         .desc = "Choose world generator: flat | balls | wavy | grid",
         .default = "flat",
     },
+    .{
+        .type = .str,
+        .name = "settings_file",
+        .desc = "Settings file default location",
+        .default = "./client.zon",
+    },
 }
