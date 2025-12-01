@@ -6,8 +6,9 @@ const c_str = @import("c.zig").c_str;
 const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
 
-settings: Map,
+map: Map,
 events: std.StringHashMapUnmanaged(Ecs.EventRef),
+save_on_exit: bool,
 
 const Map = std.StringArrayHashMapUnmanaged(Node);
 
@@ -15,9 +16,11 @@ const Settings = @This();
 pub fn init() !Settings {
     var self: Settings = .{
         .events = .empty,
-        .settings = .empty,
+        .map = .empty,
+        .save_on_exit = true,
     };
     try self.load_template();
+    try self.load();
 
     return self;
 }
@@ -26,7 +29,7 @@ fn load_template(self: *Settings) !void {
     const Visitor = struct {
         const OOM = std.mem.Allocator.Error;
         fn add_node_callback(this: *Settings, name: [:0]const u8, node: Node) OOM!void {
-            try this.settings.put(App.static_alloc(), name, node);
+            try this.set_value(name, node);
         }
     };
     try Scanner(*Settings, Visitor.OOM).scan(self, &Visitor.add_node_callback);
@@ -36,6 +39,123 @@ pub fn deinit(self: *Settings) void {
     self.save() catch |err| {
         Log.log(.warn, "Couldn't save settings: {}", .{err});
     };
+}
+
+fn set_value(self: *Settings, name: [:0]const u8, val: Node) error{OutOfMemory}!void {
+    if (self.events.get(name)) |evt| {
+        switch (std.meta.activeTag(val)) {
+            .section => {},
+            inline else => |tag| {
+                const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
+                App.ecs().emit_event(Value, evt, @field(val, @tagName(tag)).value) catch |err| {
+                    Log.log(.warn, "Settings.set_value: Couldn't emit event: {}", .{err});
+                };
+            },
+        }
+    }
+
+    try self.map.put(App.static_alloc(), name, val);
+}
+
+pub fn load(self: *Settings) !void {
+    var file = try std.fs.cwd().openFile(Options.settings_file, .{});
+    defer file.close();
+
+    const len = (try file.stat()).size;
+    const source = try App.frame_alloc().allocSentinel(u8, len, 0);
+    _ = try file.read(source);
+
+    const ast = try std.zig.Ast.parse(App.frame_alloc(), source, .zon);
+    const zoir = try std.zig.ZonGen.generate(App.frame_alloc(), ast, .{});
+    try report_zoir_errors(ast, zoir);
+
+    const Visitor = struct {
+        settings: *Settings,
+        zoir: Zoir,
+        ast: Ast,
+
+        const Zoir = std.zig.Zoir;
+        const ZonIndex = std.zig.Zoir.Node.Index;
+        const Ast = std.zig.Ast;
+        const Visitor = @This();
+        const Error = error{ OutOfMemory, ParseZon };
+
+        fn callback(this: *Visitor, name: [:0]const u8, node: Node) Error!void {
+            const root = ZonIndex.root.get(this.zoir);
+            if (root != .struct_literal) {
+                const ast_node = ZonIndex.root.getAstNode(this.zoir);
+                const tok = this.ast.nodeMainToken(ast_node);
+                const loc = this.ast.tokenLocation(0, tok);
+                Log.log(.warn, "Settings file invalid, expected an array_literal: {s}:{d}:{d}", .{
+                    Options.settings_file,
+                    loc.line,
+                    loc.column,
+                });
+            }
+
+            for (root.struct_literal.names, 0..) |name_ref, i| {
+                if (std.mem.eql(u8, name, name_ref.get(this.zoir))) {
+                    const value_node = root.struct_literal.vals.at(@intCast(i));
+
+                    switch (std.meta.activeTag(node)) {
+                        .section => unreachable,
+                        inline else => |tag| {
+                            const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
+                            const val = try std.zon.parse.fromZoirNode(
+                                Value,
+                                App.static_alloc(),
+                                this.ast,
+                                this.zoir,
+                                value_node,
+                                null,
+                                .{ .ignore_unknown_fields = true },
+                            );
+
+                            var old = this.settings.map.get(name).?;
+                            @field(old, @tagName(tag)).value = val;
+                            try this.settings.set_value(name, old);
+                        },
+                    }
+
+                    return;
+                }
+            }
+        }
+    };
+
+    var visitor = Visitor{
+        .settings = self,
+        .zoir = zoir,
+        .ast = ast,
+    };
+    try Scanner(*Visitor, Visitor.Error).scan(&visitor, Visitor.callback);
+}
+
+fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) !void {
+    if (zoir.hasCompileErrors()) {
+        Log.log(.warn, "Couldn't parse settings file: invalid ZON:", .{});
+        for (zoir.compile_errors) |err| {
+            Log.log(.warn, "{s}", .{err.msg.get(zoir)});
+            for (err.getNotes(zoir)) |note| {
+                if (note.token.unwrap()) |tok| {
+                    const loc = ast.tokenLocation(note.node_or_offset, tok);
+                    Log.log(.warn, "{s}:{d}:{d}: {s}", .{
+                        Options.settings_file,
+                        loc.line,
+                        loc.column,
+                        note.msg.get(zoir),
+                    });
+                } else {
+                    Log.log(.warn, "{s}: {s}", .{
+                        Options.settings_file,
+                        note.msg.get(zoir),
+                    });
+                }
+            }
+        }
+
+        return error.ZonError;
+    }
 }
 
 pub fn save(self: *Settings) !void {
@@ -78,7 +198,7 @@ pub fn save(self: *Settings) !void {
 }
 
 pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const u8) !Ecs.EventRef {
-    const node: ?Node = if (self.settings.get(name)) |n| blk: {
+    const node: ?Node = if (self.map.get(name)) |n| blk: {
         switch (std.meta.activeTag(n)) {
             .section => {},
             inline else => |tag| {
@@ -120,7 +240,7 @@ pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const
 }
 
 pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
-    const node = self.settings.get(name) orelse {
+    const node = self.map.get(name) orelse {
         Log.log(.warn, "Attempted to access non-existant setting: {s}", .{name});
         return null;
     };
@@ -162,13 +282,19 @@ fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
 }
 
 fn on_imgui_impl(self: *Settings) !void {
+    _ = c.igCheckbox("Save on exit", &self.save_on_exit);
     if (c.igButton("Save", .{})) {
         self.save() catch |err| {
             Log.log(.warn, "Couldn't save settings: {}", .{err});
         };
     }
+    if (c.igButton("Restore", .{})) {
+        self.load_template() catch |err| {
+            Log.log(.warn, "Couldn't load settings template: {}", .{err});
+        };
+    }
 
-    var it = self.settings.iterator();
+    var it = self.map.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
         const c_name: c_str = @ptrCast(name);
