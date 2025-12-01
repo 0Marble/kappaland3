@@ -6,7 +6,6 @@ const c_str = @import("c.zig").c_str;
 const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
 
-file_name: []const u8,
 settings: Map,
 events: std.StringHashMapUnmanaged(Ecs.EventRef),
 
@@ -14,15 +13,12 @@ const Map = std.StringArrayHashMapUnmanaged(Node);
 
 const Settings = @This();
 pub fn init() !Settings {
-    const file = try std.fs.cwd().openFile(Options.settings_file, .{});
-    defer file.close();
-
-    const len = (try file.stat()).size;
-    const source = try App.frame_alloc().allocSentinel(u8, len, 0);
-    const read_amt = try file.read(@ptrCast(source));
-    std.debug.assert(read_amt == len);
-
-    return try Scanner.scan(Options.settings_file, source);
+    var self: Settings = .{
+        .events = .empty,
+        .settings = .empty,
+    };
+    try Scanner(*Settings, OOM).scan(&self, add_node_callback);
+    return self;
 }
 
 pub fn deinit(self: *Settings) void {
@@ -82,7 +78,11 @@ pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
             const Body = @FieldType(Node, @tagName(tag));
             const Value = @FieldType(Body, "value");
             if (Value != T) {
-                Log.log(.warn, "Setting '{s}' type mismatch, expected {s} got {s}", .{ name, @typeName(Value), @typeName(T) });
+                Log.log(.warn, "Setting '{s}' type mismatch, expected {s} got {s}", .{
+                    name,
+                    @typeName(Value),
+                    @typeName(T),
+                });
                 return null;
             }
 
@@ -122,12 +122,26 @@ fn on_imgui_impl(self: *Settings) !void {
                 }
             },
             .int_slider => {
-                if (c.igSliderInt(c_name, &val.int_slider.value, val.int_slider.min, val.int_slider.max, "%d", 0)) {
+                if (c.igSliderInt(
+                    c_name,
+                    &val.int_slider.value,
+                    val.int_slider.min,
+                    val.int_slider.max,
+                    "%d",
+                    0,
+                )) {
                     self.emit_on_changed(name, val);
                 }
             },
             .float_slider => {
-                if (c.igSliderFloat(c_name, &val.float_slider.value, val.float_slider.min, val.float_slider.max, "%.2f", 0)) {
+                if (c.igSliderFloat(
+                    c_name,
+                    &val.float_slider.value,
+                    val.float_slider.min,
+                    val.float_slider.max,
+                    "%.2f",
+                    0,
+                )) {
                     self.emit_on_changed(name, val);
                 }
             },
@@ -148,144 +162,87 @@ const Node = union(enum) {
     float_slider: struct { min: f32, max: f32, value: f32 },
 };
 
-const Scanner = struct {
-    const ZonIndex = std.zig.Zoir.Node.Index;
+const OOM = std.mem.Allocator.Error;
+fn add_node_callback(self: *Settings, name: [:0]const u8, node: Node) OOM!void {
+    try self.settings.put(App.static_alloc(), name, node);
+}
 
-    zoir: std.zig.Zoir,
-    ast: std.zig.Ast,
-    source: [:0]const u8,
-    stack: std.ArrayListUnmanaged(ZonIndex),
-    file_name: []const u8,
+const Menu = @import("SettingsMenu");
+fn Scanner(comptime Ctx: type, comptime Err: type) type {
+    return struct {
+        const VisitorCallback = fn (ctx: Ctx, name: [:0]const u8, node: Node) Err!void;
+        const ScannerT = @This();
 
-    map: Map,
+        ctx: Ctx,
+        fptr: *const VisitorCallback,
 
-    const OOM = std.mem.Allocator.Error;
-
-    pub fn scan(file_name: []const u8, source: [:0]const u8) OOM!Settings {
-        const ast = try std.zig.Ast.parse(App.frame_alloc(), source, .zon);
-        const zoir = try std.zig.ZonGen.generate(App.frame_alloc(), ast, .{});
-        std.debug.assert(!zoir.hasCompileErrors());
-
-        var scanner = Scanner{
-            .zoir = zoir,
-            .ast = ast,
-            .source = source,
-            .file_name = file_name,
-            .stack = .empty,
-            .map = .empty,
-        };
-        try scanner.scan_node(.root);
-
-        return .{
-            .file_name = file_name,
-            .settings = scanner.map,
-            .events = .empty,
-        };
-    }
-
-    fn scan_node(self: *Scanner, idx: ZonIndex) OOM!void {
-        const kind_idx = self.get_child_ensure_type(idx, .enum_literal, "kind") orelse return;
-        const kind = std.meta.stringToEnum(std.meta.Tag(Node), kind_idx.get(self.zoir).enum_literal.get(self.zoir)) orelse {
-            self.report_error(kind_idx, "Invalid kind", .{});
-            return;
-        };
-
-        switch (kind) {
-            .section => try self.scan_section(idx),
-            inline else => |tag| try self.scan_auto(tag, idx),
-        }
-    }
-
-    fn scan_section(self: *Scanner, idx: ZonIndex) OOM!void {
-        const children_idx = self.get_child_ensure_type(idx, .array_literal, "children") orelse return;
-        const children = children_idx.get(self.zoir).array_literal;
-
-        try self.stack.append(App.frame_alloc(), idx);
-        defer _ = self.stack.pop();
-
-        for (0..children.len) |i| {
-            try self.scan_node(children.at(@intCast(i)));
-        }
-    }
-
-    fn scan_auto(self: *Scanner, comptime tag: std.meta.Tag(Node), idx: ZonIndex) OOM!void {
-        const Body = @FieldType(Node, @tagName(tag));
-        var diag = std.zon.parse.Diagnostics{};
-        const parsed = std.zon.parse.fromZoirNode(
-            Body,
-            App.frame_alloc(),
-            self.ast,
-            self.zoir,
-            idx,
-            &diag,
-            .{ .ignore_unknown_fields = true },
-        ) catch |err| {
-            if (err == OOM.OutOfMemory) return OOM.OutOfMemory;
-            self.report_error(idx, "Invalid node: {f}", .{diag});
-            return;
-        };
-
-        const name = (try self.calc_current_name(idx)) orelse return;
-        try self.map.put(App.static_alloc(), name, @unionInit(Node, @tagName(tag), parsed));
-    }
-
-    fn calc_current_name(self: *Scanner, last: ZonIndex) OOM!?[:0]const u8 {
-        var acc = std.ArrayListUnmanaged(u8).empty;
-        var writer = acc.writer(App.frame_alloc());
-
-        for (self.stack.items) |idx| {
-            const name_idx = self.get_child_ensure_type(idx, .string_literal, "name") orelse return null;
-            const name = name_idx.get(self.zoir).string_literal;
-            try writer.print(".{s}", .{name});
-        }
-        {
-            const name_idx = self.get_child_ensure_type(last, .string_literal, "name") orelse return null;
-            const name = name_idx.get(self.zoir).string_literal;
-            try writer.print(".{s}", .{name});
+        pub fn scan(ctx: Ctx, callback: *const VisitorCallback) Err!void {
+            var self: ScannerT = .{
+                .ctx = ctx,
+                .fptr = callback,
+            };
+            try self.scan_node(Menu, &(.{}));
         }
 
-        return try acc.toOwnedSliceSentinel(App.static_alloc(), 0);
-    }
-
-    fn get_child(self: *Scanner, parent_idx: ZonIndex, name: []const u8) ?ZonIndex {
-        const parent = parent_idx.get(self.zoir);
-        if (parent != .struct_literal) {
-            self.report_error(parent_idx, "Expected a struct_literal", .{});
-            return null;
-        }
-
-        const child_idx: ZonIndex = loop: for (parent.struct_literal.names, 0..) |child, i| {
-            if (std.mem.eql(u8, name, child.get(self.zoir))) {
-                break :loop parent.struct_literal.vals.at(@intCast(i));
+        fn scan_node(
+            self: ScannerT,
+            node: anytype,
+            comptime name_stack: []const []const u8,
+        ) Err!void {
+            const kind: std.meta.Tag(Node) = node.kind;
+            switch (kind) {
+                .section => try self.scan_section(node, name_stack),
+                inline else => |tag| try self.scan_any(node, tag, name_stack),
             }
-        } else {
-            self.report_error(parent_idx, "Missing field '{s}'", .{name});
-            return null;
-        };
-
-        return child_idx;
-    }
-
-    fn get_child_ensure_type(
-        self: *Scanner,
-        parent_idx: ZonIndex,
-        comptime typ: std.meta.Tag(std.zig.Zoir.Node),
-        name: []const u8,
-    ) ?ZonIndex {
-        const child_idx = self.get_child(parent_idx, name) orelse return null;
-        if (child_idx.get(self.zoir) != typ) {
-            self.report_error(child_idx, "Expected a '{s}'", .{@tagName(typ)});
-            return null;
         }
-        return child_idx;
-    }
 
-    fn report_error(self: *Scanner, idx: ZonIndex, comptime msg: []const u8, args: anytype) void {
-        Log.log(.warn, msg, args);
-        const ast_node = idx.getAstNode(self.zoir);
-        const toc = self.ast.nodeMainToken(ast_node);
-        const loc = self.ast.tokenLocation(0, toc);
+        fn scan_section(
+            self: ScannerT,
+            node: anytype,
+            comptime name_stack: []const []const u8,
+        ) Err!void {
+            const new_stack = name_stack ++ .{node.name};
 
-        Log.log(.warn, "\t at {s}:{d}:{d}", .{ self.file_name, loc.line, loc.column });
-    }
-};
+            inline for (node.children) |child| {
+                try self.scan_node(child, new_stack);
+            }
+        }
+
+        fn scan_any(
+            self: ScannerT,
+            node: anytype,
+            comptime tag: std.meta.Tag(Node),
+            comptime name_stack: []const []const u8,
+        ) Err!void {
+            const Sub = @FieldType(Node, @tagName(tag));
+            var sub: Sub = undefined;
+            inline for (comptime std.meta.fieldNames(Sub)) |field_name| {
+                @field(sub, field_name) = @field(node, field_name);
+            }
+            const name = concat(name_stack ++ .{node.name});
+            try self.visit(name, @unionInit(Node, @tagName(tag), sub));
+        }
+
+        inline fn visit(self: ScannerT, name: [:0]const u8, node: Node) Err!void {
+            try self.fptr(self.ctx, name, node);
+        }
+
+        fn concat(comptime list: []const []const u8) [:0]const u8 {
+            const res = comptime blk: {
+                var len: usize = 0;
+                for (list) |s| len += s.len + 1;
+                var res = std.mem.zeroes([len:0]u8);
+                var offset: usize = 0;
+                for (list) |s| {
+                    res[offset] = '.';
+                    offset += 1;
+                    @memcpy(res[offset .. offset + s.len], s);
+                    offset += s.len;
+                }
+                break :blk res;
+            };
+
+            return &res;
+        }
+    };
+}
