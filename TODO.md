@@ -30,6 +30,13 @@
 
 # Done
 
+- 01.12.2025:
+    1. Now settings are setup by two files: `assets/SettingsMenu.zon` and `./client.zon`. 
+    The idea is `SettingsMenu` contains default values and UI setup info (slider range, ...), and is 
+    built into the final executable. The second file only stores key-value pairs, and is accessed at 
+    runtime. That way it is easy to write save/load/restore functionality, and it is "impossible" to 
+    break everything by writing junk into the settings file.
+
 - 30.11.2025:
     1. Improved per-face-side AO, now it is not jarring!
     2. Runtime settings: think about changing settings dynamically. Now we have a `client.zon` file that contains all settings in
