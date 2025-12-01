@@ -17,12 +17,64 @@ pub fn init() !Settings {
         .events = .empty,
         .settings = .empty,
     };
-    try Scanner(*Settings, OOM).scan(&self, add_node_callback);
+    try self.load_template();
+
     return self;
 }
 
+fn load_template(self: *Settings) !void {
+    const Visitor = struct {
+        const OOM = std.mem.Allocator.Error;
+        fn add_node_callback(this: *Settings, name: [:0]const u8, node: Node) OOM!void {
+            try this.settings.put(App.static_alloc(), name, node);
+        }
+    };
+    try Scanner(*Settings, Visitor.OOM).scan(self, &Visitor.add_node_callback);
+}
+
 pub fn deinit(self: *Settings) void {
-    _ = self;
+    self.save() catch |err| {
+        Log.log(.warn, "Couldn't save settings: {}", .{err});
+    };
+}
+
+pub fn save(self: *Settings) !void {
+    const Visitor = struct {
+        const Error = std.zon.Serializer.Error;
+
+        settings: *Settings,
+        struct_builder: *std.zon.Serializer.Struct,
+
+        const Visitor = @This();
+        fn save_node_callback(this: *Visitor, name: [:0]const u8, node: Node) Error!void {
+            switch (std.meta.activeTag(node)) {
+                .section => unreachable,
+                inline else => |tag| {
+                    const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
+                    const default = @field(node, @tagName(tag)).value;
+                    const value = this.settings.get_value(Value, name) orelse default;
+                    try this.struct_builder.field(name, value, .{});
+                },
+            }
+        }
+    };
+
+    var file = try std.fs.cwd().createFile(Options.settings_file, .{});
+    defer file.close();
+
+    var buf = std.mem.zeroes([256]u8);
+    var writer = file.writer(&buf);
+    var serializer = std.zon.Serializer{ .writer = &writer.interface };
+    var struct_builder = try serializer.beginStruct(.{});
+
+    var visitor = Visitor{
+        .settings = self,
+        .struct_builder = &struct_builder,
+    };
+    try Scanner(*Visitor, Visitor.Error).scan(&visitor, Visitor.save_node_callback);
+
+    try struct_builder.end();
+    try writer.interface.flush();
 }
 
 pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const u8) !Ecs.EventRef {
@@ -110,6 +162,12 @@ fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
 }
 
 fn on_imgui_impl(self: *Settings) !void {
+    if (c.igButton("Save", .{})) {
+        self.save() catch |err| {
+            Log.log(.warn, "Couldn't save settings: {}", .{err});
+        };
+    }
+
     var it = self.settings.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -161,11 +219,6 @@ const Node = union(enum) {
     int_slider: struct { min: i32, max: i32, value: i32 },
     float_slider: struct { min: f32, max: f32, value: f32 },
 };
-
-const OOM = std.mem.Allocator.Error;
-fn add_node_callback(self: *Settings, name: [:0]const u8, node: Node) OOM!void {
-    try self.settings.put(App.static_alloc(), name, node);
-}
 
 const Menu = @import("SettingsMenu");
 fn Scanner(comptime Ctx: type, comptime Err: type) type {
