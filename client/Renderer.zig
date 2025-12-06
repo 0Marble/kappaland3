@@ -17,6 +17,7 @@ const Ecs = @import("libmine").Ecs;
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
 const SSAO_SETTINGS = ".main.renderer.ssao";
+const FXAA_SETTINGS = ".main.renderer.fxaa";
 
 pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
@@ -76,6 +77,25 @@ fn init_settings(self: *Renderer) !void {
     try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_min", "ssao_pass", "u_range_min", f32);
     try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_max", "ssao_pass", "u_range_max", f32);
     try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".use_range", "ssao_pass", "u_use_range", bool);
+
+    try self.on_setting_change_set_uniform(
+        FXAA_SETTINGS ++ ".enable",
+        "postprocessing_pass",
+        "u_enable_fxaa",
+        bool,
+    );
+    try self.on_setting_change_set_uniform(
+        FXAA_SETTINGS ++ ".contrast",
+        "postprocessing_pass",
+        "u_fxaa_contrast",
+        f32,
+    );
+    try self.on_setting_change_set_uniform(
+        FXAA_SETTINGS ++ ".debug_outline",
+        "postprocessing_pass",
+        "u_fxaa_debug_outline",
+        bool,
+    );
 }
 
 fn on_setting_change_set_uniform(
@@ -137,6 +157,7 @@ pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
 
 pub fn draw(self: *Renderer) !void {
     const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable") orelse false;
+    const render_size = zm.Vec2f{ @floatFromInt(self.cur_width), @floatFromInt(self.cur_height) };
 
     try gl_call(gl.ClearDepth(0.0));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
@@ -167,7 +188,7 @@ pub fn draw(self: *Renderer) !void {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_blur_fbo));
         try gl_call(gl.Disable(gl.DEPTH_TEST));
         try self.ssao_blur_pass.bind();
-        try self.ssao_blur_pass.set_vec2("u_tex_size", .{ @floatFromInt(self.cur_width), @floatFromInt(self.cur_height) });
+        try self.ssao_blur_pass.set_vec2("u_tex_size", render_size);
         try gl_call(gl.ActiveTexture(gl.TEXTURE0 + SSAO_TEX_UNIFORM));
         try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.ssao_tex));
         try self.screen_quad.draw(gl.TRIANGLES);
@@ -201,6 +222,7 @@ pub fn draw(self: *Renderer) !void {
     try self.postprocessing_pass.bind();
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + RENDERED_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.rendered_tex));
+    try self.postprocessing_pass.set_vec2("u_render_size", render_size);
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
@@ -314,6 +336,8 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, null));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
         gl.COLOR_ATTACHMENT0 + RENDERED_TEX_ATTACHMENT,
@@ -489,13 +513,69 @@ const vert =
 ;
 const postprocessing_frag =
     \\#version 460 core
+    \\uniform sampler2D u_rendered_tex;
+    \\uniform vec2 u_render_size;
+    \\
+    \\uniform float u_fxaa_contrast = 1.0;
+    \\uniform bool u_enable_fxaa = true;
+    \\uniform bool u_fxaa_debug_outline = false;
+    \\
     \\in vec2 frag_uv;
     \\out vec4 out_color;
     \\
-    \\uniform sampler2D u_rendered_tex;
+    \\float edge_detect_weights[9] = {-1, -1, -1, 2, 2, 2, -1, -1, -1};
+    \\vec4 edge_detect(bool vertical) {
+    \\  vec4 sum = vec4(0);
+    \\  int k = 0;
+    \\  for (int i = -1; i <= 1; i++) {
+    \\    for (int j = -1; j <= 1; j++) {
+    \\      vec2 d = (vertical ? vec2(i, j) : vec2(j, i));
+    \\      sum += edge_detect_weights[k] * texture(u_rendered_tex, frag_uv + d / u_render_size);
+    \\      k++;
+    \\    }
+    \\  }
+    \\  return sum;
+    \\}
+    \\
+    \\float sample_luminance(vec2 uv) {
+    \\  vec4 s = texture(u_rendered_tex, uv);
+    \\  return max(s.r, max(s.g, s.b));
+    \\}
+    \\
+    \\vec4 fxaa() {
+    \\  float u = sample_luminance(frag_uv + vec2(0, 1) / u_render_size);  
+    \\  float d = sample_luminance(frag_uv - vec2(0, 1) / u_render_size);  
+    \\  float l = sample_luminance(frag_uv - vec2(1, 0) / u_render_size);  
+    \\  float r = sample_luminance(frag_uv + vec2(1, 0) / u_render_size);  
+    \\  float c = sample_luminance(frag_uv);  
+    \\
+    \\  float min_lum = min(min(u, d), min(l, min(c, r)));
+    \\  float max_lum = max(max(u, d), max(l, max(c, r)));
+    \\  float contrast = max_lum - min_lum;
+    \\  if (contrast < u_fxaa_contrast) return (u_fxaa_debug_outline ? vec4(0) : texture(u_rendered_tex, frag_uv));
+    \\
+    \\  float lu = sample_luminance(frag_uv + vec2(-1, 1) / u_render_size);
+    \\  float lb = sample_luminance(frag_uv + vec2(-1, -1) / u_render_size);
+    \\  float ru = sample_luminance(frag_uv + vec2(1, 1) / u_render_size);
+    \\  float rb = sample_luminance(frag_uv + vec2(1, -1) / u_render_size);
+    \\
+    \\  float f = smoothstep(0, 1, abs((2 * (u + d + l + r) + (lu + lb + ru + rb)) / 12 - c) / contrast);
+    \\  float vert = length(edge_detect(true));
+    \\  float horiz = length(edge_detect(false));
+    \\
+    \\  if (vert > horiz) {
+    \\      vec4 l = texture(u_rendered_tex, frag_uv - vec2(f, 0) / u_render_size);
+    \\      vec4 r = texture(u_rendered_tex, frag_uv + vec2(f, 0) / u_render_size);
+    \\      return (l + r) / 2;
+    \\  } else {
+    \\      vec4 d = texture(u_rendered_tex, frag_uv - vec2(0, f) / u_render_size);
+    \\      vec4 u = texture(u_rendered_tex, frag_uv + vec2(0, f) / u_render_size);
+    \\      return (d + u) / 2;
+    \\  }
+    \\}
     \\
     \\void main() {
-    \\  out_color = texture(u_rendered_tex, frag_uv);
+    \\  out_color = (u_enable_fxaa ? fxaa() : texture(u_rendered_tex, frag_uv));
     \\}
 ;
 const lighting_frag =
