@@ -198,7 +198,7 @@ pub fn draw(self: *Renderer) !void {
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
     try self.lighting_pass.bind();
-    try self.lighting_pass.set_vec3("u_view_pos", App.game_state().camera.pos);
+    try self.lighting_pass.set_vec3("u_view_pos", App.game_state().camera.frustum.pos);
     const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
     const light_dir = App.game_state().camera.view_mat().multiplyVec4(light_dir_world);
     try self.lighting_pass.set_vec3("u_light_dir", zm.vec.xyz(light_dir));

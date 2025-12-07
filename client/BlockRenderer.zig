@@ -454,7 +454,7 @@ fn compute_seen(self: *Self) !usize {
     @memset(coords, 0);
     @memset(indirect, std.mem.zeroes(Indirect));
 
-    std.mem.sort(MeshOrder, mesh_order[0..counter], cam.pos, MeshOrder.less);
+    std.mem.sort(MeshOrder, mesh_order[0..counter], cam.frustum.pos, MeshOrder.less);
 
     self.triangle_count = 0;
     for (0..counter) |i| {

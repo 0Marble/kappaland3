@@ -279,7 +279,7 @@ fn handle_events() !bool {
             c.SDL_EVENT_WINDOW_RESIZED => {
                 gl.Viewport(0, 0, evt.window.data1, evt.window.data2);
                 try App.renderer().resize_framebuffers(evt.window.data1, evt.window.data2);
-                game_state().camera.update_aspect(@as(f32, @floatFromInt(evt.window.data1)) /
+                game_state().camera.frustum.update_aspect(@as(f32, @floatFromInt(evt.window.data1)) /
                     @as(f32, @floatFromInt(evt.window.data2)));
             },
             c.SDL_EVENT_KEY_DOWN => {

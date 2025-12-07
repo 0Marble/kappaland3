@@ -34,7 +34,11 @@ pub fn on_frame_start(self: *GameState) !void {
             const camera_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
                 "xyz: {:.3}, angles: {:.3}, view: {:.3}",
-                .{ this.camera.pos, this.camera.angles, this.camera.view_dir() },
+                .{
+                    this.camera.frustum.pos,
+                    this.camera.frustum.angles,
+                    this.camera.frustum.view_dir(),
+                },
                 0,
             ));
             c.igText("%s", camera_str);
