@@ -147,3 +147,15 @@ fn generate_wavy(self: *Chunk) void {
         }
     }
 }
+
+pub fn aabb(self: *Chunk) zm.AABBf {
+    const size = @as(zm.Vec3f, @splat(CHUNK_SIZE));
+    const pos = @as(zm.Vec3f, @floatFromInt(self.coords.as_vec())) * size;
+    return .init(pos, pos + size);
+}
+
+pub fn get_occluder(self: *Chunk) ?zm.AABBf {
+    const all_full = std.mem.indexOfScalar(World.BlockId, &self.blocks, .air) == null;
+    if (!all_full) return null;
+    return self.aabb();
+}

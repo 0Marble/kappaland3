@@ -15,6 +15,7 @@ const Renderer = @import("Renderer.zig");
 const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
 const Ecs = @import("libmine").Ecs;
+const Occlusion = @import("Occlusion.zig");
 
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
@@ -434,31 +435,44 @@ const MeshOrder = struct {
 };
 
 fn compute_seen(self: *Self) !usize {
-    const mesh_order = try App.frame_alloc().alloc(MeshOrder, self.meshes.count());
+    const seen_meshes = try App.frame_alloc().alloc(MeshOrder, self.meshes.count());
     const cam: *Camera = &App.game_state().camera;
 
-    var counter: usize = 0;
+    var seen_count: usize = 0;
     for (self.meshes.values()) |mesh| {
         const sphere = mesh.bounding_sphere();
         const center = zm.vec.xyz(sphere);
         if (!cam.sphere_in_frustum(center, sphere[3])) continue;
 
-        mesh_order[counter].mesh = mesh;
-        mesh_order[counter].center = center;
-        counter += 1;
+        seen_meshes[seen_count].mesh = mesh;
+        seen_meshes[seen_count].center = center;
+        seen_count += 1;
     }
-    if (counter == 0) return 0;
+    if (seen_count == 0) return 0;
 
-    const indirect = try App.frame_alloc().alloc(Indirect, counter);
-    const coords = try App.frame_alloc().alloc(i32, 4 * counter);
+    const in_frustum = seen_meshes[0..seen_count];
+    std.mem.sort(MeshOrder, in_frustum, cam.frustum.pos, MeshOrder.less);
+
+    seen_count = 0;
+    for (in_frustum) |mesh| {
+        const chunk = mesh.mesh.chunk.?;
+        if (cam.is_occluded(chunk.aabb())) continue;
+        if (chunk.get_occluder()) |aabb| {
+            cam.add_occluder(aabb);
+        }
+
+        seen_meshes[seen_count] = mesh;
+        seen_count += 1;
+    }
+
+    const indirect = try App.frame_alloc().alloc(Indirect, seen_count);
+    const coords = try App.frame_alloc().alloc(i32, 4 * seen_count);
     @memset(coords, 0);
     @memset(indirect, std.mem.zeroes(Indirect));
 
-    std.mem.sort(MeshOrder, mesh_order[0..counter], cam.frustum.pos, MeshOrder.less);
-
     self.triangle_count = 0;
-    for (0..counter) |i| {
-        const mesh = mesh_order[i].mesh;
+    for (0..seen_count) |i| {
+        const mesh = seen_meshes[i].mesh;
         const range = self.faces.get_range(mesh.handle).?;
         indirect[i] = Indirect{
             .count = 6,
@@ -476,8 +490,8 @@ fn compute_seen(self: *Self) !usize {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_coords_ssbo));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
 
-    if (self.allocated_chunks_count < counter) {
-        self.allocated_chunks_count = counter * 2;
+    if (self.allocated_chunks_count < seen_count) {
+        self.allocated_chunks_count = seen_count * 2;
         try gl_call(gl.BufferData(
             gl.SHADER_STORAGE_BUFFER,
             @intCast(self.allocated_chunks_count * @sizeOf(i32) * 4),
@@ -496,7 +510,7 @@ fn compute_seen(self: *Self) !usize {
     try gl_call(gl.BufferSubData(
         gl.SHADER_STORAGE_BUFFER,
         0,
-        @intCast(counter * @sizeOf(i32) * 4),
+        @intCast(seen_count * @sizeOf(i32) * 4),
         @ptrCast(coords),
     ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
@@ -504,7 +518,7 @@ fn compute_seen(self: *Self) !usize {
     try gl_call(gl.BufferSubData(
         gl.DRAW_INDIRECT_BUFFER,
         0,
-        @intCast(counter * @sizeOf(Indirect)),
+        @intCast(seen_count * @sizeOf(Indirect)),
         @ptrCast(indirect),
     ));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
@@ -512,7 +526,7 @@ fn compute_seen(self: *Self) !usize {
     try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(VertexData)));
     try gl_call(gl.BindVertexArray(0));
 
-    return counter;
+    return seen_count;
 }
 
 const ChunkMesh = struct {

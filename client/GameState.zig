@@ -47,6 +47,7 @@ pub fn on_frame_start(self: *GameState) !void {
 
     try self.keys.on_frame_start();
     try self.world.on_frame_start();
+    self.camera.clear_occlusion();
 }
 
 pub fn on_frame_end(self: *GameState) !void {

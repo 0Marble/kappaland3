@@ -8,11 +8,16 @@ const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 const Math = @import("libmine").Math;
 pub const Frustum = @import("Frustum.zig");
+pub const Occlusion = @import("Occlusion.zig");
 
 const MAX_REACH = 10;
 
 controller: Controller,
 frustum: Frustum,
+
+other_frustum: Frustum, // use to detatch occlusion from view for debug
+frustum_for_occlusion: *Frustum,
+occlusion: Occlusion,
 
 const Camera = @This();
 const Controls = enum(u32) {
@@ -24,13 +29,19 @@ const Controls = enum(u32) {
     down,
     move,
     interract,
+    detatch,
 };
 
 pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     self.* = .{
         .frustum = .init(fov, aspect),
+        .other_frustum = undefined,
+        .frustum_for_occlusion = undefined,
+        .occlusion = try .init(App.gpa(), 16, 16),
         .controller = undefined,
     };
+    self.frustum_for_occlusion = &self.frustum;
+
     try self.controller.init(self);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_W), .front);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_A), .left);
@@ -38,6 +49,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_D), .right);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_SPACE), .up);
     try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LSHIFT), .down);
+    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LEFTBRACKET), .detatch);
 
     try self.controller.bind_command(.front, .{ .normal = Camera.move });
     try self.controller.bind_command(.back, .{ .normal = Camera.move });
@@ -50,6 +62,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
 }
 
 pub fn deinit(self: *Camera) void {
+    self.occlusion.deinit(App.gpa());
     self.controller.deinit();
 }
 
@@ -68,6 +81,17 @@ pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
         App.game_state().world.request_set_block(raycast.prev_coords, .stone) catch |err| {
             Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
         };
+    }
+}
+
+fn detatch(self: *Camera, _: Controls) void {
+    if (!App.key_state().is_key_just_pressed(c.SDL_SCANCODE_LEFTBRACKET)) return;
+
+    if (self.frustum_for_occlusion == &self.frustum) {
+        self.other_frustum = self.frustum;
+        self.frustum_for_occlusion = &self.other_frustum;
+    } else {
+        self.frustum_for_occlusion = &self.frustum;
     }
 }
 
@@ -142,9 +166,21 @@ pub fn inverse_vp(self: *Camera) zm.Mat4f {
 }
 
 pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
-    return self.frustum.point_in_frustum(point);
+    return self.frustum_for_occlusion.point_in_frustum(point);
 }
 
 pub fn sphere_in_frustum(self: *Camera, center: zm.Vec3f, radius: f32) bool {
-    return self.frustum.sphere_in_frustum(center, radius);
+    return self.frustum_for_occlusion.sphere_in_frustum(center, radius);
+}
+
+pub fn clear_occlusion(self: *Camera) void {
+    self.occlusion.clear();
+}
+
+pub fn is_occluded(self: *Camera, aabb: zm.AABBf) bool {
+    return self.occlusion.is_occluded(aabb, self.frustum_for_occlusion);
+}
+
+pub fn add_occluder(self: *Camera, aabb: zm.AABBf) void {
+    self.occlusion.add_occluder(aabb, self.frustum_for_occlusion);
 }
