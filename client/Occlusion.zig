@@ -54,14 +54,13 @@ pub fn add_occluder(self: *Occlusion, aabb: zm.AABBf, frustum: *Frustum) void {
     const pts = self.aabb_points(aabb, frustum);
     var center = zm.Vec2f{ 0, 0 };
     for (&pts) |x| center += zm.vec.xy(x);
-    var furthest: f32 = 1;
-    for (&pts) |x| furthest = @min(furthest, x[2]);
-
     center /= @splat(8.0);
-
     var rad_sq = std.math.inf(f32);
     for (&pts) |x| rad_sq = @min(rad_sq, zm.vec.lenSq(center - zm.vec.xy(x)));
     const rad = @sqrt(rad_sq);
+
+    var furthest: f32 = 1;
+    for (&pts) |x| furthest = @min(furthest, x[2]);
 
     var min = center - zm.Vec2f{ rad, rad };
     var max = center + zm.Vec2f{ rad, rad };

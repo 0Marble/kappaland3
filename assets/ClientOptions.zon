@@ -63,6 +63,6 @@
         .type = .usize,
         .name = "occlusion_grid_size",
         .desc = "occlusion_grid_size",
-        .default = 16,
+        .default = 64,
     },
 }
