@@ -279,7 +279,7 @@ pub fn on_frame_start(self: *Self) !void {
             const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
                 "GPU Memory (faces): {f}",
-                .{util.MemoryUsage.from_bytes(this.faces.length)},
+                .{util.MemoryUsage.from_bytes(this.faces.size)},
                 0,
             ));
             c.igText("%s", gpu_mem_faces);
@@ -781,7 +781,7 @@ fn update_mesh(self: *Self, mesh: *ChunkMesh) !void {
     } else {
         const range = self.faces.get_range(mesh.handle).?;
         try gl_call(gl.InvalidateBufferSubData(self.faces.buffer, range.offset, range.size));
-        mesh.handle = try self.faces.realloc(mesh.handle, requested_size, .@"4");
+        mesh.handle = try self.faces.realloc(mesh.handle, requested_size);
     }
     if (actual_size == 0) {
         return;
