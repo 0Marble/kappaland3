@@ -27,10 +27,13 @@ const BLOCK_DATA_BINDING = 3;
 const VERT_DATA_BINDING = 4;
 const BLOCK_FACE_COUNT = BlockModel.faces.len;
 const VERTS_PER_FACE = BlockModel.faces[0].len;
-const N_OFFSET = VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE;
-const W_OFFSET = VERTS_PER_FACE * CHUNK_SIZE;
-const H_OFFSET = VERTS_PER_FACE;
+const W_OFFSET = VERTS_PER_FACE * BLOCK_FACE_COUNT * CHUNK_SIZE;
+const H_OFFSET = VERTS_PER_FACE * BLOCK_FACE_COUNT;
+const N_OFFSET = VERTS_PER_FACE;
 const P_OFFSET = 1;
+const CHUNK_IDX_LOC = 0;
+const CHUNK_POS_LOC = 1;
+const WORK_SIZE = 8;
 
 const VertexData = u64;
 
@@ -152,14 +155,81 @@ const FRAG =
     \\}
 ;
 
-shader: Shader,
+const CULLING_VERT =
+    \\#version 460 core
+    \\
+++ std.fmt.comptimePrint("#define CHUNK_IDX_LOC {d}\n", .{CHUNK_IDX_LOC}) ++
+    \\
+++ std.fmt.comptimePrint("#define CHUNK_POS_LOC {d}\n", .{CHUNK_POS_LOC}) ++
+    \\
+    \\layout(location = CHUNK_IDX_LOC) in uint vert_chunk_idx;
+    \\layout(location = CHUNK_POS_LOC) in vec3 vert_chunk_pos;
+    \\out uint frag_chunk_idx;
+    \\
+    \\uniform mat4 u_vp;
+    \\
+    \\void main() {
+    \\  gl_Position = u_vp * vec4(vert_chunk_pos, 1);
+    \\  frag_chunk_idx = vert_chunk_idx;
+    \\}
+;
+
+const CULLING_FRAG =
+    \\#version 460 core
+    \\
+    \\in flat uint frag_chunk_idx;
+    \\out uint out_chunk_idx;
+    \\void main() { out_chunk_idx = frag_chunk_idx; }
+;
+
+const CULLING_COMPUTE =
+    \\#version 460 core
+    \\
+++ std.fmt.comptimePrint("#define WORK_SIZE {d}\n", .{WORK_SIZE}) ++
+    \\
+    \\layout(local_size_x = WORK_SIZE, local_size_y = WORK_SIZE, local_size_z = 1) in; 
+    \\
+    \\struct Indirect {
+    \\  uint count;
+    \\  uint instance_count;
+    \\  uint first_index;
+    \\  int base_vertex;
+    \\  uint base_instance;
+    \\};
+    \\struct ChunkFaces {
+    \\  uint count;
+    \\  uint offset;
+    \\};
+    \\
+    \\layout (r32ui, binding = 0) uniform readonly uimage2D u_visible_chunk_ids;
+    \\layout (std430, binding = 1) buffer ChunkFaceData { ChunkFaces chunk_faces[]; };
+    \\layout (std430, binding = 2) buffer IndirectInfo { Indirect indirect[]; };
+    \\
+    \\void main() {
+    \\  uint idx = imageLoad(u_visible_chunk_ids, ivec2(gl_GlobalInvocationID.xy)).r;
+    \\  // hopefully here we do not need a lock since all the data is the same
+    \\  indirect[idx].count = 6;
+    \\  indirect[idx].instance_count = chunk_faces[idx].count;
+    \\  indirect[idx].first_index = chunk_faces[idx].offset;
+    \\  indirect[idx].base_vertex = 0;
+    \\  indirect[idx].base_instance = 0;
+    \\}
+;
+
+block_shader: Shader,
+occlusion_shader: Shader,
+compute_indirect_shader: Shader,
+
 faces: GpuAlloc,
 indirect_buffer: gl.uint,
 chunk_coords_ssbo: gl.uint,
 allocated_chunks_count: usize,
-vao: gl.uint,
+
+block_vao: gl.uint,
 block_model_ibo: gl.uint,
 block_model_ubo: gl.uint,
+
+chunk_vao: gl.uint,
 
 meshes_changed: bool,
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *ChunkMesh),
@@ -182,8 +252,18 @@ pub fn init(self: *Self) !void {
     try self.init_shader();
 
     self.eid = try App.ecs().spawn();
-    try self.on_setting_change_set_uniform(".main.renderer.face_ao", "shader", "u_enable_face_occlusion", bool);
-    try self.on_setting_change_set_uniform(".main.renderer.face_ao_factor", "shader", "u_occlusion_factor", f32);
+    try self.on_setting_change_set_uniform(
+        ".main.renderer.face_ao",
+        "block_shader",
+        "u_enable_face_occlusion",
+        bool,
+    );
+    try self.on_setting_change_set_uniform(
+        ".main.renderer.face_ao_factor",
+        "block_shader",
+        "u_occlusion_factor",
+        f32,
+    );
 }
 
 fn on_setting_change_set_uniform(
@@ -225,19 +305,21 @@ pub fn deinit(self: *Self) void {
     gl.DeleteBuffers(1, @ptrCast(&self.block_model_ubo));
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_coords_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buffer));
-    gl.DeleteVertexArrays(1, @ptrCast(&self.vao));
+    gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
 
-    self.shader.deinit();
+    self.block_shader.deinit();
+    self.occlusion_shader.deinit();
+    self.compute_indirect_shader.deinit();
 }
 
 pub fn draw(self: *Self) !void {
     self.seen_cnt = try self.compute_seen();
     if (self.seen_cnt == 0) return;
 
-    try self.shader.set_mat4("u_view", App.game_state().camera.view_mat());
-    try self.shader.set_mat4("u_proj", App.game_state().camera.proj_mat());
+    try self.block_shader.set_mat4("u_view", App.game_state().camera.view_mat());
+    try self.block_shader.set_mat4("u_proj", App.game_state().camera.proj_mat());
 
-    try gl_call(gl.BindVertexArray(self.vao));
+    try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
@@ -306,9 +388,9 @@ const raw_faces: []const u8 = blk: {
     }
     const size = 4 * BLOCK_FACE_COUNT * VERTS_PER_FACE * World.CHUNK_SIZE * World.CHUNK_SIZE;
     var faces_data = std.mem.zeroes([size]f32);
-    for (BlockModel.faces, 0..) |face, n| {
-        for (0..World.CHUNK_SIZE) |w| {
-            for (0..World.CHUNK_SIZE) |h| {
+    for (0..World.CHUNK_SIZE) |w| {
+        for (0..World.CHUNK_SIZE) |h| {
+            for (BlockModel.faces, 0..) |face, n| {
                 for (face, 0..) |vertex, p| {
                     const idx = n * N_OFFSET + w * W_OFFSET + h * H_OFFSET + p * P_OFFSET;
                     const vec: zm.Vec3f = vertex;
@@ -330,7 +412,7 @@ fn init_buffers(self: *Self) !void {
     self.allocated_chunks_count = EXPECTED_LOADED_CHUNKS_COUNT;
     self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
 
-    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.vao)));
+    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ibo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ubo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
@@ -354,7 +436,7 @@ fn init_buffers(self: *Self) !void {
     ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
-    try gl_call(gl.BindVertexArray(self.vao));
+    try gl_call(gl.BindVertexArray(self.block_vao));
 
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_model_ibo));
     const inds: []const u8 = &BlockModel.indices;
@@ -398,20 +480,37 @@ fn init_buffers(self: *Self) !void {
 }
 
 fn init_shader(self: *Self) !void {
-    var sources: [2]Shader.Source = .{
-        .{
-            .kind = gl.VERTEX_SHADER,
-            .sources = &.{VERT},
-            .name = "chunk_vert",
-        },
-        .{
-            .kind = gl.FRAGMENT_SHADER,
-            .sources = &.{FRAG},
-            .name = "chunk_frag",
-        },
-    };
+    {
+        var sources: [2]Shader.Source = .{
+            .{
+                .kind = gl.VERTEX_SHADER,
+                .sources = &.{VERT},
+                .name = "chunk_vert",
+            },
+            .{
+                .kind = gl.FRAGMENT_SHADER,
+                .sources = &.{FRAG},
+                .name = "chunk_frag",
+            },
+        };
 
-    self.shader = try .init(&sources);
+        self.block_shader = try .init(&sources);
+    }
+
+    {
+        var sources: [2]Shader.Source = .{
+            Shader.Source{ .sources = &.{CULLING_VERT}, .kind = gl.VERTEX_SHADER },
+            Shader.Source{ .sources = &.{CULLING_FRAG}, .kind = gl.FRAGMENT_SHADER },
+        };
+        self.occlusion_shader = try .init(&sources);
+    }
+
+    {
+        var sources: [1]Shader.Source = .{
+            Shader.Source{ .sources = &.{CULLING_COMPUTE}, .kind = gl.COMPUTE_SHADER },
+        };
+        self.compute_indirect_shader = try .init(&sources);
+    }
 }
 
 const Indirect = extern struct {
@@ -497,7 +596,7 @@ fn compute_seen(self: *Self) !usize {
         ));
     }
 
-    try gl_call(gl.BindVertexArray(self.vao));
+    try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BufferSubData(
         gl.SHADER_STORAGE_BUFFER,
         0,
