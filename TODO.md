@@ -31,6 +31,10 @@
     Now it is at least a lot more clear how it works (I did not work on the performance). 
     I also seemingly fixed the crash at realloc, at least I could not replicate it after the rewrite.
     It was easy to replicate before.
+    2. Worked on occlusion culling. First, I implemented a (buggy ofc) CPU version, and, it sucks.
+    Well, it dropped rendered chunks by around 20%, but it was also quite expensive CPU-wise. 
+    I want to try out a GPU based version, that just renders occluders and sees what happens.
+    I have partially implemented this, but it is now a bit late so I have to leave it for next week.
 
 - 06.12.2025:
     1. Worked a bit on FXAA, it didnt turn out all that well.
