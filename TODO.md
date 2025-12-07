@@ -13,22 +13,24 @@
 
 # Non-critical
 
-- Improve client.GpuAlloc
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
 - Ambient occlusion - right now the block lighting is very flat, its hard to see anything
 - How does transparensy, non-block models, textures work?
 
 # Debt
 
-- crash:
-    1. src: `GpuAlloc.zig:171:9`, error: `8246:824c:1:9146: GL_INVALID_VALUE in glCopyBufferSubData(overlapping src/dst)`
-    2. Happens if you just keep placing a bunch of blocks, running around in a circle.
 - visual: Face AO does not take neighbouring chunks into account
 - visual/probably-unfixable: SSAO cutoff, i.e. when you get close to a block face and slowly rotate the camera
 - fps: what is the state of the game on iGPU?
 - build: we depend on system install of SDL3.
 
 # Done
+
+- 07.12.2025:
+    1. Worked on GpuAlloc. 
+    Now it is at least a lot more clear how it works (I did not work on the performance). 
+    I also seemingly fixed the crash at realloc, at least I could not replicate it after the rewrite.
+    It was easy to replicate before.
 
 - 06.12.2025:
     1. Worked a bit on FXAA, it didnt turn out all that well.
