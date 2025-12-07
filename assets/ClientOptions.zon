@@ -59,4 +59,10 @@
         .desc = "renderer_log_settings_changed",
         .default = false,
     },
+    .{
+        .type = .usize,
+        .name = "occlusion_grid_size",
+        .desc = "occlusion_grid_size",
+        .default = 16,
+    },
 }

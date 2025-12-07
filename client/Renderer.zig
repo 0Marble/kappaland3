@@ -49,6 +49,7 @@ ssao_blur_fbo: gl.uint,
 render_fbo: gl.uint,
 rendered_tex: gl.uint,
 noise_tex: gl.uint,
+occlusion_debug_tex: gl.uint,
 
 screen_quad: Mesh,
 postprocessing_pass: Shader,
@@ -144,6 +145,8 @@ pub fn deinit(self: *Renderer) void {
     gl.DeleteTextures(1, @ptrCast(&self.ssao_blur_tex));
     gl.DeleteTextures(1, @ptrCast(&self.noise_tex));
 
+    gl.DeleteTextures(1, @ptrCast(&self.occlusion_debug_tex));
+
     self.screen_quad.deinit();
     self.postprocessing_pass.deinit();
     self.lighting_pass.deinit();
@@ -226,6 +229,23 @@ pub fn draw(self: *Renderer) !void {
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
 
+    const cam = &App.game_state().camera;
+    var data = std.mem.zeroes([Options.occlusion_grid_size * Options.occlusion_grid_size]f32);
+    for (cam.occlusion.grid.items, &data) |x, *y| y.* = 100 * x;
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.occlusion_debug_tex));
+    try gl_call(gl.TexSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        Options.occlusion_grid_size,
+        Options.occlusion_grid_size,
+        gl.RED,
+        gl.FLOAT,
+        @ptrCast(&data),
+    ));
+
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
     try App.gui().draw();
 }
 
@@ -374,6 +394,7 @@ fn draw_fbo_debug(self: *Renderer) !void {
         "base_tex",
         "ssao_tex",
         "ssao_blur_tex",
+        "occlusion_debug_tex",
     });
 
     inline for (textures) |name| {
@@ -381,6 +402,15 @@ fn draw_fbo_debug(self: *Renderer) !void {
         const tex: c.ImTextureRef = .{ ._TexID = @intCast(@field(self, name)) };
         c.igImage(tex, size, uv_min, uv_max);
     }
+
+    // c.igText("occlusion_debug_tex");
+    // const tex: c.ImTextureRef = .{ ._TexID = @intCast(self.occlusion_debug_tex) };
+    // c.igImage(
+    //     tex,
+    //     .{ .x = Options.occlusion_grid_size, .y = Options.occlusion_grid_size },
+    //     uv_min,
+    //     uv_max,
+    // );
 }
 
 fn init_buffers(self: *Renderer) !void {
@@ -423,6 +453,16 @@ fn init_buffers(self: *Renderer) !void {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT));
+
+    try gl_call(gl.GenTextures(1, @ptrCast(&self.occlusion_debug_tex)));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.occlusion_debug_tex));
+    try gl_call(gl.TexStorage2D(
+        gl.TEXTURE_2D,
+        1,
+        gl.R16F,
+        Options.occlusion_grid_size,
+        Options.occlusion_grid_size,
+    ));
 
     try self.resize_framebuffers(640, 480);
 }

@@ -9,6 +9,7 @@ const Keys = @import("Keys.zig");
 const Math = @import("libmine").Math;
 pub const Frustum = @import("Frustum.zig");
 pub const Occlusion = @import("Occlusion.zig");
+const Options = @import("ClientOptions");
 
 const MAX_REACH = 10;
 
@@ -37,7 +38,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .frustum = .init(fov, aspect),
         .other_frustum = undefined,
         .frustum_for_occlusion = undefined,
-        .occlusion = try .init(App.gpa(), 8, 8),
+        .occlusion = try .init(App.gpa(), Options.occlusion_grid_size, Options.occlusion_grid_size),
         .controller = undefined,
     };
     self.frustum_for_occlusion = &self.frustum;

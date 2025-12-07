@@ -468,13 +468,6 @@ fn compute_seen(self: *Self) !usize {
             seen_meshes[seen_count] = mesh;
             seen_count += 1;
         }
-
-        // Log.log(.debug, "occlusion: {f}", .{util.Array2DFormat(f32).init(
-        //     cam.occlusion.grid.items,
-        //     cam.occlusion.w,
-        //     cam.occlusion.h,
-        // )});
-        // Log.log(.debug, "", .{});
     }
 
     const indirect = try App.frame_alloc().alloc(Indirect, seen_count);
