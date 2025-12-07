@@ -30,6 +30,9 @@
 
 # Done
 
+- 06.12.2025:
+    1. Worked a bit on FXAA, it didnt turn out all that well.
+
 - 01.12.2025:
     1. Now settings are setup by two files: `assets/SettingsMenu.zon` and `./client.zon`. 
     The idea is `SettingsMenu` contains default values and UI setup info (slider range, ...), and is 
