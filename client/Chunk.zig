@@ -84,6 +84,10 @@ fn generate_grid(self: *Chunk) void {
     }
 }
 
+fn generate_solid(self: *Chunk) void {
+    @memset(&self.blocks, .stone);
+}
+
 fn generate_flat(self: *Chunk) void {
     @memset(&self.blocks, .air);
     if (self.coords.y > 0) return;

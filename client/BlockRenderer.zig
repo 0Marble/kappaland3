@@ -435,6 +435,9 @@ const MeshOrder = struct {
 };
 
 fn compute_seen(self: *Self) !usize {
+    const do_frustum_culling = App.settings().get_value(bool, ".main.renderer.frustum_culling").?;
+    const do_occlusion_culling = App.settings().get_value(bool, ".main.renderer.occlusion_culling").?;
+
     const seen_meshes = try App.frame_alloc().alloc(MeshOrder, self.meshes.count());
     const cam: *Camera = &App.game_state().camera;
 
@@ -442,7 +445,7 @@ fn compute_seen(self: *Self) !usize {
     for (self.meshes.values()) |mesh| {
         const sphere = mesh.bounding_sphere();
         const center = zm.vec.xyz(sphere);
-        if (!cam.sphere_in_frustum(center, sphere[3])) continue;
+        if (do_frustum_culling and !cam.sphere_in_frustum(center, sphere[3])) continue;
 
         seen_meshes[seen_count].mesh = mesh;
         seen_meshes[seen_count].center = center;
@@ -451,18 +454,27 @@ fn compute_seen(self: *Self) !usize {
     if (seen_count == 0) return 0;
 
     const in_frustum = seen_meshes[0..seen_count];
-    std.mem.sort(MeshOrder, in_frustum, cam.frustum.pos, MeshOrder.less);
+    std.mem.sort(MeshOrder, in_frustum, cam.frustum_for_occlusion.pos, MeshOrder.less);
 
-    seen_count = 0;
-    for (in_frustum) |mesh| {
-        const chunk = mesh.mesh.chunk.?;
-        if (cam.is_occluded(chunk.aabb())) continue;
-        if (chunk.get_occluder()) |aabb| {
-            cam.add_occluder(aabb);
+    if (do_occlusion_culling) {
+        seen_count = 0;
+        for (in_frustum) |mesh| {
+            const chunk = mesh.mesh.chunk.?;
+            if (cam.is_occluded(chunk.aabb())) continue;
+            if (chunk.get_occluder()) |aabb| {
+                cam.add_occluder(aabb);
+            }
+
+            seen_meshes[seen_count] = mesh;
+            seen_count += 1;
         }
 
-        seen_meshes[seen_count] = mesh;
-        seen_count += 1;
+        // Log.log(.debug, "occlusion: {f}", .{util.Array2DFormat(f32).init(
+        //     cam.occlusion.grid.items,
+        //     cam.occlusion.w,
+        //     cam.occlusion.h,
+        // )});
+        // Log.log(.debug, "", .{});
     }
 
     const indirect = try App.frame_alloc().alloc(Indirect, seen_count);

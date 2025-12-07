@@ -140,3 +140,25 @@ pub fn sdl_call(res: anytype) sdl_res_type(@TypeOf(res)) {
         else => return res,
     }
 }
+
+pub fn Array2DFormat(comptime Elem: type) type {
+    return struct {
+        array: []const Elem,
+        w: usize,
+        h: usize,
+
+        pub fn init(array: []const Elem, w: usize, h: usize) @This() {
+            return .{ .array = array, .w = w, .h = h };
+        }
+
+        pub fn format(
+            self: @This(),
+            writer: *std.Io.Writer,
+        ) std.Io.Writer.Error!void {
+            for (0..self.h) |y| {
+                const row = self.array[y * self.w .. (y + 1) * self.w];
+                try writer.print("{any}\n", .{row});
+            }
+        }
+    };
+}

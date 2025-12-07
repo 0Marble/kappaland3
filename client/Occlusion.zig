@@ -1,6 +1,7 @@
 const std = @import("std");
 const zm = @import("zm");
 const Frustum = @import("Frustum.zig");
+const util = @import("util.zig");
 
 w: usize,
 h: usize,
@@ -13,15 +14,15 @@ pub fn init(gpa: std.mem.Allocator, w: usize, h: usize) !Occlusion {
         .h = h,
         .grid = .empty,
     };
-    // glClipControl set to 0 (near) to 1 (far)
-    try self.grid.appendNTimes(gpa, 1.0, w * h);
+    // projection depth is 1 (near) to 0 (inf)
+    try self.grid.appendNTimes(gpa, 0.0, w * h);
 
     return self;
 }
 
 pub fn clear(self: *Occlusion) void {
     self.grid.clearRetainingCapacity();
-    self.grid.appendNTimesAssumeCapacity(1.0, self.w * self.h);
+    self.grid.appendNTimesAssumeCapacity(0.0, self.w * self.h);
 }
 
 pub fn deinit(self: *Occlusion, gpa: std.mem.Allocator) void {
@@ -53,24 +54,35 @@ pub fn add_occluder(self: *Occlusion, aabb: zm.AABBf, frustum: *Frustum) void {
     const pts = self.aabb_points(aabb, frustum);
     var center = zm.Vec2f{ 0, 0 };
     for (&pts) |x| center += zm.vec.xy(x);
-    var furthest: f32 = 0;
-    for (&pts) |x| furthest = @max(furthest, x[2]);
+    var furthest: f32 = 1;
+    for (&pts) |x| furthest = @min(furthest, x[2]);
 
     center /= @splat(8.0);
 
     var rad_sq = std.math.inf(f32);
     for (&pts) |x| rad_sq = @min(rad_sq, zm.vec.lenSq(center - zm.vec.xy(x)));
+    const rad = @sqrt(rad_sq);
+
+    var min = center - zm.Vec2f{ rad, rad };
+    var max = center + zm.Vec2f{ rad, rad };
+    min = std.math.clamp(min, zm.Vec2f{ -1, -1 }, zm.Vec2f{ 1, 1 });
+    max = std.math.clamp(max, zm.Vec2f{ -1, -1 }, zm.Vec2f{ 1, 1 });
 
     const grid_size = zm.Vec2f{
         @floatFromInt(self.w),
         @floatFromInt(self.h),
     };
     const cell_size = @as(zm.Vec2f, @splat(2.0)) / grid_size;
+    const one: zm.Vec2f = @splat(1);
+    const c0: @Vector(2, usize) = @intFromFloat(@floor((min + one) / cell_size));
+    const c1: @Vector(2, usize) = @intFromFloat(@ceil((max + one) / cell_size));
 
-    for (0..self.h) |y| {
-        outer: for (0..self.w) |x| {
+    var ok = false;
+    for (c0[1]..c1[1]) |y| {
+        outer: for (c0[0]..c1[0]) |x| {
             const xy: zm.Vec2f = @floatFromInt(@Vector(2, usize){ x, y });
-            const a = (xy - grid_size / @as(zm.Vec2f, @splat(2))) * cell_size;
+            const a = (xy - zm.Vec2f{ @floatFromInt(self.w / 2), @floatFromInt(self.h / 2) }) *
+                cell_size;
             const b = a + zm.Vec2f{ 1, 0 } * cell_size;
             const c = a + zm.Vec2f{ 0, 1 } * cell_size;
             const d = a + zm.Vec2f{ 1, 1 } * cell_size;
@@ -80,7 +92,8 @@ pub fn add_occluder(self: *Occlusion, aabb: zm.AABBf, frustum: *Frustum) void {
                 if (dist > rad_sq) continue :outer;
             }
             const idx = y * self.w + x;
-            self.grid.items[idx] = @min(furthest, self.grid.items[idx]);
+            self.grid.items[idx] = @max(furthest, self.grid.items[idx]);
+            ok = true;
         }
     }
 }
@@ -90,11 +103,11 @@ pub fn is_occluded(self: *Occlusion, aabb: zm.AABBf, frustum: *Frustum) bool {
 
     var min: zm.Vec2f = @splat(1);
     var max: zm.Vec2f = @splat(-1);
-    var nearest: f32 = 1.0;
+    var nearest: f32 = 0.0;
     for (pts) |x| {
         min = @min(min, zm.vec.xy(x));
         max = @max(max, zm.vec.xy(x));
-        nearest = @min(nearest, x[2]);
+        nearest = @max(nearest, x[2]);
     }
 
     min = std.math.clamp(min, zm.Vec2f{ -1, -1 }, zm.Vec2f{ 1, 1 });
@@ -111,9 +124,24 @@ pub fn is_occluded(self: *Occlusion, aabb: zm.AABBf, frustum: *Frustum) bool {
     for (c0[1]..c1[1]) |y| {
         for (c0[0]..c1[0]) |x| {
             const idx = y * self.w + x;
-            if (self.grid.items[idx] > nearest) return false;
+            if (self.grid.items[idx] < nearest) return false;
         }
     }
 
     return true;
 }
+
+test "Right behind" {
+    const gpa = std.testing.allocator;
+
+    var frustum = Frustum.init(std.math.pi * 0.5, 1.0);
+    var occlusion = try Occlusion.init(gpa, 8, 8);
+    defer occlusion.deinit(gpa);
+
+    const a = zm.AABBf.init(.{ -1, -1, -2 }, .{ 1, 1, -1 });
+    const b = zm.AABBf.init(.{ -1, -1, -3 }, .{ 1, 1, -2 });
+
+    occlusion.add_occluder(a, &frustum);
+    try std.testing.expect(occlusion.is_occluded(b, &frustum));
+}
+

@@ -37,7 +37,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .frustum = .init(fov, aspect),
         .other_frustum = undefined,
         .frustum_for_occlusion = undefined,
-        .occlusion = try .init(App.gpa(), 16, 16),
+        .occlusion = try .init(App.gpa(), 8, 8),
         .controller = undefined,
     };
     self.frustum_for_occlusion = &self.frustum;
@@ -59,6 +59,7 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     try self.controller.bind_command(.down, .{ .normal = Camera.move });
     try self.controller.bind_command(.move, .{ .mouse_move = Camera.look_around });
     try self.controller.bind_command(.interract, .{ .mouse_down = Camera.interract });
+    try self.controller.bind_command(.detatch, .{ .normal = Camera.detatch });
 }
 
 pub fn deinit(self: *Camera) void {
@@ -85,10 +86,13 @@ pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
 }
 
 fn detatch(self: *Camera, _: Controls) void {
-    if (!App.key_state().is_key_just_pressed(c.SDL_SCANCODE_LEFTBRACKET)) return;
+    if (!App.key_state().is_key_just_pressed(.from_sdl(c.SDL_SCANCODE_LEFTBRACKET))) return;
 
     if (self.frustum_for_occlusion == &self.frustum) {
-        self.other_frustum = self.frustum;
+        self.other_frustum = .init(self.frustum.fov, self.frustum.aspect);
+        self.other_frustum.pos = self.frustum.pos;
+        self.other_frustum.angles = self.frustum.angles;
+
         self.frustum_for_occlusion = &self.other_frustum;
     } else {
         self.frustum_for_occlusion = &self.frustum;
