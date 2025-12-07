@@ -8,7 +8,6 @@ const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 const Math = @import("libmine").Math;
 pub const Frustum = @import("Frustum.zig");
-pub const Occlusion = @import("Occlusion.zig");
 const Options = @import("ClientOptions");
 
 const MAX_REACH = 10;
@@ -18,7 +17,6 @@ frustum: Frustum,
 
 other_frustum: Frustum, // use to detatch occlusion from view for debug
 frustum_for_occlusion: *Frustum,
-occlusion: Occlusion,
 
 const Camera = @This();
 const Controls = enum(u32) {
@@ -38,7 +36,6 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .frustum = .init(fov, aspect),
         .other_frustum = undefined,
         .frustum_for_occlusion = undefined,
-        .occlusion = try .init(App.gpa(), Options.occlusion_grid_size, Options.occlusion_grid_size),
         .controller = undefined,
     };
     self.frustum_for_occlusion = &self.frustum;
@@ -64,7 +61,6 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
 }
 
 pub fn deinit(self: *Camera) void {
-    self.occlusion.deinit(App.gpa());
     self.controller.deinit();
 }
 
@@ -176,16 +172,4 @@ pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
 
 pub fn sphere_in_frustum(self: *Camera, center: zm.Vec3f, radius: f32) bool {
     return self.frustum_for_occlusion.sphere_in_frustum(center, radius);
-}
-
-pub fn clear_occlusion(self: *Camera) void {
-    self.occlusion.clear();
-}
-
-pub fn is_occluded(self: *Camera, aabb: zm.AABBf) bool {
-    return self.occlusion.is_occluded(aabb, self.frustum_for_occlusion);
-}
-
-pub fn add_occluder(self: *Camera, aabb: zm.AABBf) void {
-    self.occlusion.add_occluder(aabb, self.frustum_for_occlusion);
 }

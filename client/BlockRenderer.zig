@@ -15,7 +15,6 @@ const Renderer = @import("Renderer.zig");
 const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
 const Ecs = @import("libmine").Ecs;
-const Occlusion = @import("Occlusion.zig");
 
 const CHUNK_SIZE = World.CHUNK_SIZE;
 const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
@@ -437,6 +436,7 @@ const MeshOrder = struct {
 fn compute_seen(self: *Self) !usize {
     const do_frustum_culling = App.settings().get_value(bool, ".main.renderer.frustum_culling").?;
     const do_occlusion_culling = App.settings().get_value(bool, ".main.renderer.occlusion_culling").?;
+    _ = do_occlusion_culling;
 
     const seen_meshes = try App.frame_alloc().alloc(MeshOrder, self.meshes.count());
     const cam: *Camera = &App.game_state().camera;
@@ -455,20 +455,6 @@ fn compute_seen(self: *Self) !usize {
 
     const in_frustum = seen_meshes[0..seen_count];
     std.mem.sort(MeshOrder, in_frustum, cam.frustum_for_occlusion.pos, MeshOrder.less);
-
-    if (do_occlusion_culling) {
-        seen_count = 0;
-        for (in_frustum) |mesh| {
-            const chunk = mesh.mesh.chunk.?;
-            if (cam.is_occluded(chunk.aabb())) continue;
-            if (chunk.get_occluder()) |aabb| {
-                cam.add_occluder(aabb);
-            }
-
-            seen_meshes[seen_count] = mesh;
-            seen_count += 1;
-        }
-    }
 
     const indirect = try App.frame_alloc().alloc(Indirect, seen_count);
     const coords = try App.frame_alloc().alloc(i32, 4 * seen_count);
