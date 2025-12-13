@@ -1,10 +1,6 @@
 # Critical
 
-- ECS nursery - systems during execution may spawn or register ecs thins which has a potential to invalidate all pointers. Make it so commands are recorded and only after `evaluate()` are executed.
-- Chunk render optimizations:
-    - Unseen chunks - figure out some way to determine if a chunk is covered up by other chunks in the players view
 - Work on the server (possibly wait till 0.16 with the new async IO?)
-- Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 - Lights support - we can either have the lighting be calculated on the cpu or on the gpu, I would prefer the cpu since the gpu is already quite strained, but I am also often wrong about gpu performance
     1. Just stick a u32 RGBA onto vertex attributes - 2x the memory...
     2. Pack vertex attribs xxxxyyyy|zzzz?nnn|tttttttt|wwhhllll with 4 bits of light level - no colored lights, more difficult to support u16-based texture indices in the future
@@ -13,6 +9,8 @@
 
 # Non-critical
 
+- Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
+- ECS nursery - systems during execution may spawn or register ecs thins which has a potential to invalidate all pointers. Make it so commands are recorded and only after `evaluate()` are executed.
 - Adaptive chunk processing - process a dynamic amount of chunks per frame
 - Ambient occlusion - right now the block lighting is very flat, its hard to see anything
 - How does transparensy, non-block models, textures work?
@@ -23,8 +21,13 @@
 - visual/probably-unfixable: SSAO cutoff, i.e. when you get close to a block face and slowly rotate the camera
 - fps: what is the state of the game on iGPU?
 - build: we depend on system install of SDL3.
+- culling: when frustum culling, I just take the maximum of FOV's, but that doesnt actually produce a circle that covers the whole screen (the old circle at corners vs circle at side middles thing)
+- block placing: sometimes it is still possible to break/place stuff behind other blocks. Seems to have appeared after I added an epsilon for minimum t step on raycast.
 
 # Done
+
+- 13.12.2025:
+    1. Continued working on occlusion culling. I went with a simple and effective solution: don't draw the chunk if the neighbouring chunks have full-block faces, it cuts the amt of rendered chunks from 900 to 300 on flat world.
 
 - 07.12.2025:
     1. Worked on GpuAlloc. 
