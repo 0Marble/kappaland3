@@ -57,6 +57,12 @@ pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
     return self.blocks[@intCast(i)];
 }
 
+pub fn is_solid(self: *Chunk, pos: World.BlockCoords) bool {
+    const b = self.get_safe(pos);
+    if (b == null or b == .air) return false;
+    return true;
+}
+
 pub fn get_safe(self: *Chunk, pos: World.BlockCoords) ?World.BlockId {
     const size = World.BlockCoords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
     const stride = World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
@@ -128,15 +134,22 @@ fn generate_flat(self: *Chunk) void {
 }
 
 fn generate_balls(self: *Chunk) void {
-    const scale = std.math.pi / 8.0;
+    const scale: zm.Vec3f = @splat(std.math.pi / 8.0);
+    const size: World.BlockCoords = @splat(CHUNK_SIZE);
+
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |j| {
             for (0..CHUNK_SIZE) |k| {
-                const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
-                const y: f32 = @floatFromInt(self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
-                const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
+                const pos = World.BlockCoords{
+                    @intCast(i),
+                    @intCast(j),
+                    @intCast(k),
+                } + self.coords * size;
+                const xyz = @as(zm.Vec3f, @floatFromInt(pos)) * scale;
+
                 const idx = i * X_OFFSET + j * Y_OFFSET + k * Z_OFFSET;
-                const w = @abs(@sin(x * scale) + @cos(z * scale) + @sin(y * scale));
+                const w = @abs(@sin(xyz[0]) + @cos(xyz[2]) + @sin(xyz[1]));
+
                 if (w < 3 * 0.4) {
                     self.blocks[idx] = .air;
                 } else {

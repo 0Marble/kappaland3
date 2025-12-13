@@ -411,13 +411,25 @@ const Mesh = struct {
         }
     }
 
+    const occlusion_mask: [BLOCK_FACE_CNT][4]u4 = .{
+        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // front
+        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // back
+        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // right
+        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // left
+        .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // top
+        .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // bot
+    };
+
     fn build_layer_mesh(
         self: *Mesh,
         normal: World.BlockFace,
         start: World.BlockCoords,
     ) !void {
         const right = -normal.left_dir();
-        const top = normal.up_dir();
+        const left = -right;
+        const up = normal.up_dir();
+        const down = -up;
+        const front = normal.front_dir();
 
         for (0..World.CHUNK_SIZE) |i| {
             for (0..World.CHUNK_SIZE) |j| {
@@ -426,19 +438,25 @@ const Mesh = struct {
 
                 const pos = start +
                     @as(World.BlockCoords, @splat(u)) * right +
-                    @as(World.BlockCoords, @splat(v)) * top;
+                    @as(World.BlockCoords, @splat(v)) * up;
 
                 const block = self.chunk.get(pos);
                 if (block == .air) continue;
-                const front_block = self.chunk.get_safe(pos + normal.front_dir());
-                if (front_block != null and front_block != .air) continue;
+                if (self.chunk.is_solid(pos + front)) continue;
+
+                var ao: u4 = 0;
+                const ao_idx: usize = @intFromEnum(normal);
+                if (self.chunk.is_solid(pos + front + left)) ao |= occlusion_mask[ao_idx][0];
+                if (self.chunk.is_solid(pos + front + right)) ao |= occlusion_mask[ao_idx][1];
+                if (self.chunk.is_solid(pos + front + up)) ao |= occlusion_mask[ao_idx][2];
+                if (self.chunk.is_solid(pos + front + down)) ao |= occlusion_mask[ao_idx][3];
 
                 const face = Face{
                     .x = @intCast(pos[0]),
                     .y = @intCast(pos[1]),
                     .z = @intCast(pos[2]),
                     .normal = @intFromEnum(normal),
-                    .ao = 0,
+                    .ao = ao,
                 };
 
                 try self.faces.append(App.static_alloc(), face);
@@ -545,6 +563,10 @@ const block_frag =
     std.fmt.comptimePrint("\n#define BASE_TEX_ATTACHMENT {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
     std.fmt.comptimePrint("\n#define POSITION_TEX_ATTACHMENT {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
     std.fmt.comptimePrint("\n#define NORMAL_TEX_ATTACHMENT {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
+    \\#define AO_LEFT 3
+    \\#define AO_RIGHT 2
+    \\#define AO_TOP 1
+    \\#define AO_BOT 0
     \\
     \\layout (location=BASE_TEX_ATTACHMENT) out vec4 out_color;
     \\layout (location=POSITION_TEX_ATTACHMENT) out vec4 out_pos;
@@ -556,8 +578,23 @@ const block_frag =
     \\in flat uint frag_ao;
     \\in vec2 frag_uv;
     \\
+    \\uniform float u_occlusion_factor = 0.3;
+    \\uniform bool u_enable_face_occlusion = true;
+    \\
+    \\float get_occlusion(uint mask, uint dir) {
+    \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
+    \\}
+    \\
+    \\float occlusion(vec2 uv, uint mask) {
+    \\  float l = get_occlusion(mask, AO_LEFT) * (1 - uv.x) * (1 - u_occlusion_factor);
+    \\  float r = get_occlusion(mask, AO_RIGHT) * uv.x * (1 - u_occlusion_factor);
+    \\  float t = get_occlusion(mask, AO_TOP) * (1 - uv.y) * (1 - u_occlusion_factor);
+    \\  float b = get_occlusion(mask, AO_BOT) * uv.y * (1 - u_occlusion_factor);
+    \\  return 1 - (l + r + t + b) / 4;
+    \\}
     \\void main() {
-    \\  out_color = vec4(frag_color, 1);
+    \\  float ao = (u_enable_face_occlusion ? occlusion(frag_uv, frag_ao) : 1.0);
+    \\  out_color = vec4(frag_color * ao, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\}
