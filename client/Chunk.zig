@@ -164,16 +164,24 @@ fn generate_wavy(self: *Chunk) void {
     const scale = std.math.pi / 16.0;
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |k| {
-            const x: f32 = @floatFromInt(self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
-            const z: f32 = @floatFromInt(self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
+            const x: f32 = @floatFromInt(self.coords[0] * CHUNK_SIZE + @as(i32, @intCast(i)));
+            const z: f32 = @floatFromInt(self.coords[2] * CHUNK_SIZE + @as(i32, @intCast(k)));
             const top: f32 = (@sin(x * scale) + @cos(z * scale)) * 4.0 + 8.0;
 
             for (0..CHUNK_SIZE) |j| {
-                const y: f32 = @floatFromInt(self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
+                const pos = World.BlockCoords{
+                    @intCast(i),
+                    @intCast(j),
+                    @intCast(k),
+                };
+                const y: f32 = @floatFromInt(self.coords[1] *
+                    CHUNK_SIZE +
+                    @as(i32, @intCast(j)));
+
                 if (y < top) {
-                    self.set(.init(i, j, k), .stone);
+                    self.set(pos, .stone);
                 } else {
-                    self.set(.init(i, j, k), .air);
+                    self.set(pos, .air);
                 }
             }
         }
