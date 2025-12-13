@@ -18,7 +18,6 @@ win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
 
-temp_memory: std.heap.ArenaAllocator,
 frame_memory: std.heap.ArenaAllocator,
 static_memory: std.heap.ArenaAllocator,
 
@@ -49,7 +48,7 @@ const FrameData = struct {
             const frame_cnt: f32 = @floatFromInt(self.cur_frame - self.last_fps_measurement_frame);
             const dt: f32 = @floatFromInt(self.this_frame_start - self.last_fps_measurement_time);
             const fps = frame_cnt / dt * 1000.0;
-            const str = std.fmt.allocPrintSentinel(temp_alloc(), "FPS: {d:4.2}", .{fps}, 0) catch |err| blk: {
+            const str = std.fmt.allocPrintSentinel(frame_alloc(), "FPS: {d:4.2}", .{fps}, 0) catch |err| blk: {
                 Log.log(.warn, "Could not allocate a string for FPS measurement: {}", .{err});
                 break :blk "FPS: ???";
             };
@@ -85,7 +84,6 @@ pub fn init() !void {
 }
 
 fn init_memory() !void {
-    app.temp_memory = .init(gpa());
     app.frame_memory = .init(gpa());
     app.static_memory = .init(gpa());
     app.settings_store = try .init();
@@ -185,7 +183,6 @@ pub fn deinit() void {
 
     app.static_memory.deinit();
     app.frame_memory.deinit();
-    app.temp_memory.deinit();
     gpa().destroy(app);
     _ = main_alloc.deinit();
 
@@ -198,11 +195,6 @@ pub fn game_state() *GameState {
 
 pub fn gpa() std.mem.Allocator {
     return main_alloc.allocator();
-}
-
-pub fn temp_alloc() std.mem.Allocator {
-    _ = app.temp_memory.reset(.{ .retain_with_limit = 1 << 16 });
-    return app.temp_memory.allocator();
 }
 
 pub fn frame_alloc() std.mem.Allocator {
@@ -227,13 +219,11 @@ pub fn run() !void {
                     \\    total:         {f}
                     \\    frame_memory:  {f}
                     \\    static_memory: {f}
-                    \\    temp_memory:   {f}
                 ,
                     .{
                         util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
                         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
                         util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
-                        util.MemoryUsage.from_bytes(self.temp_memory.queryCapacity()),
                     },
                     0,
                 ));

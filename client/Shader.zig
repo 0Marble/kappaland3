@@ -68,7 +68,7 @@ pub const Source = struct {
         if (compile_status != gl.TRUE) {
             var info_len: gl.int = 0;
             try gl_call(gl.GetShaderiv(shader, gl.INFO_LOG_LENGTH, @ptrCast(&info_len)));
-            const buf = try App.temp_alloc().alloc(gl.char, @intCast(info_len + 1));
+            const buf = try App.frame_alloc().alloc(gl.char, @intCast(info_len + 1));
 
             if (info_len > 0) {
                 var read: gl.sizei = 0;
@@ -108,7 +108,7 @@ pub fn init(sources: []Source) !Shader {
     if (link_status == gl.FALSE) {
         var info_len: gl.int = 0;
         try gl_call(gl.GetProgramiv(program, gl.INFO_LOG_LENGTH, @ptrCast(&info_len)));
-        const buf = try App.temp_alloc().alloc(gl.char, @intCast(info_len + 1));
+        const buf = try App.frame_alloc().alloc(gl.char, @intCast(info_len + 1));
 
         if (info_len > 0) {
             var read: gl.sizei = 0;
