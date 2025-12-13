@@ -70,7 +70,7 @@ pub fn on_frame_start(self: *World) !void {
     }.callback, @src());
 }
 
-fn to_world_coord(pos: zm.Vec3f) WorldCoords {
+pub fn to_world_coord(pos: zm.Vec3f) WorldCoords {
     return @intFromFloat(@floor(pos));
 }
 

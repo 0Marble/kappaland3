@@ -82,6 +82,9 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
+    try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao");
+    try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor");
+
     Log.log(.debug, "{*} Finished initializing...", .{self});
 }
 
@@ -222,15 +225,31 @@ const MeshOrder = struct {
 };
 
 fn compute_drawn_chunk_data(self: *Self) !usize {
+    const do_frustum_culling = App.settings().get_value(
+        bool,
+        ".main.renderer.frustum_culling",
+    ).?;
+    const do_occlusion_culling = App.settings().get_value(
+        bool,
+        ".main.renderer.occlusion_culling",
+    ).?;
+
     const cam = &App.game_state().camera;
+    const cam_chunk = World.world_to_chunk(World.to_world_coord(
+        cam.frustum_for_occlusion.pos,
+    ));
     var meshes: std.ArrayList(MeshOrder) = .empty;
 
     for (self.meshes.values()) |mesh| {
+        if (do_occlusion_culling and
+            !std.meta.eql(mesh.chunk.coords, cam_chunk) and
+            mesh.is_occluded(self))
+            continue;
+
         const bound = mesh.chunk.bounding_sphere();
         const center = zm.vec.xyz(bound);
         const rad = bound[3];
-        if (mesh.is_occluded(self)) continue;
-        if (!cam.sphere_in_frustum(center, rad)) continue;
+        if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
 
         try meshes.append(App.frame_alloc(), .{
             .mesh = mesh,
