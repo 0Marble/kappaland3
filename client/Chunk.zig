@@ -53,11 +53,27 @@ pub fn deinit(self: *Chunk) void {
 }
 
 pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
-    return self.blocks[pos.x * X_OFFSET + pos.y * Y_OFFSET + pos.z * Z_OFFSET];
+    const i = @reduce(.Add, pos * World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+    return self.blocks[@intCast(i)];
+}
+
+pub fn get_safe(self: *Chunk, pos: World.BlockCoords) ?World.BlockId {
+    const size = World.BlockCoords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
+    const stride = World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
+    const zero = zm.vec.zero(3, i32);
+    const a = pos < size;
+    const b = pos >= zero;
+    if (!@reduce(.And, a) or !@reduce(.And, b)) {
+        return null;
+    }
+
+    const i = @reduce(.Add, pos * stride);
+    return self.blocks[@intCast(i)];
 }
 
 pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
-    self.blocks[pos.x * X_OFFSET + pos.y * Y_OFFSET + pos.z * Z_OFFSET] = block;
+    const i = @reduce(.Add, pos * World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+    self.blocks[@intCast(i)] = block;
 }
 
 fn generate(self: *Chunk) void {
@@ -90,23 +106,22 @@ fn generate_solid(self: *Chunk) void {
 
 fn generate_flat(self: *Chunk) void {
     @memset(&self.blocks, .air);
-    if (self.coords.y > 0) return;
-    if (self.coords.y < 0) {
+    if (self.coords[1] > 0) return;
+    if (self.coords[1] < 0) {
         @memset(&self.blocks, .stone);
         return;
     }
 
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |z| {
-            for (0..4) |y| {
-                self.set(.{ .x = x, .y = y, .z = z }, .stone);
-            }
-            for (4..8) |y| {
-                self.set(.{ .x = x, .y = y, .z = z }, .dirt);
-            }
-            self.set(.{ .x = x, .y = 8, .z = z }, .grass);
-            if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE) {
-                self.set(.{ .x = x, .y = 8, .z = z }, .stone);
+            for (0..CHUNK_SIZE) |y| {
+                const pos: World.BlockCoords = @intCast(@Vector(3, usize){ x, y, z });
+                switch (y) {
+                    0...4 => self.set(pos, .stone),
+                    5...7 => self.set(pos, .dirt),
+                    8 => self.set(pos, .grass),
+                    else => self.set(pos, .air),
+                }
             }
         }
     }
@@ -162,4 +177,13 @@ pub fn get_occluder(self: *Chunk) ?zm.AABBf {
     const all_full = std.mem.indexOfScalar(World.BlockId, &self.blocks, .air) == null;
     if (!all_full) return null;
     return self.aabb();
+}
+
+pub fn bounding_sphere(self: *Chunk) zm.Vec4f {
+    const size: zm.Vec3f = @splat(CHUNK_SIZE);
+    const coords: zm.Vec3f = @floatFromInt(self.coords);
+    const pos = coords * size + size * @as(zm.Vec3f, @splat(0.5));
+    const rad: f32 = @as(f32, @floatFromInt(CHUNK_SIZE)) * @sqrt(3.0) / 2.0;
+
+    return .{ pos[0], pos[1], pos[2], rad };
 }

@@ -17,5 +17,4 @@
     },
     .scale = .{ "xyz", "xyz", "zyx", "zyx", "xzy", "xzy" },
     .indices = .{ 0, 1, 2, 0, 2, 3 },
-    .index_type = "UNSIGNED_BYTE",
 }

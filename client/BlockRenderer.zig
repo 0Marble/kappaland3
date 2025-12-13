@@ -1,664 +1,340 @@
+const std = @import("std");
+const App = @import("App.zig");
 const World = @import("World.zig");
 const Chunk = @import("Chunk.zig");
-const BlockModel = @import("Block");
-const std = @import("std");
 const Options = @import("ClientOptions");
-const App = @import("App.zig");
-const GpuAlloc = @import("GpuAlloc.zig");
+const Log = @import("libmine").Log;
 const gl = @import("gl");
 const zm = @import("zm");
+const GpuAlloc = @import("GpuAlloc.zig");
 const Shader = @import("Shader.zig");
-const util = @import("util.zig");
-const Log = @import("libmine").Log;
-const gl_call = util.gl_call;
 const Renderer = @import("Renderer.zig");
-const Camera = @import("Camera.zig");
+const util = @import("util.zig");
+const gl_call = util.gl_call;
+const BlockModel = @import("Block");
 const c = @import("c.zig").c;
-const Ecs = @import("libmine").Ecs;
-
-const CHUNK_SIZE = World.CHUNK_SIZE;
-const EXPECTED_BUFFER_SIZE = 16 * 1024 * 1024;
-const EXPECTED_LOADED_CHUNKS_COUNT = World.DIM * World.DIM * World.HEIGHT;
-const MINIMAL_MESH_SIZE = @sizeOf(VertexData) * 1024;
-const VERT_DATA_LOCATION_A = 0;
-const VERT_DATA_LOCATION_B = 1;
-const CHUNK_VISIBLE_TEX_BINDING = 0;
-const CHUNK_INDIRECT_BINDING = 2;
-const CHUNK_DATA_BINDING = 1;
-const BLOCK_DATA_BINDING = 3;
-const VERT_DATA_BINDING = 4;
-const CHUNK_VERT_DATA_BINDING = 0;
-const BLOCK_FACE_COUNT = BlockModel.faces.len;
-const VERTS_PER_FACE = BlockModel.faces[0].len;
-const W_OFFSET = VERTS_PER_FACE * BLOCK_FACE_COUNT * CHUNK_SIZE;
-const H_OFFSET = VERTS_PER_FACE * BLOCK_FACE_COUNT;
-const N_OFFSET = VERTS_PER_FACE;
-const P_OFFSET = 1;
-const WORK_SIZE = 8;
-const CHUNK_POS_LOCATION = 0;
-const OCCLUSION_TEX_SIZE = 256;
-
-const VertexData = u64;
-
-const CHUNK_DATA_DEF =
-    \\
-    \\struct ChunkData {
-    \\  ivec3 coords;
-    \\  uint padding1;
-    \\  uint idx;
-    \\  uint face_count;
-    \\  uint offset;
-    \\  uint padding2;
-    \\};
-    \\
-;
-
-const VERT =
-    \\#version 460 core
-    \\
-++ std.fmt.comptimePrint("#define BLOCK_FACE_COUNT {d}\n", .{BLOCK_FACE_COUNT}) ++
-    \\
-++ std.fmt.comptimePrint("#define VERTS_PER_FACE {d}\n", .{VERTS_PER_FACE}) ++
-    \\
-++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION_A {d}\n", .{VERT_DATA_LOCATION_A}) ++
-    \\
-++ std.fmt.comptimePrint("#define VERT_DATA_LOCATION_B {d}\n", .{VERT_DATA_LOCATION_B}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_BINDING}) ++
-    \\
-++ std.fmt.comptimePrint("#define BLOCK_DATA_LOCATION {d}\n", .{BLOCK_DATA_BINDING}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_SIZE {d}\n", .{CHUNK_SIZE}) ++
-    \\
-++ std.fmt.comptimePrint("#define N_OFFSET {d}\n", .{N_OFFSET}) ++
-    \\
-++ std.fmt.comptimePrint("#define W_OFFSET {d}\n", .{W_OFFSET}) ++
-    \\
-++ std.fmt.comptimePrint("#define H_OFFSET {d}\n", .{H_OFFSET}) ++
-    \\
-++ std.fmt.comptimePrint("#define P_OFFSET {d}\n", .{P_OFFSET}) ++
-    \\
-    \\layout (location = VERT_DATA_LOCATION_A) in uint vert_data_a;    // xxxxyyyy|zzzz?nnn|wwwwhhhh|tttttttt
-    \\layout (location = VERT_DATA_LOCATION_B) in uint vert_data_b;    // oooo????|????????|????????|????????
-    \\                                            // per instance
-++ CHUNK_DATA_DEF ++
-    \\uniform mat4 u_view;
-    \\uniform mat4 u_proj;
-    \\
-    \\out vec3 frag_norm;
-    \\out vec2 frag_uv;
-    \\out vec3 frag_color;
-    \\out vec3 frag_pos;
-    \\out ivec3 block_coords;
-    \\out uint frag_occlusion;
-    \\
-    \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
-    \\  ChunkData chunk_data[];
-    \\};
-    \\
-    \\layout (std140, binding = BLOCK_DATA_LOCATION) uniform Block {
-    \\  vec3 normals[BLOCK_FACE_COUNT];
-    \\  vec3 faces[BLOCK_FACE_COUNT * VERTS_PER_FACE * CHUNK_SIZE * CHUNK_SIZE];
-    \\};
-    \\vec3 colors[4] = {vec3(0,0,0),vec3(0.2,0.2,0.2),vec3(0.6,0.4,0.2),vec3(0.2,0.7,0.3)};
-    \\vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
-    \\
-    \\void main() {
-    \\  uint x = (vert_data_a & uint(0xF0000000)) >> 28;
-    \\  uint y = (vert_data_a & uint(0x0F000000)) >> 24;
-    \\  uint z = (vert_data_a & uint(0x00F00000)) >> 20;
-    \\  uint n = (vert_data_a & uint(0x000F0000)) >> 16;
-    \\  uint w = (vert_data_a & uint(0x0000F000)) >> 12;
-    \\  uint h = (vert_data_a & uint(0x00000F00)) >> 8;
-    \\  uint t = (vert_data_a & uint(0x000000FF));
-    \\  uint o = (vert_data_b & uint(0xF0000000)) >> 28;
-    \\
-    \\  uint p = gl_VertexID;
-    \\  uint face = w * W_OFFSET + h * H_OFFSET + p * P_OFFSET + n * N_OFFSET;
-    \\
-    \\  frag_occlusion = o;
-    \\  frag_uv = uvs[p];
-    \\  block_coords = ivec3(x, y, z) + 16 * chunk_data[gl_DrawID].coords;
-    \\  frag_pos = (u_view * vec4(faces[face] + block_coords, 1)).xyz;
-    \\  frag_norm = (u_view * vec4(normals[n], 0)).xyz;
-    \\  frag_color = vec3(x, y, z) / 16.0;
-    \\  gl_Position = u_proj * vec4(frag_pos, 1);
-    \\}
-;
-
-const FRAG =
-    \\#version 460 core
-    \\
-++ std.fmt.comptimePrint("#define BASE_COLOR_LOCATION {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
-    \\
-++ std.fmt.comptimePrint("#define POSITION_LOCATION {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
-    \\
-++ std.fmt.comptimePrint("#define NORMAL_LOCATION {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
-    \\
-    \\#define AO_LEFT 3
-    \\#define AO_RIGHT 2
-    \\#define AO_TOP 1
-    \\#define AO_BOT 0
-    \\
-    \\in vec3 frag_color;
-    \\in vec3 frag_norm;
-    \\in vec3 frag_pos;
-    \\in flat ivec3 block_coords;
-    \\in flat uint frag_occlusion;
-    \\in vec2 frag_uv;
-    \\
-    \\layout (location=BASE_COLOR_LOCATION) out vec4 out_color;
-    \\layout (location=POSITION_LOCATION) out vec4 out_pos;
-    \\layout (location=NORMAL_LOCATION) out vec4 out_norm;
-    \\
-    \\uniform float u_occlusion_factor = 0.7;
-    \\uniform bool u_enable_face_occlusion = true;
-    \\
-    \\float get_occlusion(uint mask, uint dir) {
-    \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
-    \\}
-    \\float occlusion(vec2 uv, uint mask) {
-    \\  float l = get_occlusion(mask, AO_LEFT) * (1 - uv.x) * (1 - u_occlusion_factor);
-    \\  float r = get_occlusion(mask, AO_RIGHT) * uv.x * (1 - u_occlusion_factor);
-    \\  float t = get_occlusion(mask, AO_TOP) * (1 - uv.y) * (1 - u_occlusion_factor);
-    \\  float b = get_occlusion(mask, AO_BOT) * uv.y * (1 - u_occlusion_factor);
-    \\  return 1 - (l + r + t + b) / 4;
-    \\}
-    \\
-    \\void main() {
-    \\  out_color = vec4(frag_color, 1) * (u_enable_face_occlusion ? occlusion(frag_uv, frag_occlusion) : 1);
-    \\  out_pos = vec4(frag_pos, 1);
-    \\  out_norm = vec4(frag_norm, 1);
-    \\}
-;
-
-const CULLING_VERT =
-    \\#version 460 core
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_DATA_LOCATION {d}\n", .{CHUNK_DATA_BINDING}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_POS_LOC {d}\n", .{CHUNK_POS_LOCATION}) ++
-    \\
-++ CHUNK_DATA_DEF ++
-    \\
-    \\layout (location = CHUNK_POS_LOC) in vec3 vert_chunk_pos;
-    \\layout (std430, binding = CHUNK_DATA_LOCATION) buffer Chunk {
-    \\  ChunkData chunk_data[];
-    \\};
-    \\out uint frag_chunk_idx;
-    \\
-    \\uniform mat4 u_vp;
-    \\
-    \\void main() {
-    \\  gl_Position = u_vp * vec4(vert_chunk_pos, 1);
-    \\  frag_chunk_idx = chunk_data[gl_DrawID].idx;
-    \\}
-;
-
-const CULLING_FRAG =
-    \\#version 460 core
-    \\
-    \\in flat uint frag_chunk_idx;
-    \\out uint out_chunk_idx;
-    \\void main() { out_chunk_idx = frag_chunk_idx; }
-;
-
-const CULLING_COMPUTE =
-    \\#version 460 core
-    \\
-++ std.fmt.comptimePrint("#define WORK_SIZE {d}\n", .{WORK_SIZE}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_DATA_BINDING {d}\n", .{CHUNK_DATA_BINDING}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_INDIRECT_BINDING {d}\n", .{CHUNK_INDIRECT_BINDING}) ++
-    \\
-++ std.fmt.comptimePrint("#define CHUNK_VISIBLE_TEX_BINDING {d}\n", .{CHUNK_VISIBLE_TEX_BINDING}) ++
-    \\
-++ CHUNK_DATA_DEF ++
-    \\
-    \\layout(local_size_x = WORK_SIZE, local_size_y = WORK_SIZE, local_size_z = 1) in; 
-    \\
-    \\struct Indirect {
-    \\  uint count;
-    \\  uint instance_count;
-    \\  uint first_index;
-    \\  int base_vertex;
-    \\  uint base_instance;
-    \\};
-    \\
-    \\layout (r32ui, binding = CHUNK_VISIBLE_TEX_BINDING) uniform readonly uimage2D u_visible_chunk_ids;
-    \\layout (std430, binding = CHUNK_DATA_BINDING) buffer Chunk {
-    \\  ChunkData chunk_data[];
-    \\};
-    \\layout (std430, binding = CHUNK_INDIRECT_BINDING) buffer IndirectInfo { Indirect indirect[]; };
-    \\
-    \\void main() {
-    \\  uint idx = imageLoad(u_visible_chunk_ids, ivec2(gl_GlobalInvocationID.xy)).r;
-    \\  // hopefully here we do not need a lock since all the data is the same
-    \\  indirect[idx].count = 6;
-    \\  indirect[idx].instance_count = chunk_data[idx].face_count;
-    \\  indirect[idx].first_index = chunk_data[idx].offset;
-    \\  indirect[idx].base_vertex = 0;
-    \\  indirect[idx].base_instance = 0;
-    \\}
-;
-
-block_vao: gl.uint,
-block_model_ibo: gl.uint,
-block_model_ubo: gl.uint,
-
-occlusion_shader: Shader,
-occlusion_fbo: gl.uint,
-occlusion_depth_rbo: gl.uint,
-chunk_vao: gl.uint,
-chunk_verts_ibo: gl.uint,
-chunk_verts_vbo: gl.uint,
-chunk_data_ssbo: gl.uint,
-occlusion_tex: gl.uint,
-
-compute_indirect_shader: Shader,
-indirect_buffer: gl.uint,
-
-block_shader: Shader,
-faces: GpuAlloc,
-
-allocated_chunks_count: usize,
-meshes_changed: bool,
-meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *ChunkMesh),
-freelist: std.ArrayListUnmanaged(*ChunkMesh),
-triangle_count: usize,
-seen_cnt: usize,
-
-eid: Ecs.EntityRef,
 
 const Self = @This();
 
+const DEFAULT_FACES_SIZE = 1024 * 1024 * 16;
+const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
+const DEFAULT_INDIRECT_SIZE = 1024 * @sizeOf(Indirect);
+
+block_pass: Shader,
+block_vao: gl.uint,
+block_ibo: gl.uint,
+block_ubo: gl.uint,
+faces: GpuAlloc,
+chunk_data_ssbo: gl.uint,
+indirect_buf: gl.uint,
+
+drawn_chunks_cnt: usize,
+
+meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *Mesh),
+free_meshes: std.ArrayList(*Mesh),
+
 pub fn init(self: *Self) !void {
-    self.meshes_changed = false;
+    Log.log(.debug, "{*} Initializing...", .{self});
+
+    self.drawn_chunks_cnt = 0;
     self.meshes = .empty;
-    self.freelist = .empty;
-    self.triangle_count = 0;
-    self.seen_cnt = 0;
+    self.free_meshes = .empty;
 
-    try self.init_buffers();
-    try self.init_shader();
+    var sources: [2]Shader.Source = .{
+        Shader.Source{ .kind = gl.VERTEX_SHADER, .sources = &.{block_vert} },
+        Shader.Source{ .kind = gl.FRAGMENT_SHADER, .sources = &.{block_frag} },
+    };
+    self.block_pass = try .init(&sources);
+    Log.log(.debug, "{*} Initialized block pass", .{self});
 
-    self.eid = try App.ecs().spawn();
-    try self.on_setting_change_set_uniform(
-        ".main.renderer.face_ao",
-        "block_shader",
-        "u_enable_face_occlusion",
-        bool,
-    );
-    try self.on_setting_change_set_uniform(
-        ".main.renderer.face_ao_factor",
-        "block_shader",
-        "u_occlusion_factor",
-        f32,
-    );
+    try self.init_block_model();
+    Log.log(.debug, "{*} Initialized block model", .{self});
+    try self.init_face_data();
+    Log.log(.debug, "{*} Initialized face data buffers", .{self});
+    try self.init_chunk_data();
+    Log.log(.debug, "{*} Initialized chunk data buffers", .{self});
+
+    Log.log(.debug, "{*} Finished initializing...", .{self});
 }
 
-fn on_setting_change_set_uniform(
-    self: *Self,
-    setting: []const u8,
-    comptime pass_name: []const u8,
-    comptime uniform: [:0]const u8,
-    comptime T: type,
-) !void {
-    const evt = try App.settings().settings_change_event(T, setting);
-    try App.ecs().add_event_listener(self.eid, T, *Self, evt, self, &(struct {
-        fn callback(this: *Self, vals: []T) void {
-            if (Options.renderer_log_settings_changed) {
-                Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
-            }
-            const last = vals[vals.len - 1];
-            const pass: *Shader = &@field(this, pass_name);
-            const res = switch (T) {
-                bool => pass.set_uint(uniform, if (last) 1 else 0),
-                i32 => pass.set_int(uniform, last),
-                f32 => pass.set_float(uniform, last),
-                else => @compileError("Unsupported uniform type: " ++ @typeName(T)),
-            };
-            res catch |err| {
-                Log.log(.warn, "Couldn't set '{s}' uniform for pass '{s}': {}", .{ uniform, pass_name, err });
-            };
-        }
-    }.callback));
+fn init_block_model(self: *Self) !void {
+    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
+
+    try gl_call(gl.BindVertexArray(self.block_vao));
+
+    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_ibo));
+    try gl_call(gl.BufferData(
+        gl.ELEMENT_ARRAY_BUFFER,
+        @intCast(block_inds.len * @sizeOf(u8)),
+        @ptrCast(&block_inds),
+        gl.STATIC_DRAW,
+    ));
+    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
+    try gl_call(gl.BufferData(
+        gl.UNIFORM_BUFFER,
+        @intCast(block_model.len * @sizeOf(f32)),
+        @ptrCast(&block_model),
+        gl.STATIC_DRAW,
+    ));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_MODEL_BINDING, self.block_ubo));
+
+    try gl_call(gl.BindVertexArray(0));
+    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0));
+}
+
+fn init_face_data(self: *Self) !void {
+    self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
+
+    try gl_call(gl.BindVertexArray(self.block_vao));
+
+    try gl_call(gl.BindVertexBuffer(FACE_DATA_BINDING, self.faces.buffer, 0, @sizeOf(Face)));
+    try gl_call(gl.VertexBindingDivisor(FACE_DATA_BINDING, 1));
+
+    try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_A));
+    try gl_call(gl.VertexAttribIFormat(FACE_DATA_LOCATION_A, 1, gl.UNSIGNED_INT, 0));
+    try gl_call(gl.VertexAttribBinding(FACE_DATA_LOCATION_A, FACE_DATA_BINDING));
+
+    try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_B));
+    try gl_call(gl.VertexAttribIFormat(FACE_DATA_LOCATION_B, 1, gl.UNSIGNED_INT, @sizeOf(u32)));
+    try gl_call(gl.VertexAttribBinding(FACE_DATA_LOCATION_B, FACE_DATA_BINDING));
+}
+
+fn init_chunk_data(self: *Self) !void {
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        DEFAULT_CHUNK_DATA_SIZE,
+        null,
+        gl.STREAM_DRAW,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        CHUNK_DATA_BINDING,
+        self.chunk_data_ssbo,
+    ));
+
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
+    try gl_call(gl.BufferData(
+        gl.DRAW_INDIRECT_BUFFER,
+        DEFAULT_INDIRECT_SIZE,
+        null,
+        gl.STREAM_DRAW,
+    ));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 }
 
 pub fn deinit(self: *Self) void {
-    for (self.freelist.items) |mesh| mesh.deinit();
-    for (self.meshes.values()) |mesh| mesh.deinit();
-    self.meshes.deinit(App.gpa());
-    self.freelist.deinit(App.gpa());
-
-    gl.DeleteVertexArrays(1, @ptrCast(&self.chunk_vao));
-    gl.DeleteBuffers(1, @ptrCast(&self.chunk_verts_vbo));
-    gl.DeleteBuffers(1, @ptrCast(&self.chunk_verts_ibo));
-    gl.DeleteBuffers(1, @ptrCast(&self.chunk_data_ssbo));
-    gl.DeleteBuffers(1, @ptrCast(&self.indirect_buffer));
-
-    gl.DeleteFramebuffers(1, @ptrCast(&self.occlusion_fbo));
-    gl.DeleteRenderbuffers(1, @ptrCast(&self.occlusion_depth_rbo));
-    gl.DeleteTextures(1, @ptrCast(&self.occlusion_tex));
-
+    self.block_pass.deinit();
     self.faces.deinit();
-    gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
-    gl.DeleteBuffers(1, @ptrCast(&self.block_model_ibo));
-    gl.DeleteBuffers(1, @ptrCast(&self.block_model_ubo));
 
-    self.block_shader.deinit();
-    self.occlusion_shader.deinit();
-    self.compute_indirect_shader.deinit();
+    gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
+    gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
+    gl.DeleteBuffers(1, @ptrCast(&self.block_ubo));
+    gl.DeleteBuffers(1, @ptrCast(&self.chunk_data_ssbo));
+    gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
 }
 
 pub fn draw(self: *Self) !void {
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.occlusion_fbo));
-    try gl_call(gl.ClearDepth(0.0));
-    try gl_call(gl.ClearColor(0, 0, 0, 0));
-    try gl_call(gl.Enable(gl.DEPTH_TEST));
-    try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
+    const draw_count = try self.compute_drawn_chunk_data();
 
-    try self.occlusion_shader.bind();
-    try gl_call(gl.BindVertexArray(self.chunk_vao));
-    try gl_call(gl.ActiveTexture(gl.TEXTURE0));
-    try gl_call(gl.BindTexture(1, @ptrCast(&self.occlusion_tex)));
+    const cam = &App.game_state().camera;
 
-    // try self.block_shader.set_mat4("u_view", App.game_state().camera.view_mat());
-    // try self.block_shader.set_mat4("u_proj", App.game_state().camera.proj_mat());
-    //
-    // try gl_call(gl.BindVertexArray(self.block_vao));
-    // try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buffer));
-    // try gl_call(gl.MultiDrawElementsIndirect(
-    //     gl.TRIANGLES,
-    //     @field(gl, BlockModel.index_type),
-    //     0,
-    //     @intCast(self.seen_cnt),
-    //     0,
-    // ));
-    // try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
-    // try gl_call(gl.BindVertexArray(0));
-}
+    try self.block_pass.set_mat4("u_view", cam.view_mat());
+    try self.block_pass.set_mat4("u_proj", cam.proj_mat());
 
-pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
-    if (self.meshes.get(chunk.coords)) |mesh| {
-        try mesh.build();
-        try self.update_mesh(mesh);
-    } else {
-        const mesh = if (self.freelist.pop()) |mesh|
-            mesh
-        else
-            try ChunkMesh.create();
-
-        mesh.init(chunk);
-        try mesh.build();
-        try self.update_mesh(mesh);
-
-        if (try self.meshes.fetchPut(App.gpa(), chunk.coords, mesh)) |_| {
-            Log.log(.warn, "{*}: Multiple meshes for chunk at {}", .{ self, chunk.coords });
-        }
-    }
-    self.meshes_changed = true;
+    try self.block_pass.bind();
+    try gl_call(gl.BindVertexArray(self.block_vao));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
+    try gl_call(gl.MultiDrawElementsIndirect(
+        gl.TRIANGLES,
+        gl.UNSIGNED_BYTE,
+        0,
+        @intCast(draw_count),
+        0,
+    ));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
+    try gl_call(gl.BindVertexArray(0));
 }
 
 pub fn on_frame_start(self: *Self) !void {
     try App.gui().add_to_frame(Self, "Debug", self, struct {
         fn callback(this: *Self) !void {
-            c.igText("Triangles: %zu", this.triangle_count);
-            c.igText("Displayed chunks: %zu", this.seen_cnt);
             const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
-                "GPU Memory (faces): {f}",
+                \\GPU Memory:
+                \\    faces: {f}
+            ,
                 .{util.MemoryUsage.from_bytes(this.faces.size)},
                 0,
             ));
             c.igText("%s", gpu_mem_faces);
-            const gpu_mem_indirect: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-                App.frame_alloc(),
-                "GPU Memory (indirect+coords): {f}",
-                .{util.MemoryUsage.from_bytes(
-                    this.allocated_chunks_count * (@sizeOf(Indirect) + 4 * @sizeOf(i32)),
-                )},
-                0,
-            ));
-            c.igText("%s", gpu_mem_indirect);
+            c.igText("Chunks drawn: %zu", this.drawn_chunks_cnt);
         }
     }.callback, @src());
 }
 
-const raw_faces: []const u8 = blk: {
-    @setEvalBranchQuota(std.math.maxInt(u32));
-    var normals_data = std.mem.zeroes([4 * BLOCK_FACE_COUNT]f32);
-    for (BlockModel.normals, 0..) |normal, i| {
-        normals_data[4 * i + 0] = normal[0];
-        normals_data[4 * i + 1] = normal[1];
-        normals_data[4 * i + 2] = normal[2];
-    }
-    const size = 4 * BLOCK_FACE_COUNT * VERTS_PER_FACE * World.CHUNK_SIZE * World.CHUNK_SIZE;
-    var faces_data = std.mem.zeroes([size]f32);
-    for (0..World.CHUNK_SIZE) |w| {
-        for (0..World.CHUNK_SIZE) |h| {
-            for (BlockModel.faces, 0..) |face, n| {
-                for (face, 0..) |vertex, p| {
-                    const idx = n * N_OFFSET + w * W_OFFSET + h * H_OFFSET + p * P_OFFSET;
-                    const vec: zm.Vec3f = vertex;
-                    var scale = World.BlockCoords{ .x = 1, .y = 1, .z = 1 };
-                    @field(scale, BlockModel.scale[n][0..1]) = w + 1;
-                    @field(scale, BlockModel.scale[n][1..2]) = h + 1;
-                    faces_data[4 * idx + 0] = vec[0] * scale.x;
-                    faces_data[4 * idx + 1] = vec[1] * scale.y;
-                    faces_data[4 * idx + 2] = vec[2] * scale.z;
-                }
-            }
-        }
-    }
+pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
+    const mesh = if (self.free_meshes.pop()) |mesh| blk: {
+        mesh.chunk = chunk;
+        mesh.faces.clearRetainingCapacity();
+        try mesh.build_mesh();
 
-    break :blk @ptrCast(&(normals_data ++ faces_data));
-};
+        const old_range = self.faces.get_range(mesh.handle).?;
 
-const chunk_verts = blk: {
-    var verts = std.mem.zeroes([BLOCK_FACE_COUNT * VERTS_PER_FACE * 3]f32);
-    for (BlockModel.faces, 0..) |face, i| {
-        for (face, 0..) |v, j| {
-            const idx = i * VERTS_PER_FACE + j;
-            verts[3 * idx + 0] = v[0];
-            verts[3 * idx + 1] = v[1];
-            verts[3 * idx + 2] = v[2];
-        }
-    }
-    break :blk verts;
-};
-const chunk_inds = blk: {
-    var inds = std.mem.zeroes([BLOCK_FACE_COUNT * BlockModel.indices.len]u16);
-    for (BlockModel.faces, 0..) |_, i| {
-        for (BlockModel.indices, 0..) |idx, j| {
-            const k = i * BlockModel.indices.len + j;
-            inds[k] = i * VERTS_PER_FACE + idx;
-        }
-    }
-    break :blk inds;
-};
+        try gl_call(gl.InvalidateBufferSubData(
+            self.faces.buffer,
+            old_range.offset,
+            old_range.size,
+        ));
+        mesh.handle = try self.faces.realloc(
+            mesh.handle,
+            mesh.faces.items.len * @sizeOf(Face),
+            std.mem.Alignment.of(Face),
+        );
 
-fn init_occlusion_buffers(self: *Self) !void {
-    try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.occlusion_fbo)));
-    try gl_call(gl.GenRenderbuffers(1, @ptrCast(&self.occlusion_depth_rbo)));
-    try gl_call(gl.GenTextures(1, @ptrCast(&self.occlusion_tex)));
+        break :blk mesh;
+    } else blk: {
+        const mesh = try Mesh.init(chunk);
+        try mesh.build_mesh();
 
-    try gl_call(gl.GenFramebuffers(1, @ptrCast(&self.occlusion_fbo)));
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.occlusion_fbo));
-
-    try gl_call(gl.GenTextures(1, @ptrCast(&self.occlusion_tex)));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.occlusion_tex));
-    try gl_call(gl.TexStorage2D(gl.TEXTURE_2D, 1, gl.R32I, OCCLUSION_TEX_SIZE, OCCLUSION_TEX_SIZE));
-    try gl_call(gl.FramebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0,
-        gl.TEXTURE_2D,
-        self.occlusion_tex,
-        0,
-    ));
-    const occlusion_draw_buffers: []const gl.uint = &.{
-        gl.COLOR_ATTACHMENT0,
+        mesh.handle = try self.faces.alloc(
+            mesh.faces.items.len * @sizeOf(Face),
+            std.mem.Alignment.of(Face),
+        );
+        break :blk mesh;
     };
-    try gl_call(gl.DrawBuffers(@intCast(occlusion_draw_buffers.len), @ptrCast(occlusion_draw_buffers)));
-    if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'occlusion_fbo' incomplete!", .{self});
-    }
 
-    try gl_call(gl.GenRenderbuffers(1, @ptrCast(&self.occlusion_depth_rbo)));
-    try gl_call(gl.BindRenderbuffer(gl.RENDERBUFFER, self.occlusion_depth_rbo));
-    try gl_call(gl.RenderbufferStorage(
-        gl.RENDERBUFFER,
-        gl.DEPTH_COMPONENT,
-        OCCLUSION_TEX_SIZE,
-        OCCLUSION_TEX_SIZE,
-    ));
-    try gl_call(gl.FramebufferRenderbuffer(
-        gl.FRAMEBUFFER,
-        gl.DEPTH_ATTACHMENT,
-        gl.RENDERBUFFER,
-        self.occlusion_depth_rbo,
-    ));
+    const range = self.faces.get_range(mesh.handle).?;
 
-    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.chunk_vao)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_verts_ibo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_verts_vbo)));
-
-    try gl_call(gl.BindVertexArray(self.chunk_vao));
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.chunk_verts_vbo));
-    try gl_call(gl.BufferData(
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+    try gl_call(gl.BufferSubData(
         gl.ARRAY_BUFFER,
-        @intCast(@sizeOf(@TypeOf(chunk_verts))),
-        @ptrCast(&chunk_verts),
-        gl.STATIC_DRAW,
+        range.offset,
+        range.size,
+        @ptrCast(mesh.faces.items),
     ));
-    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.chunk_verts_ibo));
-    try gl_call(gl.BufferData(
-        gl.ELEMENT_ARRAY_BUFFER,
-        @intCast(@sizeOf(@TypeOf(chunk_inds))),
-        @ptrCast(&chunk_inds),
-        gl.STATIC_DRAW,
-    ));
-
-    try gl_call(gl.BindVertexBuffer(CHUNK_VERT_DATA_BINDING, self.chunk_verts_vbo, 0, 3 * @sizeOf(f32)));
-
-    try gl_call(gl.EnableVertexAttribArray(CHUNK_POS_LOCATION));
-    try gl_call(gl.VertexAttribFormat(CHUNK_POS_LOCATION, 3, gl.FLOAT, gl.FALSE, 0));
-    try gl_call(gl.VertexAttribBinding(CHUNK_POS_LOCATION, CHUNK_VERT_DATA_BINDING));
-
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buffer)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
-
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.indirect_buffer));
-    try gl_call(gl.BufferData(
-        gl.SHADER_STORAGE_BUFFER,
-        @intCast(self.allocated_chunks_count * @sizeOf(Indirect)),
-        null,
-        gl.STREAM_DRAW,
-    ));
-
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
-    try gl_call(gl.BufferData(
-        gl.SHADER_STORAGE_BUFFER,
-        @intCast(self.allocated_chunks_count * @sizeOf(ChunkData)),
-        null,
-        gl.STREAM_DRAW,
-    ));
-
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_BINDING, self.chunk_data_ssbo));
+    try self.meshes.put(App.static_alloc(), chunk.coords, mesh);
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 }
 
-fn init_block_buffers(self: *Self) !void {
-    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ibo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_model_ubo)));
-    self.faces = try .init(App.gpa(), EXPECTED_BUFFER_SIZE, gl.STREAM_DRAW);
+const MeshOrder = struct {
+    mesh: *Mesh,
+    dist_sq: f32,
+
+    fn less_than(_: void, a: MeshOrder, b: MeshOrder) bool {
+        return a.dist_sq < b.dist_sq;
+    }
+};
+
+fn compute_drawn_chunk_data(self: *Self) !usize {
+    const cam = &App.game_state().camera;
+    var meshes: std.ArrayList(MeshOrder) = .empty;
+
+    for (self.meshes.values()) |mesh| {
+        const bound = mesh.chunk.bounding_sphere();
+        const center = zm.vec.xyz(bound);
+        const rad = bound[3];
+        if (!cam.sphere_in_frustum(center, rad)) continue;
+
+        try meshes.append(App.frame_alloc(), .{
+            .mesh = mesh,
+            .dist_sq = zm.vec.lenSq(cam.frustum.pos - center),
+        });
+    }
+    std.mem.sort(MeshOrder, meshes.items, {}, MeshOrder.less_than);
+
+    const indirect = try App.frame_alloc().alloc(Indirect, meshes.items.len);
+    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len);
+
+    @memset(indirect, std.mem.zeroes(Indirect));
+    @memset(chunk_data, std.mem.zeroes(ChunkData));
+
+    for (meshes.items, 0..) |mesh, i| {
+        const range = self.faces.get_range(mesh.mesh.handle).?;
+
+        indirect[i] = Indirect{
+            .count = 6,
+            .instance_count = @intCast(mesh.mesh.faces.items.len),
+            .first_index = @intCast(@divExact(range.offset, @sizeOf(Face))),
+            .base_vertex = 0,
+            .base_instance = 0,
+        };
+        chunk_data[i] = ChunkData{
+            .x = mesh.mesh.chunk.coords[0],
+            .y = mesh.mesh.chunk.coords[1],
+            .z = mesh.mesh.chunk.coords[2],
+        };
+    }
 
     try gl_call(gl.BindVertexArray(self.block_vao));
-
-    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_model_ibo));
-    const inds: []const u8 = &BlockModel.indices;
-    try gl_call(gl.BufferStorage(
-        gl.ELEMENT_ARRAY_BUFFER,
-        @intCast(6 * @sizeOf(u8)),
-        inds.ptr,
-        0,
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
+    try gl_call(gl.BufferData(
+        gl.DRAW_INDIRECT_BUFFER,
+        @intCast(indirect.len * @sizeOf(Indirect)),
+        @ptrCast(indirect),
+        gl.STREAM_DRAW,
     ));
-
-    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_model_ubo));
-    try gl_call(gl.BufferStorage(
-        gl.UNIFORM_BUFFER,
-        @intCast(raw_faces.len),
-        raw_faces.ptr,
-        0,
-    ));
-    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_DATA_BINDING, self.block_model_ubo));
-
-    try gl_call(gl.BindVertexBuffer(VERT_DATA_BINDING, self.faces.buffer, 0, @sizeOf(VertexData)));
-
-    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION_A));
-    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION_A, 1, gl.UNSIGNED_INT, 4));
-    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION_A, VERT_DATA_BINDING));
-
-    try gl_call(gl.EnableVertexAttribArray(VERT_DATA_LOCATION_B));
-    try gl_call(gl.VertexAttribIFormat(VERT_DATA_LOCATION_B, 1, gl.UNSIGNED_INT, 0));
-    try gl_call(gl.VertexAttribBinding(VERT_DATA_LOCATION_B, VERT_DATA_BINDING));
-
-    try gl_call(gl.VertexBindingDivisor(VERT_DATA_BINDING, 1));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, CHUNK_DATA_BINDING, self.chunk_data_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(chunk_data.len * @sizeOf(ChunkData)),
+        @ptrCast(chunk_data),
+        gl.STREAM_DRAW,
+    ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
+
+    self.drawn_chunks_cnt = meshes.items.len;
+    return meshes.items.len;
 }
 
-fn init_buffers(self: *Self) !void {
-    self.allocated_chunks_count = EXPECTED_LOADED_CHUNKS_COUNT;
+const ChunkData = extern struct {
+    x: i32,
+    y: i32,
+    z: i32,
+    padding: u32 = 0,
+};
 
-    try self.init_occlusion_buffers();
-    try self.init_block_buffers();
+const Face = packed struct(u64) {
+    // A:
+    x: u4,
+    y: u4,
+    z: u4,
+    _unused1: u1 = 0,
+    normal: u3,
+    ao: u4,
+    _unused2: u12 = 0xeba,
+    // B:
+    _unused3: u32 = 0xdeadbeef,
 
-    try gl_call(gl.BindVertexArray(0));
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
-    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0));
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
-    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
-    try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));
-    try gl_call(gl.BindRenderbuffer(gl.RENDERBUFFER, 0));
-}
-
-fn init_shader(self: *Self) !void {
-    {
-        var sources: [2]Shader.Source = .{
-            .{
-                .kind = gl.VERTEX_SHADER,
-                .sources = &.{VERT},
-                .name = "chunk_vert",
-            },
-            .{
-                .kind = gl.FRAGMENT_SHADER,
-                .sources = &.{FRAG},
-                .name = "chunk_frag",
-            },
-        };
-
-        self.block_shader = try .init(&sources);
+    fn define() [:0]const u8 {
+        return 
+        \\struct Face {
+        \\  uvec3 pos;
+        \\  uint n;
+        \\  uint ao;
+        \\};
+        \\
+        \\Face unpack(){
+        \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
+        \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
+        \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
+        \\  uint n = (vert_face_a >> uint(12)) & uint(0x0F);
+        \\  uint ao = (vert_face_a >> uint(16)) & uint(0x0F);
+        \\  return Face(uvec3(x, y, z), n, ao);
+        \\}
+        ;
     }
-
-    {
-        var sources: [2]Shader.Source = .{
-            Shader.Source{ .sources = &.{CULLING_VERT}, .kind = gl.VERTEX_SHADER },
-            Shader.Source{ .sources = &.{CULLING_FRAG}, .kind = gl.FRAGMENT_SHADER },
-        };
-        self.occlusion_shader = try .init(&sources);
-    }
-
-    {
-        var sources: [1]Shader.Source = .{
-            Shader.Source{ .sources = &.{CULLING_COMPUTE}, .kind = gl.COMPUTE_SHADER },
-        };
-        self.compute_indirect_shader = try .init(&sources);
-    }
-}
+};
 
 const Indirect = extern struct {
     count: u32,
@@ -668,311 +344,176 @@ const Indirect = extern struct {
     base_instance: u32,
 };
 
-const ChunkData = extern struct {
-    x: i32,
-    y: i32,
-    z: i32,
-    padding1: u32,
-    idx: u32,
-    face_count: u32,
-    offset: u32,
-    padding2: u32,
-};
-
-const MeshOrder = struct {
-    mesh: *ChunkMesh,
-    center: zm.Vec3f,
-
-    fn less(pos: zm.Vec3f, a: MeshOrder, b: MeshOrder) bool {
-        const d1 = zm.vec.lenSq(a.center - pos);
-        const d2 = zm.vec.lenSq(b.center - pos);
-        return d1 < d2;
-    }
-};
-
-fn setup_chunk_data(self: *Self) !void {
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.chunk_data_ssbo));
-}
-
-const ChunkMesh = struct {
-    const X_OFFSET = Chunk.X_OFFSET;
-    const Y_OFFSET = Chunk.Y_OFFSET;
-    const Z_OFFSET = Chunk.Z_OFFSET;
-
-    chunk: ?*Chunk,
-    faces: std.ArrayListUnmanaged(VertexData),
+const Mesh = struct {
+    chunk: *Chunk,
+    faces: std.ArrayList(Face),
     handle: GpuAlloc.Handle,
 
-    fn create() !*ChunkMesh {
-        const self = try App.gpa().create(ChunkMesh);
-        self.chunk = null;
-        self.faces = .empty;
+    fn init(chunk: *Chunk) !*Mesh {
+        const self = try App.static_alloc().create(Mesh);
+        self.chunk = chunk;
         self.handle = .invalid;
+        self.faces = .empty;
         return self;
     }
-    fn init(self: *ChunkMesh, chunk: *Chunk) void {
-        self.chunk = chunk;
-    }
 
-    fn clear(self: *ChunkMesh) void {
+    fn build_mesh(self: *Mesh) !void {
         self.faces.clearRetainingCapacity();
-    }
 
-    fn deinit(self: *ChunkMesh) void {
-        self.faces.deinit(App.gpa());
-        App.gpa().destroy(self);
-    }
-
-    fn build(self: *ChunkMesh) !void {
-        self.faces.clearRetainingCapacity();
-        for (0..CHUNK_SIZE) |z| {
-            try self.mesh_slice(.front, z);
-        }
-        for (0..CHUNK_SIZE) |z| {
-            try self.mesh_slice(.back, z);
-        }
-        for (0..CHUNK_SIZE) |x| {
-            try self.mesh_slice(.right, x);
-        }
-        for (0..CHUNK_SIZE) |x| {
-            try self.mesh_slice(.left, x);
-        }
-        for (0..CHUNK_SIZE) |y| {
-            try self.mesh_slice(.top, y);
-        }
-        for (0..CHUNK_SIZE) |y| {
-            try self.mesh_slice(.bot, y);
+        for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ 0, @intCast(i), 0 };
+            try self.build_layer_mesh(.top, start);
         }
     }
 
-    const FaceSize = struct { w: usize = 0, h: usize = 0 };
-    fn pack(self: *ChunkMesh, pos: World.BlockCoords, size: FaceSize, face: World.BlockFace, occlusion: u4) VertexData {
-        var data_a: u32 = 0;
-        const x, const y, const z = .{ pos.x, pos.y, pos.z };
-        const w, const h = .{ size.w, size.h };
+    fn build_layer_mesh(
+        self: *Mesh,
+        normal: World.BlockFace,
+        start: World.BlockCoords,
+    ) !void {
+        const right = -normal.left_dir();
+        const top = normal.up_dir();
 
-        data_a |= @as(u32, @intCast(x)) << 28;
-        data_a |= @as(u32, @intCast(y)) << 24;
-        data_a |= @as(u32, @intCast(z)) << 20;
-        data_a |= @as(u32, @intFromEnum(face)) << 16;
-        data_a |= @as(u32, @intCast(w - 1)) << 12;
-        data_a |= @as(u32, @intCast(h - 1)) << 8;
-        data_a |= @as(u32, @intFromEnum(self.get(pos)));
+        for (0..World.CHUNK_SIZE) |i| {
+            for (0..World.CHUNK_SIZE) |j| {
+                const u: i32 = @intCast(i);
+                const v: i32 = @intCast(j);
 
-        var data_b: u32 = 0;
-        data_b |= @as(u32, occlusion) << 28;
+                const pos = start +
+                    @as(World.BlockCoords, @splat(u)) * right +
+                    @as(World.BlockCoords, @splat(v)) * top;
 
-        return @as(VertexData, @intCast(data_a)) << 32 | @as(VertexData, @intCast(data_b));
-    }
+                const block = self.chunk.get(pos);
+                const front_block = self.chunk.get_safe(pos + normal.front_dir());
+                if (block == .air) continue;
+                if (front_block != null and front_block != .air) continue;
 
-    fn visible(self: *ChunkMesh, pos: World.BlockCoords, face: World.BlockFace) bool {
-        const b = self.get(pos);
-        if (b == .air) return false;
-        const x, const y, const z = .{ pos.x, pos.y, pos.z };
+                const face = Face{
+                    .x = @intCast(pos[0]),
+                    .y = @intCast(pos[1]),
+                    .z = @intCast(pos[2]),
+                    .normal = @intFromEnum(normal),
+                    .ao = 0,
+                };
 
-        return switch (face) {
-            .front => z + 1 == CHUNK_SIZE or self.get(.init(x, y, z + 1)) == .air,
-            .back => z == 0 or self.get(.init(x, y, z - 1)) == .air,
-            .right => x + 1 == CHUNK_SIZE or self.get(.init(x + 1, y, z)) == .air,
-            .left => x == 0 or self.get(.init(x - 1, y, z)) == .air,
-            .top => y + 1 == CHUNK_SIZE or self.get(.init(x, y + 1, z)) == .air,
-            .bot => y == 0 or self.get(.init(x, y - 1, z)) == .air,
-        };
-    }
-
-    const occlusion_mask: [BLOCK_FACE_COUNT][4]u4 = .{
-        .{ 0b0010, 0b0001, 0b1000, 0b0100 }, // front
-        .{ 0b0010, 0b0001, 0b0100, 0b1000 }, // back
-        .{ 0b0010, 0b0001, 0b0100, 0b1000 }, // right
-        .{ 0b0010, 0b0001, 0b1000, 0b0100 }, // left
-        .{ 0b0001, 0b0010, 0b1000, 0b0100 }, // top
-        .{ 0b0001, 0b0010, 0b0100, 0b1000 }, // bot
-    };
-
-    fn mesh_slice(self: *ChunkMesh, comptime face: World.BlockFace, layer: usize) !void {
-        const dir = BlockModel.scale[@intFromEnum(face)];
-        const w_dim = dir[0..1];
-        const h_dim = dir[1..2];
-        const o_dim = dir[2..3];
-        var visited = std.mem.zeroes([CHUNK_SIZE][CHUNK_SIZE]bool);
-        for (0..CHUNK_SIZE) |i| {
-            for (0..CHUNK_SIZE) |j| {
-                var pos = World.BlockCoords{};
-                if (visited[i][j]) continue;
-                @field(pos, w_dim) = i;
-                @field(pos, h_dim) = j;
-                @field(pos, o_dim) = layer;
-                if (!self.visible(pos, face)) continue;
-
-                // const size = if (Options.greedy_meshing)
-                //     self.greedy_size(pos, face, &visited)
-                // else
-                const size = self.one_by_one_size(pos, face, &visited);
-                const world_pos = World.world_coords(self.chunk.?.coords, pos);
-
-                var occlusion: u4 = 0;
-                const front = face.next_to(world_pos);
-
-                var below = front;
-                @field(below, h_dim) -= 1;
-                if ((self.get_at_world(below) orelse .air) != .air) {
-                    occlusion |= occlusion_mask[@intFromEnum(face)][0];
-                }
-                var above = front;
-                @field(above, h_dim) += 1;
-                if ((self.get_at_world(above) orelse .air) != .air) {
-                    occlusion |= occlusion_mask[@intFromEnum(face)][1];
-                }
-                var left = front;
-                @field(left, w_dim) -= 1;
-                if ((self.get_at_world(left) orelse .air) != .air) {
-                    occlusion |= occlusion_mask[@intFromEnum(face)][2];
-                }
-                var right = front;
-                @field(right, w_dim) += 1;
-                if ((self.get_at_world(right) orelse .air) != .air) {
-                    occlusion |= occlusion_mask[@intFromEnum(face)][3];
-                }
-
-                try self.faces.append(App.gpa(), self.pack(pos, size, face, occlusion));
+                try self.faces.append(App.static_alloc(), face);
             }
         }
-    }
-    fn get_at_world(self: *ChunkMesh, world_pos: World.WorldCoords) ?World.BlockId {
-        const chunk = World.world_to_chunk(world_pos);
-        if (!std.meta.eql(chunk, self.chunk.?.coords)) return null;
-        return self.chunk.?.get(World.world_to_block(world_pos));
-    }
-
-    fn one_by_one_size(
-        self: *ChunkMesh,
-        origin: World.BlockCoords,
-        comptime face: World.BlockFace,
-        visited: *[CHUNK_SIZE][CHUNK_SIZE]bool,
-    ) FaceSize {
-        _ = visited;
-        if (self.visible(origin, face)) {
-            return .{ .w = 1, .h = 1 };
-        } else {
-            return .{ .w = 0, .h = 0 };
-        }
-    }
-
-    fn greedy_size(
-        self: *ChunkMesh,
-        origin: World.BlockCoords,
-        comptime face: World.BlockFace,
-        visited: *[CHUNK_SIZE][CHUNK_SIZE]bool,
-    ) FaceSize {
-        const dir = BlockModel.scale[@intFromEnum(face)];
-        const w_dim = dir[0..1];
-        const h_dim = dir[1..2];
-        const o_dim = dir[2..3];
-        const i_start = @field(origin, w_dim);
-        const j_start = @field(origin, h_dim);
-        std.debug.assert(!visited[i_start][j_start]);
-        if (!self.visible(origin, face)) return .{};
-
-        var limit: usize = CHUNK_SIZE;
-        var best_size: FaceSize = .{ .w = 1, .h = 1 };
-        const block = self.get(origin);
-
-        for (i_start..CHUNK_SIZE) |i| {
-            for (j_start..limit) |j| {
-                var pos = World.BlockCoords{};
-                @field(pos, w_dim) = i;
-                @field(pos, h_dim) = j;
-                @field(pos, o_dim) = @field(origin, o_dim);
-                const cur_size = FaceSize{ .h = j - j_start + 1, .w = i - i_start + 1 };
-                if (!self.visible(pos, face) or self.get(pos) != block or visited[i][j]) {
-                    limit = j;
-                    break;
-                }
-                if (cur_size.w * cur_size.h > best_size.w * best_size.h) {
-                    best_size = cur_size;
-                }
-            }
-            if (limit == j_start) break;
-        }
-
-        for (0..best_size.w) |i| {
-            for (0..best_size.h) |j| {
-                visited[i_start + i][j_start + j] = true;
-            }
-        }
-
-        return best_size;
-    }
-
-    fn get(self: *ChunkMesh, pos: World.BlockCoords) World.BlockId {
-        return self.chunk.?.get(pos);
-    }
-
-    fn corners(self: *ChunkMesh) [8]zm.Vec3f {
-        var pts = std.mem.zeroes([8]zm.Vec3f);
-        const origin = zm.Vec3f{
-            @as(f32, @floatFromInt(self.chunk.?.coords.x)) * CHUNK_SIZE,
-            @as(f32, @floatFromInt(self.chunk.?.coords.y)) * CHUNK_SIZE,
-            @as(f32, @floatFromInt(self.chunk.?.coords.z)) * CHUNK_SIZE,
-        };
-        var idx: usize = 0;
-        for (0..2) |i| {
-            for (0..2) |j| {
-                for (0..2) |k| {
-                    const d = zm.Vec3f{
-                        @as(f32, @floatFromInt(i)),
-                        @as(f32, @floatFromInt(j)),
-                        @as(f32, @floatFromInt(k)),
-                    };
-                    pts[idx] = @mulAdd(zm.Vec3f, d, @splat(CHUNK_SIZE), origin);
-                    idx += 1;
-                }
-            }
-        }
-        return pts;
-    }
-    //xyzr
-    fn bounding_sphere(self: *ChunkMesh) zm.Vec4f {
-        var center: zm.Vec3f = @splat(0);
-        for (self.corners()) |p| center += p;
-        center /= @splat(8);
-        return .{ center[0], center[1], center[2], 8 * @sqrt(3.0) };
-    }
-
-    fn next_to(pos: World.BlockCoords, dir: World.BlockFace) ?World.BlockCoords {
-        switch (dir) {
-            .front => if (pos.z + 1 < CHUNK_SIZE) return .{ .x = pos.x, .y = pos.y, .z = pos.z + 1 },
-            .right => if (pos.x + 1 < CHUNK_SIZE) return .{ .x = pos.x + 1, .y = pos.y, .z = pos.z },
-            .up => if (pos.y + 1 < CHUNK_SIZE) return .{ .x = pos.x, .y = pos.y + 1, .z = pos.z },
-            .back => if (pos.z > 0) return .{ .x = pos.x, .y = pos.y, .z = pos.z - 1 },
-            .left => if (pos.x > 0) return .{ .x = pos.x - 1, .y = pos.y, .z = pos.z },
-            .bot => if (pos.y > 0) return .{ .x = pos.x, .y = pos.y - 1, .z = pos.z },
-        }
-        return null;
     }
 };
 
-fn update_mesh(self: *Self, mesh: *ChunkMesh) !void {
-    const actual_size = mesh.faces.items.len * @sizeOf(VertexData);
-    const requested_size = @max(MINIMAL_MESH_SIZE, actual_size);
-    if (mesh.handle == .invalid) {
-        mesh.handle = try self.faces.alloc(requested_size, .@"4");
-    } else {
-        const range = self.faces.get_range(mesh.handle).?;
-        try gl_call(gl.InvalidateBufferSubData(self.faces.buffer, range.offset, range.size));
-        mesh.handle = try self.faces.realloc(mesh.handle, requested_size);
-    }
-    if (actual_size == 0) {
-        return;
+const block_verts = blk: {
+    var res = std.mem.zeroes([BLOCK_VERT_CNT * 4]f32);
+
+    for (BlockModel.faces, 0..) |face, n| {
+        for (face, 0..) |v, p| {
+            res[4 * (n * N_STRIDE + p * P_STRIDE) + 0] = v[0];
+            res[4 * (n * N_STRIDE + p * P_STRIDE) + 1] = v[1];
+            res[4 * (n * N_STRIDE + p * P_STRIDE) + 2] = v[2];
+        }
     }
 
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
-    const range = self.faces.get_range(mesh.handle).?;
-    try gl_call(gl.BufferSubData(
-        gl.ARRAY_BUFFER,
-        range.offset,
-        range.size,
-        mesh.faces.items.ptr,
-    ));
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
-}
+    break :blk res;
+};
+
+const block_normals = blk: {
+    var res = std.mem.zeroes([BLOCK_FACE_CNT * 4]f32);
+    for (BlockModel.normals, 0..) |normal, n| {
+        res[4 * n + 0] = normal[0];
+        res[4 * n + 1] = normal[1];
+        res[4 * n + 2] = normal[2];
+    }
+    break :blk res;
+};
+
+const block_model = block_normals ++ block_verts;
+
+const block_inds: [BlockModel.indices.len]u8 = BlockModel.indices;
+
+const FACE_DATA_LOCATION_A = 0;
+const FACE_DATA_LOCATION_B = 1;
+const FACE_DATA_BINDING = 0;
+const CHUNK_DATA_BINDING = 1;
+const BLOCK_MODEL_BINDING = 1;
+const BLOCK_FACE_CNT = BlockModel.normals.len;
+const BLOCK_VERT_CNT = BLOCK_FACE_CNT * BlockModel.faces[0].len;
+const P_STRIDE = 1;
+const N_STRIDE = BlockModel.faces[0].len;
+
+const block_vert =
+    \\#version 460 core
+    \\
+++
+    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_A {d}\n", .{FACE_DATA_LOCATION_A}) ++
+    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_B {d}\n", .{FACE_DATA_LOCATION_B}) ++
+    std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}\n", .{CHUNK_DATA_BINDING}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_MODEL_BINDING {d}\n", .{BLOCK_MODEL_BINDING}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}\n", .{BLOCK_FACE_CNT}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_VERT_CNT {d}\n", .{BLOCK_VERT_CNT}) ++
+    std.fmt.comptimePrint("\n#define N_STRIDE {d}\n", .{N_STRIDE}) ++
+    std.fmt.comptimePrint("\n#define P_STRIDE {d}\n", .{P_STRIDE}) ++
+    \\
+    \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
+    \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
+++ Face.define() ++
+    \\
+    \\layout (std430, binding = CHUNK_DATA_BINDING) buffer ChunkData{
+    \\  ivec4 chunk_coords[];
+    \\};
+    \\layout (std140, binding = BLOCK_MODEL_BINDING) uniform BlockModel {
+    \\  vec3 normals[BLOCK_FACE_CNT];
+    \\  vec3 verts[BLOCK_VERT_CNT];
+    \\};
+    \\
+    \\uniform mat4 u_view;
+    \\uniform mat4 u_proj;
+    \\    
+    \\vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
+    \\
+    \\out vec3 frag_norm;
+    \\out uint frag_ao;
+    \\out vec2 frag_uv;
+    \\out vec3 frag_color;
+    \\out vec3 frag_pos;
+    \\
+    \\void main() {
+    \\  Face face = unpack();
+    \\
+    \\  uint p = gl_VertexID;
+    \\  vec3 normal = normals[face.n];
+    \\  vec3 vert = verts[face.n * N_STRIDE + p * P_STRIDE];
+    \\  vec3 chunk = vec3(chunk_coords[gl_DrawID].xyz);
+    \\  vec4 view_pos = u_view * vec4(vert + chunk * 16, 1);
+    \\  gl_Position = u_proj * view_pos;
+    \\
+    \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
+    \\  frag_ao = face.ao;
+    \\  frag_uv = uvs[p];
+    \\  frag_color = vert / 16.0;
+    \\  frag_pos = view_pos.xyz;
+    \\}
+;
+
+const block_frag =
+    \\#version 460 core
+++
+    std.fmt.comptimePrint("\n#define BASE_TEX_ATTACHMENT {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
+    std.fmt.comptimePrint("\n#define POSITION_TEX_ATTACHMENT {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
+    std.fmt.comptimePrint("\n#define NORMAL_TEX_ATTACHMENT {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
+    \\
+    \\layout (location=BASE_TEX_ATTACHMENT) out vec4 out_color;
+    \\layout (location=POSITION_TEX_ATTACHMENT) out vec4 out_pos;
+    \\layout (location=NORMAL_TEX_ATTACHMENT) out vec4 out_norm;
+    \\
+    \\in vec3 frag_color;
+    \\in vec3 frag_norm;
+    \\in vec3 frag_pos;
+    \\in flat uint frag_ao;
+    \\in vec2 frag_uv;
+    \\
+    \\void main() {
+    \\  out_color = vec4(frag_color, 1);
+    \\  out_pos = vec4(frag_pos, 1);
+    \\  out_norm = vec4(frag_norm, 1);
+    \\}
+;

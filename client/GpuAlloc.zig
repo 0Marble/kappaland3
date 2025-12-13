@@ -7,9 +7,10 @@ const std = @import("std");
 const Options = @import("ClientOptions");
 
 pub const Handle = enum(usize) {
-    const OFFSET = 1;
+    const OFFSET = 2;
 
     invalid = 0,
+    empty = 1,
 
     _,
 
@@ -85,7 +86,7 @@ fn try_fit_allocation(
 }
 
 pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle {
-    std.debug.assert(size != 0); // size=0 not allowed
+    if (size == 0) return .empty;
 
     if (Options.gpu_alloc_log) {
         Log.log(.debug, "{*}: alloc({}, {})", .{ self, size, alignment });
@@ -135,12 +136,13 @@ pub fn realloc(
     self: *GpuAlloc,
     handle: Handle,
     new_size: usize,
+    alignment: std.mem.Alignment,
 ) !Handle {
+    if (handle == .empty or handle == .invalid) return self.alloc(new_size, alignment);
+
     if (Options.gpu_alloc_log) {
         Log.log(.debug, "{*}: realloc({}, {})", .{ self, handle, new_size });
     }
-
-    if (handle == .invalid) return error.InvalidHandle;
 
     const idx = handle.to_idx();
     const entry = &self.allocations.items[idx];
@@ -153,7 +155,7 @@ pub fn realloc(
         return handle;
     }
 
-    const new = try self.alloc(new_size, .@"64");
+    const new = try self.alloc(new_size, alignment);
     const old_region = self.get_range(handle).?;
     const new_region = self.get_range(new).?;
 
@@ -177,6 +179,8 @@ pub fn free(self: *GpuAlloc, handle: Handle) void {
     if (handle == .invalid) {
         Log.log(.warn, "{*}: Freeing an invalid handle!", .{self});
     }
+    if (handle == .empty) return;
+
     const idx = handle.to_idx();
     const entry = &self.allocations.items[idx];
     if (entry.size == 0) {
@@ -198,6 +202,8 @@ pub const GpuMemoryRange = struct {
 // for glBufferSubData and the like
 pub fn get_range(self: *GpuAlloc, handle: Handle) ?GpuMemoryRange {
     if (handle == .invalid) return null;
+
+    if (handle == .empty) return .{ .offset = 0, .size = 0 };
 
     const idx = handle.to_idx();
     const entry = self.allocations.items[idx];

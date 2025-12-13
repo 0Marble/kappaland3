@@ -23,6 +23,9 @@ pub fn Xyz(comptime T: type) type {
         pub fn as_vec(self: @This()) @Vector(3, T) {
             return .{ self.x, self.y, self.z };
         }
+        pub fn neg(self: @This()) @This() {
+            return .init(-self.x, -self.y, -self.z);
+        }
     };
 }
 

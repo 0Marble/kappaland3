@@ -71,27 +71,19 @@ pub fn on_frame_start(self: *World) !void {
 }
 
 fn to_world_coord(pos: zm.Vec3f) WorldCoords {
-    return .init(@intFromFloat(@floor(pos[0])), @intFromFloat(@floor(pos[1])), @intFromFloat(@floor(pos[2])));
+    return @intFromFloat(@floor(pos));
 }
 
 pub fn world_to_chunk(w: WorldCoords) ChunkCoords {
-    return .init(@divFloor(w.x, CHUNK_SIZE), @divFloor(w.y, CHUNK_SIZE), @divFloor(w.z, CHUNK_SIZE));
+    return @divFloor(w, @as(WorldCoords, @splat(CHUNK_SIZE)));
 }
 
 pub fn world_to_block(w: WorldCoords) BlockCoords {
-    return .init(
-        @intCast(@mod(w.x, CHUNK_SIZE)),
-        @intCast(@mod(w.y, CHUNK_SIZE)),
-        @intCast(@mod(w.z, CHUNK_SIZE)),
-    );
+    return @mod(w, @as(WorldCoords, @splat(CHUNK_SIZE)));
 }
 
 pub fn world_coords(chunk: ChunkCoords, block: BlockCoords) WorldCoords {
-    return .{
-        .x = chunk.x * CHUNK_SIZE + @as(i32, @intCast(block.x)),
-        .y = chunk.y * CHUNK_SIZE + @as(i32, @intCast(block.y)),
-        .z = chunk.z * CHUNK_SIZE + @as(i32, @intCast(block.z)),
-    };
+    return chunk + block * @as(BlockCoords, @splat(CHUNK_SIZE));
 }
 
 const RaycastResult = struct {
@@ -173,7 +165,7 @@ pub fn process_work(self: *World) !void {
 }
 
 pub const BlockId = enum(u16) { air = 0, stone = 1, dirt = 2, grass = 3, _ };
-pub const BlockFace = enum(u8) {
+pub const BlockFace = enum(u3) {
     front,
     back,
     right,
@@ -192,20 +184,43 @@ pub const BlockFace = enum(u8) {
         };
     }
 
-    pub fn next_to(self: BlockFace, coords: WorldCoords) WorldCoords {
+    pub fn front_dir(self: BlockFace) WorldCoords {
         return switch (self) {
-            .front => WorldCoords.init(0, 0, 1).add(coords),
-            .back => WorldCoords.init(0, 0, -1).add(coords),
-            .right => WorldCoords.init(1, 0, 0).add(coords),
-            .left => WorldCoords.init(-1, 0, 0).add(coords),
-            .top => WorldCoords.init(0, 1, 0).add(coords),
-            .bot => WorldCoords.init(0, -1, 0).add(coords),
+            .front => .{ 0, 0, 1 },
+            .back => .{ 0, 0, -1 },
+            .right => .{ 1, 0, 0 },
+            .left => .{ -1, 0, 0 },
+            .top => .{ 0, 1, 0 },
+            .bot => .{ 0, -1, 0 },
+        };
+    }
+
+    pub fn left_dir(self: BlockFace) WorldCoords {
+        return switch (self) {
+            .front => .{ -1, 0, 0 },
+            .back => .{ 1, 0, 0 },
+            .right => .{ 0, 0, 1 },
+            .left => .{ 0, 0, -1 },
+            .top => .{ -1, 0, 0 },
+            .bot => .{ 1, 0, 0 },
+        };
+    }
+
+    pub fn up_dir(self: BlockFace) WorldCoords {
+        return switch (self) {
+            .front => .{ 0, 1, 0 },
+            .back => .{ 0, 1, 0 },
+            .right => .{ 0, 1, 0 },
+            .left => .{ 0, 1, 0 },
+            .top => .{ 0, 0, 1 },
+            .bot => .{ 0, 0, 1 },
         };
     }
 };
-pub const WorldCoords = util.Xyz(i32);
-pub const ChunkCoords = util.Xyz(i32);
-pub const BlockCoords = util.Xyz(usize);
+
+pub const WorldCoords = @Vector(3, i32);
+pub const ChunkCoords = @Vector(3, i32);
+pub const BlockCoords = @Vector(3, i32);
 
 fn init_chunks(self: *World) !void {
     for (0..World.DIM) |i| {
@@ -214,7 +229,7 @@ fn init_chunks(self: *World) !void {
                 const x = @as(i32, @intCast(i)) - DIM / 2;
                 const y = @as(i32, @intCast(k)) - HEIGHT + 1;
                 const z = @as(i32, @intCast(j)) - DIM / 2;
-                try self.request_load_chunk(.{ .x = x, .y = y, .z = z });
+                try self.request_load_chunk(.{ x, y, z });
             }
         }
     }
