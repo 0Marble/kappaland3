@@ -32,6 +32,7 @@ chunk_data_ssbo: gl.uint,
 indirect_buf: gl.uint,
 
 drawn_chunks_cnt: usize,
+triangle_cnt: usize,
 cur_chunk_data_ssbo_size: usize,
 
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *Mesh),
@@ -41,6 +42,7 @@ pub fn init(self: *Self) !void {
     Log.log(.debug, "{*} Initializing...", .{self});
 
     self.drawn_chunks_cnt = 0;
+    self.triangle_cnt = 0;
     self.meshes = .empty;
     self.free_meshes = .empty;
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
@@ -186,13 +188,18 @@ pub fn on_frame_start(self: *Self) !void {
             const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
                 App.frame_alloc(),
                 \\GPU Memory:
-                \\    faces: {f}
+                \\    faces:      {f}
+                \\    chunk_ssbo: {f}
             ,
-                .{util.MemoryUsage.from_bytes(this.faces.size)},
+                .{
+                    util.MemoryUsage.from_bytes(this.faces.size),
+                    util.MemoryUsage.from_bytes(this.cur_chunk_data_ssbo_size),
+                },
                 0,
             ));
             c.igText("%s", gpu_mem_faces);
-            c.igText("Chunks drawn: %zu", this.drawn_chunks_cnt);
+            c.igText("Chunks Drawn: %zu", this.drawn_chunks_cnt);
+            c.igText("Triangles: %zu", this.triangle_cnt);
         }
     }.callback, @src());
 }
@@ -239,6 +246,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         cam.frustum_for_occlusion.pos,
     ));
     var meshes: std.ArrayList(MeshOrder) = .empty;
+    self.triangle_cnt = 0;
 
     for (self.meshes.values()) |mesh| {
         if (do_occlusion_culling and
@@ -279,6 +287,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
             .y = mesh.mesh.chunk.coords[1],
             .z = mesh.mesh.chunk.coords[2],
         };
+        self.triangle_cnt += mesh.mesh.faces.items.len * 2;
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
