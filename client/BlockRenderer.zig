@@ -15,6 +15,9 @@ const BlockModel = @import("Block");
 const c = @import("c.zig").c;
 
 const Self = @This();
+const BlockRenderer = @This();
+
+const CHUNK_SIZE = World.CHUNK_SIZE;
 
 const DEFAULT_FACES_SIZE = 1024 * 1024 * 16;
 const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
@@ -43,8 +46,16 @@ pub fn init(self: *Self) !void {
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
 
     var sources: [2]Shader.Source = .{
-        Shader.Source{ .kind = gl.VERTEX_SHADER, .sources = &.{block_vert} },
-        Shader.Source{ .kind = gl.FRAGMENT_SHADER, .sources = &.{block_frag} },
+        Shader.Source{
+            .kind = gl.VERTEX_SHADER,
+            .sources = &.{block_vert},
+            .name = "block_vert",
+        },
+        Shader.Source{
+            .kind = gl.FRAGMENT_SHADER,
+            .sources = &.{block_frag},
+            .name = "block_frag",
+        },
     };
     self.block_pass = try .init(&sources);
     Log.log(.debug, "{*} Initialized block pass", .{self});
@@ -186,45 +197,10 @@ pub fn on_frame_start(self: *Self) !void {
 pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
     const mesh = if (self.free_meshes.pop()) |mesh| blk: {
         mesh.chunk = chunk;
-        mesh.faces.clearRetainingCapacity();
-        try mesh.build_mesh();
-
-        const old_range = self.faces.get_range(mesh.handle).?;
-
-        try gl_call(gl.InvalidateBufferSubData(
-            self.faces.buffer,
-            old_range.offset,
-            old_range.size,
-        ));
-        mesh.handle = try self.faces.realloc(
-            mesh.handle,
-            mesh.faces.items.len * @sizeOf(Face),
-            std.mem.Alignment.of(Face),
-        );
-
         break :blk mesh;
-    } else blk: {
-        const mesh = try Mesh.init(chunk);
-        try mesh.build_mesh();
+    } else try Mesh.init(chunk);
 
-        mesh.handle = try self.faces.alloc(
-            mesh.faces.items.len * @sizeOf(Face),
-            std.mem.Alignment.of(Face),
-        );
-        break :blk mesh;
-    };
-
-    const range = self.faces.get_range(mesh.handle).?;
-
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
-    try gl_call(gl.BufferSubData(
-        gl.ARRAY_BUFFER,
-        range.offset,
-        range.size,
-        @ptrCast(mesh.faces.items),
-    ));
-    try self.meshes.put(App.static_alloc(), chunk.coords, mesh);
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
+    try mesh.update(self);
 
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindVertexBuffer(
@@ -253,6 +229,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         const bound = mesh.chunk.bounding_sphere();
         const center = zm.vec.xyz(bound);
         const rad = bound[3];
+        if (mesh.is_occluded(self)) continue;
         if (!cam.sphere_in_frustum(center, rad)) continue;
 
         try meshes.append(App.frame_alloc(), .{
@@ -373,6 +350,7 @@ const Mesh = struct {
     chunk: *Chunk,
     faces: std.ArrayList(Face),
     handle: GpuAlloc.Handle,
+    occlusion: OcclusionMask,
 
     fn init(chunk: *Chunk) !*Mesh {
         const self = try App.static_alloc().create(Mesh);
@@ -384,34 +362,43 @@ const Mesh = struct {
 
     fn build_mesh(self: *Mesh) !void {
         self.faces.clearRetainingCapacity();
+        self.occlusion = .{};
 
-        for (0..World.CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |i| {
             const start: World.BlockCoords = .{ 0, 0, @intCast(i) };
-            try self.build_layer_mesh(.front, start);
+            self.occlusion.front = @intFromBool(try self.build_layer_mesh(.front, start));
         }
-        for (0..World.CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ 15, 0, @intCast(i) };
-            try self.build_layer_mesh(.back, start);
+        for (0..CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{
+                CHUNK_SIZE - 1,
+                0,
+                @intCast(CHUNK_SIZE - 1 - i),
+            };
+            self.occlusion.back = @intFromBool(try self.build_layer_mesh(.back, start));
         }
-        for (0..World.CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ @intCast(i), 0, 15 };
-            try self.build_layer_mesh(.right, start);
+        for (0..CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
+            self.occlusion.right = @intFromBool(try self.build_layer_mesh(.right, start));
         }
-        for (0..World.CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ @intCast(i), 0, 0 };
-            try self.build_layer_mesh(.left, start);
+        for (0..CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
+            self.occlusion.left = @intFromBool(try self.build_layer_mesh(.left, start));
         }
-        for (0..World.CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |i| {
             const start: World.BlockCoords = .{ 0, @intCast(i), 0 };
-            try self.build_layer_mesh(.top, start);
+            self.occlusion.top = @intFromBool(try self.build_layer_mesh(.top, start));
         }
-        for (0..World.CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ 15, @intCast(i), 0 };
-            try self.build_layer_mesh(.bot, start);
+        for (0..CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{
+                CHUNK_SIZE - 1,
+                @intCast(CHUNK_SIZE - 1 - i),
+                0,
+            };
+            self.occlusion.bot = @intFromBool(try self.build_layer_mesh(.bot, start));
         }
     }
 
-    const occlusion_mask: [BLOCK_FACE_CNT][4]u4 = .{
+    const ao_mask: [BLOCK_FACE_CNT][4]u4 = .{
         .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // front
         .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // back
         .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // right
@@ -424,12 +411,14 @@ const Mesh = struct {
         self: *Mesh,
         normal: World.BlockFace,
         start: World.BlockCoords,
-    ) !void {
+    ) !bool {
         const right = -normal.left_dir();
         const left = -right;
         const up = normal.up_dir();
         const down = -up;
         const front = normal.front_dir();
+
+        var is_full_layer = true;
 
         for (0..World.CHUNK_SIZE) |i| {
             for (0..World.CHUNK_SIZE) |j| {
@@ -441,15 +430,17 @@ const Mesh = struct {
                     @as(World.BlockCoords, @splat(v)) * up;
 
                 const block = self.chunk.get(pos);
-                if (block == .air) continue;
-                if (self.chunk.is_solid(pos + front)) continue;
+                if (block == .air or self.chunk.is_solid(pos + front)) {
+                    is_full_layer = false;
+                    continue;
+                }
 
                 var ao: u4 = 0;
                 const ao_idx: usize = @intFromEnum(normal);
-                if (self.chunk.is_solid(pos + front + left)) ao |= occlusion_mask[ao_idx][0];
-                if (self.chunk.is_solid(pos + front + right)) ao |= occlusion_mask[ao_idx][1];
-                if (self.chunk.is_solid(pos + front + up)) ao |= occlusion_mask[ao_idx][2];
-                if (self.chunk.is_solid(pos + front + down)) ao |= occlusion_mask[ao_idx][3];
+                if (self.chunk.is_solid(pos + front + left)) ao |= ao_mask[ao_idx][0];
+                if (self.chunk.is_solid(pos + front + right)) ao |= ao_mask[ao_idx][1];
+                if (self.chunk.is_solid(pos + front + up)) ao |= ao_mask[ao_idx][2];
+                if (self.chunk.is_solid(pos + front + down)) ao |= ao_mask[ao_idx][3];
 
                 const face = Face{
                     .x = @intCast(pos[0]),
@@ -462,6 +453,69 @@ const Mesh = struct {
                 try self.faces.append(App.static_alloc(), face);
             }
         }
+
+        return is_full_layer;
+    }
+
+    fn occludes(self: *Mesh, dir: World.BlockFace) bool {
+        switch (dir) {
+            inline else => |tag| return @field(self.occlusion, @tagName(tag)) == 1,
+        }
+    }
+
+    fn is_occluded(self: *Mesh, renderer: *BlockRenderer) bool {
+        for (Chunk.neighbours, World.BlockFace.list) |d, dir| {
+            const coords = self.chunk.coords + d;
+            const other = renderer.meshes.get(coords) orelse return false;
+            const occluded = other.occludes(dir.flip());
+            if (!occluded) return false;
+        }
+        return true;
+    }
+
+    const OcclusionMask = packed struct {
+        front: u1 = 0,
+        back: u1 = 0,
+        left: u1 = 0,
+        right: u1 = 0,
+        top: u1 = 0,
+        bot: u1 = 0,
+    };
+
+    fn update(self: *Mesh, renderer: *BlockRenderer) !void {
+        try self.build_mesh();
+
+        if (self.handle == .invalid) {
+            self.handle = try renderer.faces.alloc(
+                self.faces.items.len * @sizeOf(Face),
+                std.mem.Alignment.of(Face),
+            );
+        } else {
+            const old_range = renderer.faces.get_range(self.handle).?;
+
+            try gl_call(gl.InvalidateBufferSubData(
+                renderer.faces.buffer,
+                old_range.offset,
+                old_range.size,
+            ));
+            self.handle = try renderer.faces.realloc(
+                self.handle,
+                self.faces.items.len * @sizeOf(Face),
+                std.mem.Alignment.of(Face),
+            );
+        }
+
+        const range = renderer.faces.get_range(self.handle).?;
+
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, renderer.faces.buffer));
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(self.faces.items),
+        ));
+        try renderer.meshes.put(App.static_alloc(), self.chunk.coords, self);
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     }
 };
 
@@ -578,22 +632,18 @@ const block_frag =
     \\in flat uint frag_ao;
     \\in vec2 frag_uv;
     \\
-    \\uniform float u_occlusion_factor = 0.3;
-    \\uniform bool u_enable_face_occlusion = true;
+    \\uniform float u_ao_factor = 0.7;
+    \\uniform bool u_enable_face_ao = true;
     \\
-    \\float get_occlusion(uint mask, uint dir) {
-    \\  return ((mask & uint(1 << dir)) == 0 ? 0 : 1);
-    \\}
-    \\
-    \\float occlusion(vec2 uv, uint mask) {
-    \\  float l = get_occlusion(mask, AO_LEFT) * (1 - uv.x) * (1 - u_occlusion_factor);
-    \\  float r = get_occlusion(mask, AO_RIGHT) * uv.x * (1 - u_occlusion_factor);
-    \\  float t = get_occlusion(mask, AO_TOP) * (1 - uv.y) * (1 - u_occlusion_factor);
-    \\  float b = get_occlusion(mask, AO_BOT) * uv.y * (1 - u_occlusion_factor);
+    \\float get_ao(vec2 uv, uint mask) {
+    \\  float l = ((mask >> AO_LEFT) & 1) * (1 - uv.x) * (1 - u_ao_factor);
+    \\  float r = ((mask >> AO_RIGHT) & 1) * uv.x * (1 - u_ao_factor);
+    \\  float t = ((mask >> AO_TOP) & 1) * (1 - uv.y) * (1 - u_ao_factor);
+    \\  float b = ((mask >> AO_BOT) & 1) * uv.y * (1 - u_ao_factor);
     \\  return 1 - (l + r + t + b) / 4;
     \\}
     \\void main() {
-    \\  float ao = (u_enable_face_occlusion ? occlusion(frag_uv, frag_ao) : 1.0);
+    \\  float ao = (u_enable_face_ao ? get_ao(frag_uv, frag_ao) : 1.0);
     \\  out_color = vec4(frag_color * ao, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);

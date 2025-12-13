@@ -200,3 +200,12 @@ pub fn bounding_sphere(self: *Chunk) zm.Vec4f {
 
     return .{ pos[0], pos[1], pos[2], rad };
 }
+
+pub const neighbours: [6]World.ChunkCoords = .{
+    .{ 0, 0, 1 },
+    .{ 0, 0, -1 },
+    .{ 1, 0, 0 },
+    .{ -1, 0, 0 },
+    .{ 0, 1, 0 },
+    .{ 0, -1, 0 },
+};

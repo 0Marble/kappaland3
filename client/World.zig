@@ -173,6 +173,8 @@ pub const BlockFace = enum(u3) {
     top,
     bot,
 
+    pub const list: []const BlockFace = @ptrCast(std.meta.tags(@This()));
+
     pub fn flip(self: BlockFace) BlockFace {
         return switch (self) {
             .front => .back,
