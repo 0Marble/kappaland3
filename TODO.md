@@ -11,8 +11,6 @@
 
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
 - ECS nursery - systems during execution may spawn or register ecs thins which has a potential to invalidate all pointers. Make it so commands are recorded and only after `evaluate()` are executed.
-- Adaptive chunk processing - process a dynamic amount of chunks per frame
-- Ambient occlusion - right now the block lighting is very flat, its hard to see anything
 - How does transparensy, non-block models, textures work?
 
 # Debt
@@ -28,6 +26,8 @@
 
 - 13.12.2025:
     1. Continued working on occlusion culling. I went with a simple and effective solution: don't draw the chunk if the neighbouring chunks have full-block faces, it cuts the amt of rendered chunks from 900 to 300 on flat world.
+    2. Adaptive chunk processing - process a dynamic amount of chunks per frame. I just run 
+    the thing for 1ms, in the future we will need threads.
 
 - 07.12.2025:
     1. Worked on GpuAlloc. 
