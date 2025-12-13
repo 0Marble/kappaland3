@@ -29,6 +29,7 @@ chunk_data_ssbo: gl.uint,
 indirect_buf: gl.uint,
 
 drawn_chunks_cnt: usize,
+cur_chunk_data_ssbo_size: usize,
 
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *Mesh),
 free_meshes: std.ArrayList(*Mesh),
@@ -39,6 +40,7 @@ pub fn init(self: *Self) !void {
     self.drawn_chunks_cnt = 0;
     self.meshes = .empty;
     self.free_meshes = .empty;
+    self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
 
     var sources: [2]Shader.Source = .{
         Shader.Source{ .kind = gl.VERTEX_SHADER, .sources = &.{block_vert} },
@@ -47,23 +49,32 @@ pub fn init(self: *Self) !void {
     self.block_pass = try .init(&sources);
     Log.log(.debug, "{*} Initialized block pass", .{self});
 
+    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
+    self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
+
+    try gl_call(gl.BindVertexArray(self.block_vao));
+
     try self.init_block_model();
     Log.log(.debug, "{*} Initialized block model", .{self});
-    try self.init_face_data();
+    try self.init_face_attribs();
     Log.log(.debug, "{*} Initialized face data buffers", .{self});
     try self.init_chunk_data();
     Log.log(.debug, "{*} Initialized chunk data buffers", .{self});
+
+    try gl_call(gl.BindVertexArray(0));
+    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     Log.log(.debug, "{*} Finished initializing...", .{self});
 }
 
 fn init_block_model(self: *Self) !void {
-    try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
-
-    try gl_call(gl.BindVertexArray(self.block_vao));
-
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_ibo));
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
@@ -71,6 +82,7 @@ fn init_block_model(self: *Self) !void {
         @ptrCast(&block_inds),
         gl.STATIC_DRAW,
     ));
+
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
     try gl_call(gl.BufferData(
         gl.UNIFORM_BUFFER,
@@ -79,19 +91,10 @@ fn init_block_model(self: *Self) !void {
         gl.STATIC_DRAW,
     ));
     try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_MODEL_BINDING, self.block_ubo));
-
-    try gl_call(gl.BindVertexArray(0));
-    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
-    try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0));
 }
 
-fn init_face_data(self: *Self) !void {
-    self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
-
-    try gl_call(gl.BindVertexArray(self.block_vao));
-
+fn init_face_attribs(self: *Self) !void {
     try gl_call(gl.BindVertexBuffer(FACE_DATA_BINDING, self.faces.buffer, 0, @sizeOf(Face)));
-    try gl_call(gl.VertexBindingDivisor(FACE_DATA_BINDING, 1));
 
     try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_A));
     try gl_call(gl.VertexAttribIFormat(FACE_DATA_LOCATION_A, 1, gl.UNSIGNED_INT, 0));
@@ -100,16 +103,15 @@ fn init_face_data(self: *Self) !void {
     try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_B));
     try gl_call(gl.VertexAttribIFormat(FACE_DATA_LOCATION_B, 1, gl.UNSIGNED_INT, @sizeOf(u32)));
     try gl_call(gl.VertexAttribBinding(FACE_DATA_LOCATION_B, FACE_DATA_BINDING));
+
+    try gl_call(gl.VertexBindingDivisor(FACE_DATA_BINDING, 1));
 }
 
 fn init_chunk_data(self: *Self) !void {
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
-
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        DEFAULT_CHUNK_DATA_SIZE,
+        @intCast(self.cur_chunk_data_ssbo_size),
         null,
         gl.STREAM_DRAW,
     ));
@@ -126,9 +128,6 @@ fn init_chunk_data(self: *Self) !void {
         null,
         gl.STREAM_DRAW,
     ));
-
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
-    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 }
 
 pub fn deinit(self: *Self) void {
@@ -149,10 +148,11 @@ pub fn draw(self: *Self) !void {
 
     try self.block_pass.set_mat4("u_view", cam.view_mat());
     try self.block_pass.set_mat4("u_proj", cam.proj_mat());
-
     try self.block_pass.bind();
+
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
+
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
         gl.UNSIGNED_BYTE,
@@ -160,6 +160,8 @@ pub fn draw(self: *Self) !void {
         @intCast(draw_count),
         0,
     ));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
 }
@@ -223,6 +225,15 @@ pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
     ));
     try self.meshes.put(App.static_alloc(), chunk.coords, mesh);
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
+
+    try gl_call(gl.BindVertexArray(self.block_vao));
+    try gl_call(gl.BindVertexBuffer(
+        FACE_DATA_BINDING,
+        self.faces.buffer,
+        0,
+        @sizeOf(Face),
+    ));
+    try gl_call(gl.BindVertexArray(0));
 }
 
 const MeshOrder = struct {
@@ -263,9 +274,9 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         indirect[i] = Indirect{
             .count = 6,
             .instance_count = @intCast(mesh.mesh.faces.items.len),
-            .first_index = @intCast(@divExact(range.offset, @sizeOf(Face))),
+            .base_instance = @intCast(@divExact(range.offset, @sizeOf(Face))),
             .base_vertex = 0,
-            .base_instance = 0,
+            .first_index = 0,
         };
         chunk_data[i] = ChunkData{
             .x = mesh.mesh.chunk.coords[0],
@@ -274,7 +285,6 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         };
     }
 
-    try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
     try gl_call(gl.BufferData(
         gl.DRAW_INDIRECT_BUFFER,
@@ -285,11 +295,26 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
-    try gl_call(gl.BufferData(
+    const ssbo_size = chunk_data.len * @sizeOf(ChunkData);
+    if (self.cur_chunk_data_ssbo_size <= ssbo_size) {
+        self.cur_chunk_data_ssbo_size = ssbo_size * 2;
+        try gl_call(gl.BufferData(
+            gl.SHADER_STORAGE_BUFFER,
+            @intCast(self.cur_chunk_data_ssbo_size),
+            null,
+            gl.STREAM_DRAW,
+        ));
+        try gl_call(gl.BindBufferBase(
+            gl.SHADER_STORAGE_BUFFER,
+            CHUNK_DATA_BINDING,
+            self.chunk_data_ssbo,
+        ));
+    }
+    try gl_call(gl.BufferSubData(
         gl.SHADER_STORAGE_BUFFER,
-        @intCast(chunk_data.len * @sizeOf(ChunkData)),
+        0,
+        @intCast(ssbo_size),
         @ptrCast(chunk_data),
-        gl.STREAM_DRAW,
     ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
@@ -301,7 +326,7 @@ const ChunkData = extern struct {
     x: i32,
     y: i32,
     z: i32,
-    padding: u32 = 0,
+    padding: u32 = 0xbeefcafe,
 };
 
 const Face = packed struct(u64) {
@@ -309,8 +334,8 @@ const Face = packed struct(u64) {
     x: u4,
     y: u4,
     z: u4,
-    _unused1: u1 = 0,
     normal: u3,
+    _unused1: u1 = 0,
     ao: u4,
     _unused2: u12 = 0xeba,
     // B:
@@ -361,8 +386,28 @@ const Mesh = struct {
         self.faces.clearRetainingCapacity();
 
         for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ 0, 0, @intCast(i) };
+            try self.build_layer_mesh(.front, start);
+        }
+        for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ 15, 0, @intCast(i) };
+            try self.build_layer_mesh(.back, start);
+        }
+        for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ @intCast(i), 0, 15 };
+            try self.build_layer_mesh(.right, start);
+        }
+        for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ @intCast(i), 0, 0 };
+            try self.build_layer_mesh(.left, start);
+        }
+        for (0..World.CHUNK_SIZE) |i| {
             const start: World.BlockCoords = .{ 0, @intCast(i), 0 };
             try self.build_layer_mesh(.top, start);
+        }
+        for (0..World.CHUNK_SIZE) |i| {
+            const start: World.BlockCoords = .{ 15, @intCast(i), 0 };
+            try self.build_layer_mesh(.bot, start);
         }
     }
 
@@ -384,8 +429,8 @@ const Mesh = struct {
                     @as(World.BlockCoords, @splat(v)) * top;
 
                 const block = self.chunk.get(pos);
-                const front_block = self.chunk.get_safe(pos + normal.front_dir());
                 if (block == .air) continue;
+                const front_block = self.chunk.get_safe(pos + normal.front_dir());
                 if (front_block != null and front_block != .air) continue;
 
                 const face = Face{
@@ -434,7 +479,7 @@ const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;
 const CHUNK_DATA_BINDING = 1;
-const BLOCK_MODEL_BINDING = 1;
+const BLOCK_MODEL_BINDING = 2;
 const BLOCK_FACE_CNT = BlockModel.normals.len;
 const BLOCK_VERT_CNT = BLOCK_FACE_CNT * BlockModel.faces[0].len;
 const P_STRIDE = 1;
@@ -481,7 +526,7 @@ const block_vert =
     \\
     \\  uint p = gl_VertexID;
     \\  vec3 normal = normals[face.n];
-    \\  vec3 vert = verts[face.n * N_STRIDE + p * P_STRIDE];
+    \\  vec3 vert = verts[face.n * N_STRIDE + p * P_STRIDE] + face.pos;
     \\  vec3 chunk = vec3(chunk_coords[gl_DrawID].xyz);
     \\  vec4 view_pos = u_view * vec4(vert + chunk * 16, 1);
     \\  gl_Position = u_proj * view_pos;
@@ -489,7 +534,7 @@ const block_vert =
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
     \\  frag_ao = face.ao;
     \\  frag_uv = uvs[p];
-    \\  frag_color = vert / 16.0;
+    \\  frag_color = face.pos / 16.0;
     \\  frag_pos = view_pos.xyz;
     \\}
 ;
