@@ -20,7 +20,6 @@
 - fps: what is the state of the game on iGPU?
 - build: we depend on system install of SDL3.
 - culling: when frustum culling, I just take the maximum of FOV's, but that doesnt actually produce a circle that covers the whole screen (the old circle at corners vs circle at side middles thing)
-- block placing: sometimes it is still possible to break/place stuff behind other blocks. Seems to have appeared after I added an epsilon for minimum t step on raycast.
 
 # Done
 
@@ -28,6 +27,8 @@
     1. Continued working on occlusion culling. I went with a simple and effective solution: don't draw the chunk if the neighbouring chunks have full-block faces, it cuts the amt of rendered chunks from 900 to 300 on flat world.
     2. Adaptive chunk processing - process a dynamic amount of chunks per frame. I just run 
     the thing for 1ms, in the future we will need threads.
+    3. block placing: sometimes it was possible to break blocks behind other blocks, which appeared after I fixed the old infinite loop bug; I made it so now dt+=eps and that seems to have fixed both bugs.
+
 
 - 07.12.2025:
     1. Worked on GpuAlloc. 

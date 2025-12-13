@@ -20,7 +20,9 @@ pub fn init() !Settings {
         .save_on_exit = true,
     };
     try self.load_template();
-    try self.load();
+    self.load() catch |err| {
+        Log.log(.warn, "Could not load settings file: {}", .{err});
+    };
 
     return self;
 }
