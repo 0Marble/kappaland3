@@ -2,11 +2,42 @@ const gl = @import("gl");
 const std = @import("std");
 const App = @import("App.zig");
 const Log = @import("libmine").Log;
+const Ecs = @import("libmine").Ecs;
 const gl_call = @import("util.zig").gl_call;
 const zm = @import("zm");
 
 program: gl.uint,
 uniforms: std.StringHashMapUnmanaged(gl.int) = .{},
+eid: Ecs.EntityRef,
+
+pub fn observe_settings(
+    self: *Shader,
+    setting: []const u8,
+    comptime T: type,
+    comptime name: [:0]const u8,
+) !void {
+    const evt = try App.settings().settings_change_event(T, setting);
+
+    const Callback = struct {
+        fn callback(shader: *Shader, vals: []T) void {
+            const val = vals[vals.len - 1];
+            _ = switch (T) {
+                bool => shader.set_uint(name, if (val) 1 else 0),
+                i32 => shader.set_int(name, val),
+                f32 => shader.set_float(name, val),
+                else => @compileError("Todo: support type " ++ @typeName(T)),
+            } catch |err| {
+                Log.log(
+                    .warn,
+                    "{*}: could not set uniform '{s}': {}",
+                    .{ shader, name, err },
+                );
+            };
+        }
+    };
+
+    try App.ecs().add_event_listener(self.eid, T, *Shader, evt, self, Callback.callback);
+}
 
 pub const Source = struct {
     name: []const u8 = "Unnamed",
@@ -95,7 +126,7 @@ pub fn init(sources: []Source) !Shader {
         s.deinit();
     }
 
-    return Shader{ .program = program };
+    return Shader{ .program = program, .eid = try App.ecs().spawn() };
 }
 
 pub fn deinit(self: *Shader) void {

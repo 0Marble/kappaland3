@@ -61,69 +61,38 @@ renderer_eid: Ecs.EntityRef,
 
 const Renderer = @This();
 pub fn init(self: *Renderer) !void {
-    try self.init_settings();
     try self.init_buffers();
     try self.block_renderer.init();
     try self.init_screen();
+    try self.init_settings();
 }
 
 fn init_settings(self: *Renderer) !void {
     self.renderer_eid = try App.ecs().spawn();
 
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".enable", "lighting_pass", "u_ssao_enabled", bool);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".blur", "ssao_blur_pass", "u_blur", i32);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".radius", "ssao_pass", "u_radius", f32);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".bias", "ssao_pass", "u_bias", f32);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_min", "ssao_pass", "u_range_min", f32);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".range_max", "ssao_pass", "u_range_max", f32);
-    try self.on_setting_change_set_uniform(SSAO_SETTINGS ++ ".use_range", "ssao_pass", "u_use_range", bool);
+    try self.lighting_pass.observe_settings(SSAO_SETTINGS ++ ".enable", bool, "u_ssao_enabled");
+    try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur");
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius");
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".bias", f32, "u_bias");
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".range_max", f32, "u_range_max");
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".range_min", f32, "u_range_min");
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".use_range", bool, "u_use_range");
 
-    try self.on_setting_change_set_uniform(
+    try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".enable",
-        "postprocessing_pass",
+        bool,
         "u_enable_fxaa",
-        bool,
     );
-    try self.on_setting_change_set_uniform(
+    try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".contrast",
-        "postprocessing_pass",
-        "u_fxaa_contrast",
         f32,
+        "u_fxaa_contrast",
     );
-    try self.on_setting_change_set_uniform(
+    try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".debug_outline",
-        "postprocessing_pass",
-        "u_fxaa_debug_outline",
         bool,
+        "u_fxaa_debug_outline",
     );
-}
-
-fn on_setting_change_set_uniform(
-    self: *Renderer,
-    setting: []const u8,
-    comptime pass_name: []const u8,
-    comptime uniform: [:0]const u8,
-    comptime T: type,
-) !void {
-    const evt = try App.settings().settings_change_event(T, setting);
-    try App.ecs().add_event_listener(self.renderer_eid, T, *Renderer, evt, self, &(struct {
-        fn callback(this: *Renderer, vals: []T) void {
-            if (Options.renderer_log_settings_changed) {
-                Log.log(.info, "Changed {s}.{s}", .{ pass_name, uniform });
-            }
-            const last = vals[vals.len - 1];
-            const pass: *Shader = &@field(this, pass_name);
-            const res = switch (T) {
-                bool => pass.set_uint(uniform, if (last) 1 else 0),
-                i32 => pass.set_int(uniform, last),
-                f32 => pass.set_float(uniform, last),
-                else => @compileError("Unsupported uniform type: " ++ @typeName(T)),
-            };
-            res catch |err| {
-                Log.log(.warn, "Couldn't set '{s}' uniform for pass '{s}': {}", .{ uniform, pass_name, err });
-            };
-        }
-    }.callback));
 }
 
 pub fn deinit(self: *Renderer) void {
