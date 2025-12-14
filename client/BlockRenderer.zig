@@ -211,7 +211,7 @@ fn process_work(self: *Self) !void {
 
         for (mesh.get_neighbours(self)) |o| {
             const other = o orelse continue;
-            other.cached_neighbours = @splat(null);
+            other.cache_valid = false;
         }
     }
 
@@ -438,6 +438,7 @@ const Mesh = struct {
     faces: std.ArrayList(Face),
     handle: GpuAlloc.Handle,
     occlusion: OcclusionMask,
+    cache_valid: bool,
     cached_neighbours: [6]?*Mesh,
 
     fn init(chunk: *Chunk) !*Mesh {
@@ -445,11 +446,12 @@ const Mesh = struct {
         self.chunk = chunk;
         self.handle = .invalid;
         self.faces = .empty;
+        self.cache_valid = false;
         return self;
     }
 
     fn build_mesh(self: *Mesh) !void {
-        self.cached_neighbours = @splat(null);
+        self.cache_valid = false;
         self.faces.clearRetainingCapacity();
         self.occlusion = .{};
 
@@ -562,10 +564,11 @@ const Mesh = struct {
     }
 
     fn get_neighbours(self: *Mesh, renderer: *BlockRenderer) []?*Mesh {
-        for (&self.cached_neighbours, Chunk.neighbours) |*other, d| {
-            if (other.* == null) {
+        if (!self.cache_valid) {
+            for (&self.cached_neighbours, Chunk.neighbours) |*other, d| {
                 other.* = renderer.meshes.get(self.chunk.coords + d);
             }
+            self.cache_valid = true;
         }
         return &self.cached_neighbours;
     }
