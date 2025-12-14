@@ -18,12 +18,14 @@ freelist: std.ArrayListUnmanaged(*Chunk),
 finished_work: std.ArrayListUnmanaged(*Chunk),
 work_lock: std.Thread.Mutex,
 work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
+active_rw: std.Thread.RwLock,
 
 const World = @This();
 pub fn init(self: *World) !void {
     self.active = .empty;
     self.freelist = .empty;
     self.work_lock = .{};
+    self.active_rw = .{};
     self.work_alloc = .init;
     self.finished_work = .empty;
 
@@ -66,7 +68,7 @@ pub fn set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
         return;
     };
     chunk.set(block_coords, id);
-    try App.renderer().upload_chunk(chunk);
+    try App.renderer().request_draw_chunk(chunk);
 }
 
 pub fn on_frame_start(self: *World) !void {
@@ -151,17 +153,24 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
 }
 
 pub fn get_block(self: *World, coords: WorldCoords) ?BlockId {
+    self.active_rw.lock();
+    defer self.active_rw.unlock();
+
     const chunk = self.active.get(world_to_chunk(coords)) orelse return null;
     return chunk.get(world_to_block(coords));
 }
 
 pub fn process_work(self: *World) !void {
+    self.active_rw.lockShared();
+    defer self.active_rw.unlockShared();
+
     self.work_lock.lock();
     defer self.work_lock.unlock();
 
     for (self.finished_work.items) |chunk| {
         try self.active.put(App.static_alloc(), chunk.coords, chunk);
-        try App.renderer().upload_chunk(chunk);
+
+        try App.renderer().request_draw_chunk(chunk);
     }
     self.finished_work.clearRetainingCapacity();
 }

@@ -250,7 +250,7 @@ pub fn on_frame_start(self: *Self) !void {
     try self.process_work();
 }
 
-pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
+pub fn request_draw_chunk(self: *Self, chunk: *Chunk) !void {
     const mesh = if (self.free_meshes.pop()) |mesh| blk: {
         mesh.chunk = chunk;
         break :blk mesh;
@@ -314,7 +314,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
 
         if (do_occlusion_culling and
-            !std.meta.eql(mesh.chunk.coords, cam_chunk) and
+            !@reduce(.And, mesh.chunk.coords == cam_chunk) and
             mesh.is_occluded(self))
             continue;
 
@@ -521,17 +521,17 @@ const Mesh = struct {
                     @as(World.BlockCoords, @splat(v)) * up;
 
                 const block = self.chunk.get(pos);
-                if (block == .air or self.chunk.is_solid(pos + front)) {
+                if (block == .air or self.is_solid_relative(pos + front)) {
                     is_full_layer = false;
                     continue;
                 }
 
                 var ao: u4 = 0;
                 const ao_idx: usize = @intFromEnum(normal);
-                if (self.chunk.is_solid(pos + front + left)) ao |= ao_mask[ao_idx][0];
-                if (self.chunk.is_solid(pos + front + right)) ao |= ao_mask[ao_idx][1];
-                if (self.chunk.is_solid(pos + front + up)) ao |= ao_mask[ao_idx][2];
-                if (self.chunk.is_solid(pos + front + down)) ao |= ao_mask[ao_idx][3];
+                if (self.is_solid_relative(pos + front + left)) ao |= ao_mask[ao_idx][0];
+                if (self.is_solid_relative(pos + front + right)) ao |= ao_mask[ao_idx][1];
+                if (self.is_solid_relative(pos + front + up)) ao |= ao_mask[ao_idx][2];
+                if (self.is_solid_relative(pos + front + down)) ao |= ao_mask[ao_idx][3];
 
                 const face = Face{
                     .x = @intCast(pos[0]),
@@ -546,6 +546,16 @@ const Mesh = struct {
         }
 
         return is_full_layer;
+    }
+
+    fn is_solid_relative(self: *Mesh, pos: World.BlockCoords) bool {
+        if (self.chunk.get_safe(pos)) |b| {
+            return b != .air;
+        }
+        const size: World.WorldCoords = @splat(CHUNK_SIZE);
+        const glob = self.chunk.coords * size + pos;
+        const block = App.game_state().world.get_block(glob);
+        return block != null and block != .air;
     }
 
     fn occludes(self: *Mesh, dir: World.BlockFace) bool {

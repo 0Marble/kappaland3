@@ -120,8 +120,8 @@ pub fn deinit(self: *Renderer) void {
     self.ssao_blur_pass.deinit();
 }
 
-pub fn upload_chunk(self: *Renderer, chunk: *Chunk) !void {
-    try self.block_renderer.upload_chunk(chunk);
+pub fn request_draw_chunk(self: *Renderer, chunk: *Chunk) !void {
+    try self.block_renderer.request_draw_chunk(chunk);
 }
 
 pub fn draw(self: *Renderer) !void {

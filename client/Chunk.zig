@@ -166,3 +166,26 @@ pub const neighbours: [6]World.ChunkCoords = .{
     .{ 0, 1, 0 },
     .{ 0, -1, 0 },
 };
+
+pub const neighbours2 = blk: {
+    var res = std.mem.zeroes([26]World.ChunkCoords);
+    const zero: World.ChunkCoords = @splat(0);
+
+    var l: usize = 0;
+    for (0..3) |i| {
+        for (0..3) |j| {
+            for (0..3) |k| {
+                const pos: World.ChunkCoords = .{
+                    @as(i32, @intCast(i)) - 1,
+                    @as(i32, @intCast(j)) - 1,
+                    @as(i32, @intCast(k)) - 1,
+                };
+                if (@reduce(.And, pos == zero)) continue;
+                res[l] = pos;
+                l += 1;
+            }
+        }
+    }
+
+    break :blk res;
+};
