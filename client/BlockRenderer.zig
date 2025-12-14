@@ -301,15 +301,15 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     self.triangle_cnt = 0;
 
     for (self.meshes.values()) |mesh| {
-        if (do_occlusion_culling and
-            !std.meta.eql(mesh.chunk.coords, cam_chunk) and
-            mesh.is_occluded(self))
-            continue;
-
         const bound = mesh.chunk.bounding_sphere();
         const center = zm.vec.xyz(bound);
         const rad = bound[3];
         if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
+
+        if (do_occlusion_culling and
+            !std.meta.eql(mesh.chunk.coords, cam_chunk) and
+            mesh.is_occluded(self))
+            continue;
 
         try meshes.append(App.frame_alloc(), .{
             .mesh = mesh,
