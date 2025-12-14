@@ -16,12 +16,17 @@
 # Debt
 
 - visual: Face AO does not take neighbouring chunks into account
-- visual/probably-unfixable: SSAO cutoff, i.e. when you get close to a block face and slowly rotate the camera
+- visual: only using SSAO far away is a hack, can we improve it?
 - fps: what is the state of the game on iGPU?
 - build: we depend on system install of SDL3.
 - culling: when frustum culling, I just take the maximum of FOV's, but that doesnt actually produce a circle that covers the whole screen (the old circle at corners vs circle at side middles thing)
+- threading: chunk meshe faces are allocated on threadlocal static arenas, what if after unloading the mesh another thread picks it up? Since I only do `clearRetainingCapacity`.
 
 # Done
+
+- 14.12.2025:
+    1. Using a thread pool for building chunks, speeds up the process massively, plus it is a first experiment with multithreading in the app. I had to change how the allocators work.
+    2. Added a command to draw perf flamegraph
 
 - 13.12.2025:
     1. Continued working on occlusion culling. I went with a simple and effective solution: don't draw the chunk if the neighbouring chunks have full-block faces, it cuts the amt of rendered chunks from 900 to 300 on flat world.
