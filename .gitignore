@@ -2,4 +2,7 @@
 zig-out/
 imgui.ini
 client.zon
+perf.data
+perf.data.old
+flamegraph.html
 

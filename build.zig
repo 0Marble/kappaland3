@@ -145,15 +145,32 @@ fn build_client(
 
     const wrapper: ?[]const u8 = b.option([]const u8, "command", "Wrapper command");
     const run_client = if (wrapper) |command| blk: {
-        const cmd = b.addSystemCommand(&.{command});
         if (std.mem.eql(u8, command, "gdb")) {
+            const cmd = b.addSystemCommand(&.{command});
             client.use_llvm = true;
             client_options.addOption(bool, "in_gdb", true);
             cmd.addArg("--args");
-        }
-        cmd.addFileArg(client.getEmittedBin());
+            cmd.addFileArg(client.getEmittedBin());
+            break :blk cmd;
+        } else if (std.mem.eql(u8, command, "perf")) {
+            const perf_run = b.addSystemCommand(&.{command});
+            perf_run.addArgs(&.{ "record", "-F", "99", "-g" });
+            perf_run.addFileArg(client.getEmittedBin());
 
-        break :blk cmd;
+            const draw_flame = b.addSystemCommand(&.{"perf"});
+            draw_flame.addArgs(&.{ "script", "report", "flamegraph" });
+            draw_flame.step.dependOn(&perf_run.step);
+
+            const open_chrome = b.addSystemCommand(&.{"chromium-browser"});
+            open_chrome.addArg("flamegraph.html");
+            open_chrome.step.dependOn(&draw_flame.step);
+
+            break :blk open_chrome;
+        } else {
+            const cmd = b.addSystemCommand(&.{command});
+            cmd.addFileArg(client.getEmittedBin());
+            break :blk cmd;
+        }
     } else b.addRunArtifact(client);
 
     const run_step = b.step("run", "run the client");
