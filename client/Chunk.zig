@@ -4,8 +4,6 @@ const App = @import("App.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
 
-const Stage = enum { dead, generating, meshing, active };
-
 const CHUNK_SIZE = World.CHUNK_SIZE;
 pub const X_OFFSET = 1;
 pub const Z_OFFSET = CHUNK_SIZE;
@@ -13,43 +11,13 @@ pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
 
 coords: World.ChunkCoords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]World.BlockId,
-stage: Stage,
 
 const Chunk = @This();
-pub fn create() !*Chunk {
-    const self = try App.gpa().create(Chunk);
-    self.coords = std.mem.zeroes(World.ChunkCoords);
-    self.stage = .dead;
-    return self;
-}
 
-pub fn init(self: *Chunk, coords: World.ChunkCoords) void {
+pub fn init(coords: World.ChunkCoords) !*Chunk {
+    const self = try App.static_alloc().create(Chunk);
     self.coords = coords;
-    self.stage = .generating;
-}
-
-pub fn clear(self: *Chunk) void {
-    self.stage = .dead;
-}
-
-pub fn process(self: *Chunk) !void {
-    switch (self.stage) {
-        .dead => return,
-        .generating => {
-            self.generate();
-            self.stage = .meshing;
-        },
-        .meshing => {
-            try App.renderer().upload_chunk(self);
-            self.stage = .active;
-        },
-        .active => return,
-    }
-}
-
-pub fn deinit(self: *Chunk) void {
-    self.stage = .dead;
-    App.gpa().destroy(self);
+    return self;
 }
 
 pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
@@ -82,28 +50,9 @@ pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
     self.blocks[@intCast(i)] = block;
 }
 
-fn generate(self: *Chunk) void {
+pub fn generate(self: *Chunk) void {
     const fptr = @field(Chunk, "generate_" ++ Options.world_gen);
     @call(.auto, fptr, .{self});
-}
-
-fn generate_grid(self: *Chunk) void {
-    for (0..CHUNK_SIZE) |i| {
-        for (0..CHUNK_SIZE) |j| {
-            for (0..CHUNK_SIZE) |k| {
-                const x: i32 = (self.coords.x * CHUNK_SIZE + @as(i32, @intCast(i)));
-                const y: i32 = (self.coords.y * CHUNK_SIZE + @as(i32, @intCast(j)));
-                const z: i32 = (self.coords.z * CHUNK_SIZE + @as(i32, @intCast(k)));
-                const idx = i * X_OFFSET + j * Y_OFFSET + k * Z_OFFSET;
-
-                if (@rem(x + y + z, 2) == 0) {
-                    self.blocks[idx] = .air;
-                } else {
-                    self.blocks[idx] = .stone;
-                }
-            }
-        }
-    }
 }
 
 fn generate_solid(self: *Chunk) void {

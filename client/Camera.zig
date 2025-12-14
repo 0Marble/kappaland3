@@ -72,11 +72,11 @@ pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
     const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
 
     if (btn.button == .left) {
-        App.game_state().world.request_set_block(raycast.hit_coords, .air) catch |err| {
+        App.game_state().world.set_block(raycast.hit_coords, .air) catch |err| {
             Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
         };
     } else if (btn.button == .right) {
-        App.game_state().world.request_set_block(raycast.prev_coords, .stone) catch |err| {
+        App.game_state().world.set_block(raycast.prev_coords, .stone) catch |err| {
             Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
         };
     }

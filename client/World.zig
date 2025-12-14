@@ -12,64 +12,67 @@ pub const CHUNK_SIZE = 16;
 pub const DIM: comptime_int = Options.world_size;
 pub const HEIGHT: comptime_int = Options.world_height;
 
-worklist: std.AutoArrayHashMapUnmanaged(ChunkCoords, *Chunk),
-high_priority_worklist: std.AutoArrayHashMapUnmanaged(ChunkCoords, *Chunk),
 active: std.AutoArrayHashMapUnmanaged(ChunkCoords, *Chunk),
 freelist: std.ArrayListUnmanaged(*Chunk),
 
+finished_work: std.ArrayListUnmanaged(*Chunk),
+work_lock: std.Thread.Mutex,
+work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
+
 const World = @This();
 pub fn init(self: *World) !void {
-    self.worklist = .empty;
     self.active = .empty;
     self.freelist = .empty;
-    self.high_priority_worklist = .empty;
+    self.work_lock = .{};
+    self.work_alloc = .init;
+    self.finished_work = .empty;
 
     try self.init_chunks();
 }
 
 pub fn deinit(self: *World) void {
-    for (self.worklist.values()) |chunk| chunk.deinit();
-    for (self.high_priority_worklist.values()) |chunk| chunk.deinit();
-    for (self.active.values()) |chunk| chunk.deinit();
-    for (self.freelist.items) |chunk| chunk.deinit();
-
-    self.worklist.deinit(App.gpa());
-    self.active.deinit(App.gpa());
-    self.freelist.deinit(App.gpa());
-    self.high_priority_worklist.deinit(App.gpa());
+    self.finished_work.deinit(self.work_alloc.allocator());
+    _ = self.work_alloc.deinit();
 }
 
 pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
-    if (self.active.get(coords)) |_| return;
-    if (self.worklist.get(coords)) |_| return;
-    if (self.high_priority_worklist.get(coords)) |_| return;
+    Log.log(.debug, "{*}: request_load_chunk({})", .{ self, coords });
+    if (self.active.contains(coords)) return;
 
-    const chunk = if (self.freelist.pop()) |old|
-        old
-    else
-        try Chunk.create();
-    chunk.init(coords);
-    try self.worklist.put(App.gpa(), coords, chunk);
+    const chunk = if (self.freelist.pop()) |chunk| blk: {
+        chunk.coords = coords;
+        break :blk chunk;
+    } else try Chunk.init(coords);
+
+    try App.pool().spawn(load_chunk_task, .{ self, chunk });
 }
 
-pub fn request_set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
+fn load_chunk_task(self: *World, chunk: *Chunk) void {
+    chunk.generate();
+
+    self.work_lock.lock();
+    defer self.work_lock.unlock();
+
+    self.finished_work.append(self.work_alloc.allocator(), chunk) catch |err| {
+        Log.log(.warn, "{*}: could not load chunk {}: {}", .{ self, chunk.coords, err });
+    };
+}
+
+pub fn set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
     const chunk_coords = world_to_chunk(coords);
     const block_coords = world_to_block(coords);
-    const kv = self.active.fetchSwapRemove(chunk_coords) orelse {
-        Log.log(.warn, "{*}: set_block at an invactive chunk {}", .{ self, chunk_coords });
+    const chunk = self.active.get(chunk_coords) orelse {
+        Log.log(.warn, "{*}: set_block in inactive chunk {}", .{ self, chunk_coords });
         return;
     };
-    const chunk = kv.value;
     chunk.set(block_coords, id);
-    chunk.stage = .meshing;
-    try self.high_priority_worklist.put(App.gpa(), chunk.coords, chunk);
+    try App.renderer().upload_chunk(chunk);
 }
 
 pub fn on_frame_start(self: *World) !void {
     try App.gui().add_to_frame(World, "Debug", self, struct {
         fn callback(this: *World) !void {
             c.igText("Chunks Active: %zu", this.active.count());
-            c.igText("Chunks in Worklist: %zu", this.worklist.count());
         }
     }.callback, @src());
 }
@@ -153,26 +156,14 @@ pub fn get_block(self: *World, coords: WorldCoords) ?BlockId {
 }
 
 pub fn process_work(self: *World) !void {
-    const PROCESS_TIME_MS = 1;
-    const start = std.time.milliTimestamp();
+    self.work_lock.lock();
+    defer self.work_lock.unlock();
 
-    while (true) {
-        const kv = self.high_priority_worklist.pop() orelse self.worklist.pop() orelse break;
-        const chunk = kv.value;
-        try chunk.process();
-        if (chunk.stage != .active) {
-            try self.worklist.put(App.gpa(), chunk.coords, chunk);
-        } else {
-            if (try self.active.fetchPut(App.gpa(), chunk.coords, chunk)) |_| {
-                Log.log(.warn, "{*}: Duplicate chunks at coordinate {}", .{
-                    self,
-                    chunk.coords,
-                });
-            }
-        }
-        const now = std.time.milliTimestamp();
-        if (now - start > PROCESS_TIME_MS) break;
+    for (self.finished_work.items) |chunk| {
+        try self.active.put(App.static_alloc(), chunk.coords, chunk);
+        try App.renderer().upload_chunk(chunk);
     }
+    self.finished_work.clearRetainingCapacity();
 }
 
 pub const BlockId = enum(u16) { air = 0, stone = 1, dirt = 2, grass = 3, _ };

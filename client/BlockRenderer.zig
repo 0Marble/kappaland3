@@ -38,6 +38,10 @@ cur_chunk_data_ssbo_size: usize,
 meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *Mesh),
 free_meshes: std.ArrayList(*Mesh),
 
+finished_meshes: std.ArrayList(*Mesh),
+work_lock: std.Thread.Mutex,
+work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
+
 pub fn init(self: *Self) !void {
     Log.log(.debug, "{*} Initializing...", .{self});
 
@@ -46,6 +50,10 @@ pub fn init(self: *Self) !void {
     self.meshes = .empty;
     self.free_meshes = .empty;
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
+
+    self.finished_meshes = .empty;
+    self.work_lock = .{};
+    self.work_alloc = .init;
 
     var sources: [2]Shader.Source = .{
         Shader.Source{
@@ -149,6 +157,8 @@ fn init_chunk_data(self: *Self) !void {
 pub fn deinit(self: *Self) void {
     self.block_pass.deinit();
     self.faces.deinit();
+    self.finished_meshes.deinit(self.work_alloc.allocator());
+    _ = self.work_alloc.deinit();
 
     gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
     gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
@@ -182,44 +192,86 @@ pub fn draw(self: *Self) !void {
     try gl_call(gl.BindVertexArray(0));
 }
 
+fn process_work(self: *Self) !void {
+    const finished_meshes = blk: {
+        self.work_lock.lock();
+        defer self.work_lock.unlock();
+
+        const res = try App.frame_alloc().dupe(*Mesh, self.finished_meshes.items);
+        self.finished_meshes.clearRetainingCapacity();
+        break :blk res;
+    };
+
+    for (finished_meshes) |mesh| {
+        try self.upload_mesh(mesh);
+    }
+
+    if (finished_meshes.len != 0) {
+        try gl_call(gl.BindVertexArray(self.block_vao));
+        try gl_call(gl.BindVertexBuffer(
+            FACE_DATA_BINDING,
+            self.faces.buffer,
+            0,
+            @sizeOf(Face),
+        ));
+        try gl_call(gl.BindVertexArray(0));
+    }
+}
+
+fn on_imgui(self: *Self) !void {
+    const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+        App.frame_alloc(),
+        \\GPU Memory:
+        \\    faces:      {f}
+        \\    chunk_ssbo: {f}
+    ,
+        .{
+            util.MemoryUsage.from_bytes(self.faces.size),
+            util.MemoryUsage.from_bytes(self.cur_chunk_data_ssbo_size),
+        },
+        0,
+    ));
+    c.igText("%s", gpu_mem_faces);
+    c.igText("Chunks Drawn: %zu", self.drawn_chunks_cnt);
+    c.igText("Triangles: %zu", self.triangle_cnt);
+}
+
 pub fn on_frame_start(self: *Self) !void {
-    try App.gui().add_to_frame(Self, "Debug", self, struct {
-        fn callback(this: *Self) !void {
-            const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-                App.frame_alloc(),
-                \\GPU Memory:
-                \\    faces:      {f}
-                \\    chunk_ssbo: {f}
-            ,
-                .{
-                    util.MemoryUsage.from_bytes(this.faces.size),
-                    util.MemoryUsage.from_bytes(this.cur_chunk_data_ssbo_size),
-                },
-                0,
-            ));
-            c.igText("%s", gpu_mem_faces);
-            c.igText("Chunks Drawn: %zu", this.drawn_chunks_cnt);
-            c.igText("Triangles: %zu", this.triangle_cnt);
-        }
-    }.callback, @src());
+    try App.gui().add_to_frame(Self, "Debug", self, on_imgui, @src());
+    try self.process_work();
 }
 
 pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
-    const mesh = if (self.free_meshes.pop()) |mesh| blk: {
+    const mesh = if (self.meshes.get(chunk.coords)) |mesh|
+        mesh
+    else if (self.free_meshes.pop()) |mesh| blk: {
         mesh.chunk = chunk;
         break :blk mesh;
     } else try Mesh.init(chunk);
 
-    try mesh.update(self);
+    try App.pool().spawn(build_mesh_task, .{ self, mesh });
+}
 
-    try gl_call(gl.BindVertexArray(self.block_vao));
-    try gl_call(gl.BindVertexBuffer(
-        FACE_DATA_BINDING,
-        self.faces.buffer,
-        0,
-        @sizeOf(Face),
-    ));
-    try gl_call(gl.BindVertexArray(0));
+fn build_mesh_task(self: *Self, mesh: *Mesh) void {
+    mesh.build_mesh() catch |err| {
+        Log.log(
+            .warn,
+            "{*}: could not build chunk {} mesh: {}",
+            .{ self, mesh.chunk.coords, err },
+        );
+        return;
+    };
+
+    self.work_lock.lock();
+    defer self.work_lock.unlock();
+
+    self.finished_meshes.append(self.work_alloc.allocator(), mesh) catch |err| {
+        Log.log(
+            .warn,
+            "{*}: could not append chunk {} to finished_meshes: {}",
+            .{ self, mesh.chunk.coords, err },
+        );
+    };
 }
 
 const MeshOrder = struct {
@@ -509,43 +561,41 @@ const Mesh = struct {
         top: u1 = 0,
         bot: u1 = 0,
     };
-
-    fn update(self: *Mesh, renderer: *BlockRenderer) !void {
-        try self.build_mesh();
-
-        if (self.handle == .invalid) {
-            self.handle = try renderer.faces.alloc(
-                self.faces.items.len * @sizeOf(Face),
-                std.mem.Alignment.of(Face),
-            );
-        } else {
-            const old_range = renderer.faces.get_range(self.handle).?;
-
-            try gl_call(gl.InvalidateBufferSubData(
-                renderer.faces.buffer,
-                old_range.offset,
-                old_range.size,
-            ));
-            self.handle = try renderer.faces.realloc(
-                self.handle,
-                self.faces.items.len * @sizeOf(Face),
-                std.mem.Alignment.of(Face),
-            );
-        }
-
-        const range = renderer.faces.get_range(self.handle).?;
-
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, renderer.faces.buffer));
-        try gl_call(gl.BufferSubData(
-            gl.ARRAY_BUFFER,
-            range.offset,
-            range.size,
-            @ptrCast(self.faces.items),
-        ));
-        try renderer.meshes.put(App.static_alloc(), self.chunk.coords, self);
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
-    }
 };
+
+fn upload_mesh(self: *BlockRenderer, mesh: *Mesh) !void {
+    if (mesh.handle == .invalid) {
+        mesh.handle = try self.faces.alloc(
+            mesh.faces.items.len * @sizeOf(Face),
+            std.mem.Alignment.of(Face),
+        );
+    } else {
+        const old_range = self.faces.get_range(mesh.handle).?;
+
+        try gl_call(gl.InvalidateBufferSubData(
+            self.faces.buffer,
+            old_range.offset,
+            old_range.size,
+        ));
+        mesh.handle = try self.faces.realloc(
+            mesh.handle,
+            mesh.faces.items.len * @sizeOf(Face),
+            std.mem.Alignment.of(Face),
+        );
+    }
+
+    const range = self.faces.get_range(mesh.handle).?;
+
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+    try gl_call(gl.BufferSubData(
+        gl.ARRAY_BUFFER,
+        range.offset,
+        range.size,
+        @ptrCast(mesh.faces.items),
+    ));
+    try self.meshes.put(App.static_alloc(), mesh.chunk.coords, mesh);
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
+}
 
 const block_verts = blk: {
     var res = std.mem.zeroes([BLOCK_VERT_CNT * 4]f32);

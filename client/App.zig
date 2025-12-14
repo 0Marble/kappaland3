@@ -18,8 +18,11 @@ win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
 
-frame_memory: std.heap.ArenaAllocator,
-static_memory: std.heap.ArenaAllocator,
+thread_gpa: []Gpa,
+frame_memory: []Arena,
+static_memory: []Arena,
+
+thread_pool: std.Thread.Pool,
 
 frame_data: FrameData,
 game: GameState,
@@ -28,71 +31,52 @@ debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
 settings_store: Settings,
 
+const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
+const Arena = std.heap.ArenaAllocator;
+
 const App = @This();
-var ok = false;
-var app: *App = undefined;
-var main_alloc = std.heap.DebugAllocator(.{ .enable_memory_limit = true }).init;
-
-const FrameData = struct {
-    cur_frame: u64 = 0,
-    last_fps_measurement_frame: u64 = 0,
-    last_fps_measurement_time: i64 = 0,
-    frame_start_time: i64 = 0,
-    frame_end_time: i64 = 0,
-    this_frame_start: i64 = 0,
-
-    fn on_frame_start(self: *FrameData) void {
-        self.this_frame_start = std.time.milliTimestamp();
-
-        if (self.this_frame_start >= self.last_fps_measurement_time + 1000) {
-            const frame_cnt: f32 = @floatFromInt(self.cur_frame - self.last_fps_measurement_frame);
-            const dt: f32 = @floatFromInt(self.this_frame_start - self.last_fps_measurement_time);
-            const fps = frame_cnt / dt * 1000.0;
-            const str = std.fmt.allocPrintSentinel(frame_alloc(), "FPS: {d:4.2}", .{fps}, 0) catch |err| blk: {
-                Log.log(.warn, "Could not allocate a string for FPS measurement: {}", .{err});
-                break :blk "FPS: ???";
-            };
-            sdl_call(c.SDL_SetWindowTitle(app.win, @ptrCast(str))) catch |err| {
-                Log.log(.warn, "Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
-            };
-            self.last_fps_measurement_time = self.this_frame_start;
-            self.last_fps_measurement_frame = self.cur_frame;
-        }
-    }
-
-    fn on_frame_end(self: *FrameData) void {
-        self.frame_start_time = self.this_frame_start;
-        self.frame_end_time = std.time.milliTimestamp();
-        self.cur_frame += 1;
-    }
-};
+var app: App = undefined;
+var main_alloc: Gpa = .init;
 
 pub fn init() !void {
-    if (ok) return;
     Log.log(.debug, "Initialization...", .{});
 
-    app = try main_alloc.allocator().create(App);
-    @memset(std.mem.asBytes(app), 0xbc);
+    @memset(std.mem.asBytes(&app), 0xbc);
 
+    try app.thread_pool.init(.{
+        .allocator = App.main_alloc.allocator(),
+        .track_ids = true,
+    });
     try init_memory();
+
+    app.settings_store = try .init();
+
     try init_sdl();
     try init_gl();
     try init_game();
 
     Log.log(.debug, "Started the client", .{});
-    ok = true;
 }
 
 fn init_memory() !void {
-    app.frame_memory = .init(gpa());
-    app.static_memory = .init(gpa());
-    app.settings_store = try .init();
+    const thread_count = app.thread_pool.getIdCount();
+
+    const alloc = App.main_alloc.allocator();
+    app.thread_gpa = try alloc.alloc(Gpa, thread_count);
+    app.frame_memory = try alloc.alloc(Arena, thread_count);
+    app.static_memory = try alloc.alloc(Arena, thread_count);
+
+    for (0..thread_count) |i| {
+        app.thread_gpa[i] = .init;
+        app.frame_memory[i] = .init(app.thread_gpa[i].allocator());
+        app.static_memory[i] = .init(app.thread_gpa[i].allocator());
+    }
 }
 
 fn init_game() !void {
     app.frame_data = .{};
     try app.game.init();
-    app.debug_ui = try .init(app);
+    app.debug_ui = try .init(&app);
     try app.main_renderer.init();
     app.random = .init(69);
 }
@@ -168,12 +152,11 @@ fn gl_debug_callback(
 }
 
 pub fn deinit() void {
-    if (!ok) return;
-
     app.game.deinit();
     app.debug_ui.deinit();
     app.main_renderer.deinit();
     app.settings_store.deinit();
+    app.thread_pool.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -181,12 +164,15 @@ pub fn deinit() void {
     c.SDL_DestroyWindow(app.win);
     c.SDL_Quit();
 
-    app.static_memory.deinit();
-    app.frame_memory.deinit();
-    gpa().destroy(app);
-    _ = main_alloc.deinit();
+    for (app.static_memory) |*s| s.deinit();
+    for (app.frame_memory) |*s| s.deinit();
+    for (app.thread_gpa) |*s| _ = s.deinit();
 
-    ok = false;
+    const alloc = App.main_alloc.allocator();
+    alloc.free(app.static_memory);
+    alloc.free(app.frame_memory);
+    alloc.free(app.thread_gpa);
+    _ = App.main_alloc.deinit();
 }
 
 pub fn game_state() *GameState {
@@ -194,15 +180,21 @@ pub fn game_state() *GameState {
 }
 
 pub fn gpa() std.mem.Allocator {
-    return main_alloc.allocator();
+    const thread = std.Thread.getCurrentId();
+    const id = app.thread_pool.ids.getIndex(thread).?;
+    return app.thread_gpa[@intCast(id)].allocator();
 }
 
 pub fn frame_alloc() std.mem.Allocator {
-    return app.frame_memory.allocator();
+    const thread = std.Thread.getCurrentId();
+    const id = app.thread_pool.ids.getIndex(thread).?;
+    return app.frame_memory[@intCast(id)].allocator();
 }
 
 pub fn static_alloc() std.mem.Allocator {
-    return app.static_memory.allocator();
+    const thread = std.Thread.getCurrentId();
+    const id = app.thread_pool.ids.getIndex(thread).?;
+    return app.static_memory[@intCast(id)].allocator();
 }
 
 pub fn run() !void {
@@ -211,23 +203,24 @@ pub fn run() !void {
         if (!try handle_events()) break;
 
         try app.debug_ui.on_frame_start();
-        try gui().add_to_frame(App, "Debug", app, &struct {
+        try gui().add_to_frame(App, "Debug", &app, &struct {
             fn callback(self: *App) !void {
-                const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-                    frame_alloc(),
-                    \\CPU Memory:
-                    \\    total:         {f}
-                    \\    frame_memory:  {f}
-                    \\    static_memory: {f}
-                ,
-                    .{
-                        util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
-                        util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
-                        util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
-                    },
-                    0,
-                ));
-                c.igText("%s", mem_str);
+                _ = self;
+                // const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
+                //     frame_alloc(),
+                //     \\CPU Memory:
+                //     \\    total:         {f}
+                //     \\    frame_memory:  {f}
+                //     \\    static_memory: {f}
+                // ,
+                //     .{
+                //         util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
+                //         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
+                //         util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
+                //     },
+                //     0,
+                // ));
+                // c.igText("%s", mem_str);
             }
         }.callback, @src());
         try app.settings_store.on_imgui();
@@ -246,7 +239,7 @@ pub fn run() !void {
         try app.game.on_frame_end();
         app.frame_data.on_frame_end();
 
-        _ = app.frame_memory.reset(.{ .retain_capacity = {} });
+        _ = app.frame_memory[0].reset(.{ .retain_capacity = {} });
     }
 }
 
@@ -330,3 +323,46 @@ pub fn rng() std.Random {
 pub fn settings() *Settings {
     return &app.settings_store;
 }
+
+pub fn pool() *std.Thread.Pool {
+    return &app.thread_pool;
+}
+
+const FrameData = struct {
+    cur_frame: u64 = 0,
+    last_fps_measurement_frame: u64 = 0,
+    last_fps_measurement_time: i64 = 0,
+    frame_start_time: i64 = 0,
+    frame_end_time: i64 = 0,
+    this_frame_start: i64 = 0,
+
+    fn on_frame_start(self: *FrameData) void {
+        self.this_frame_start = std.time.milliTimestamp();
+
+        if (self.this_frame_start >= self.last_fps_measurement_time + 1000) {
+            const frame_cnt: f32 = @floatFromInt(self.cur_frame - self.last_fps_measurement_frame);
+            const dt: f32 = @floatFromInt(self.this_frame_start - self.last_fps_measurement_time);
+            const fps = frame_cnt / dt * 1000.0;
+            const str = std.fmt.allocPrintSentinel(
+                frame_alloc(),
+                "FPS: {d:4.2}",
+                .{fps},
+                0,
+            ) catch |err| blk: {
+                Log.log(.warn, "Could not allocate a string for FPS measurement: {}", .{err});
+                break :blk "FPS: ???";
+            };
+            sdl_call(c.SDL_SetWindowTitle(app.win, @ptrCast(str))) catch |err| {
+                Log.log(.warn, "Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
+            };
+            self.last_fps_measurement_time = self.this_frame_start;
+            self.last_fps_measurement_frame = self.cur_frame;
+        }
+    }
+
+    fn on_frame_end(self: *FrameData) void {
+        self.frame_start_time = self.this_frame_start;
+        self.frame_end_time = std.time.milliTimestamp();
+        self.cur_frame += 1;
+    }
+};
