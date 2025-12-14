@@ -21,12 +21,14 @@
 - build: we depend on system install of SDL3.
 - culling: when frustum culling, I just take the maximum of FOV's, but that doesnt actually produce a circle that covers the whole screen (the old circle at corners vs circle at side middles thing)
 - threading: chunk meshe faces are allocated on threadlocal static arenas, what if after unloading the mesh another thread picks it up? Since I only do `clearRetainingCapacity`.
+- renderer: there is a maximum allocation size on the gpu, (around 4gigs or `-Dworld_size=128` on flat world).
 
 # Done
 
 - 14.12.2025:
     1. Using a thread pool for building chunks, speeds up the process massively, plus it is a first experiment with multithreading in the app. I had to change how the allocators work.
     2. Added a command to draw perf flamegraph
+    3. Using the flamegraph, I was able to wastly improve performance on flat and wavy worlds.
 
 - 13.12.2025:
     1. Continued working on occlusion culling. I went with a simple and effective solution: don't draw the chunk if the neighbouring chunks have full-block faces, it cuts the amt of rendered chunks from 900 to 300 on flat world.
