@@ -521,8 +521,11 @@ const Mesh = struct {
                     @as(World.BlockCoords, @splat(v)) * up;
 
                 const block = self.chunk.get(pos);
-                if (block == .air or self.is_solid_relative(pos + front)) {
+                if (block == .air or self.chunk.is_solid(pos + front)) {
                     is_full_layer = false;
+                    continue;
+                }
+                if (self.is_solid_relative(pos + front)) {
                     continue;
                 }
 
