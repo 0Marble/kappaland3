@@ -19,10 +19,11 @@ gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
 
 thread_gpa: []Gpa,
-frame_memory: []Arena,
+frame_memory: Arena,
 static_memory: []Arena,
 
 thread_pool: std.Thread.Pool,
+main_thread_id: std.Thread.Id,
 
 frame_data: FrameData,
 game: GameState,
@@ -47,6 +48,7 @@ pub fn init() !void {
         .allocator = App.main_alloc.allocator(),
         .track_ids = true,
     });
+    app.main_thread_id = std.Thread.getCurrentId();
     try init_memory();
 
     app.settings_store = try .init();
@@ -61,16 +63,15 @@ pub fn init() !void {
 fn init_memory() !void {
     const thread_count = app.thread_pool.getIdCount();
 
-    const alloc = App.main_alloc.allocator();
-    app.thread_gpa = try alloc.alloc(Gpa, thread_count);
-    app.frame_memory = try alloc.alloc(Arena, thread_count);
-    app.static_memory = try alloc.alloc(Arena, thread_count);
+    app.thread_gpa = try App.gpa().alloc(Gpa, thread_count);
+    app.static_memory = try App.gpa().alloc(Arena, thread_count);
 
     for (0..thread_count) |i| {
         app.thread_gpa[i] = .init;
-        app.frame_memory[i] = .init(app.thread_gpa[i].allocator());
         app.static_memory[i] = .init(app.thread_gpa[i].allocator());
     }
+
+    app.frame_memory = .init(App.gpa());
 }
 
 fn init_game() !void {
@@ -165,13 +166,10 @@ pub fn deinit() void {
     c.SDL_Quit();
 
     for (app.static_memory) |*s| s.deinit();
-    for (app.frame_memory) |*s| s.deinit();
     for (app.thread_gpa) |*s| _ = s.deinit();
-
-    const alloc = App.main_alloc.allocator();
-    alloc.free(app.static_memory);
-    alloc.free(app.frame_memory);
-    alloc.free(app.thread_gpa);
+    app.frame_memory.deinit();
+    App.gpa().free(app.static_memory);
+    App.gpa().free(app.thread_gpa);
     _ = App.main_alloc.deinit();
 }
 
@@ -179,16 +177,20 @@ pub fn game_state() *GameState {
     return &app.game;
 }
 
-pub fn gpa() std.mem.Allocator {
+pub fn local_gpa() std.mem.Allocator {
     const thread = std.Thread.getCurrentId();
     const id = app.thread_pool.ids.getIndex(thread).?;
     return app.thread_gpa[@intCast(id)].allocator();
 }
 
+pub fn gpa() std.mem.Allocator {
+    std.debug.assert(std.Thread.getCurrentId() == app.main_thread_id);
+    return main_alloc.allocator();
+}
+
 pub fn frame_alloc() std.mem.Allocator {
-    const thread = std.Thread.getCurrentId();
-    const id = app.thread_pool.ids.getIndex(thread).?;
-    return app.frame_memory[@intCast(id)].allocator();
+    std.debug.assert(std.Thread.getCurrentId() == app.main_thread_id);
+    return app.frame_memory.allocator();
 }
 
 pub fn static_alloc() std.mem.Allocator {
@@ -197,32 +199,42 @@ pub fn static_alloc() std.mem.Allocator {
     return app.static_memory[@intCast(id)].allocator();
 }
 
+fn on_imgui(self: *App) !void {
+    var buf: std.ArrayList(u8) = .empty;
+    const w = buf.writer(App.frame_alloc());
+    try w.print(
+        \\CPU Memory: 
+        \\    main:  {f}
+        \\    frame: {f}
+        \\
+    , .{
+        util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
+        util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
+    });
+
+    for (0..self.thread_gpa.len) |i| {
+        try w.print(
+            \\    thread[{d}]: gpa: {f} static: {f}
+            \\
+        , .{
+            i,
+            util.MemoryUsage.from_bytes(self.thread_gpa[i].total_requested_bytes),
+            util.MemoryUsage.from_bytes(self.static_memory[i].queryCapacity()),
+        });
+    }
+
+    const mem_str = try buf.toOwnedSliceSentinel(App.frame_alloc(), 0);
+
+    c.igText("%s", mem_str.ptr);
+}
+
 pub fn run() !void {
     while (true) {
         app.frame_data.on_frame_start();
         if (!try handle_events()) break;
 
         try app.debug_ui.on_frame_start();
-        try gui().add_to_frame(App, "Debug", &app, &struct {
-            fn callback(self: *App) !void {
-                _ = self;
-                // const mem_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
-                //     frame_alloc(),
-                //     \\CPU Memory:
-                //     \\    total:         {f}
-                //     \\    frame_memory:  {f}
-                //     \\    static_memory: {f}
-                // ,
-                //     .{
-                //         util.MemoryUsage.from_bytes(main_alloc.total_requested_bytes),
-                //         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
-                //         util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
-                //     },
-                //     0,
-                // ));
-                // c.igText("%s", mem_str);
-            }
-        }.callback, @src());
+        try gui().add_to_frame(App, "Debug", &app, on_imgui, @src());
         try app.settings_store.on_imgui();
 
         try app.game.on_frame_start();
@@ -239,7 +251,7 @@ pub fn run() !void {
         try app.game.on_frame_end();
         app.frame_data.on_frame_end();
 
-        _ = app.frame_memory[0].reset(.{ .retain_capacity = {} });
+        _ = app.frame_memory.reset(.{ .retain_capacity = {} });
     }
 }
 
