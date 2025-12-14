@@ -69,6 +69,10 @@ pub fn set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
     };
     chunk.set(block_coords, id);
     try App.renderer().request_draw_chunk(chunk);
+    for (Chunk.neighbours2) |d| {
+        const other = self.active.get(chunk.coords + d) orelse continue;
+        try App.renderer().request_draw_chunk(other);
+    }
 }
 
 pub fn on_frame_start(self: *World) !void {
@@ -153,25 +157,29 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
 }
 
 pub fn get_block(self: *World, coords: WorldCoords) ?BlockId {
-    self.active_rw.lock();
-    defer self.active_rw.unlock();
+    self.active_rw.lockShared();
+    defer self.active_rw.unlockShared();
 
     const chunk = self.active.get(world_to_chunk(coords)) orelse return null;
     return chunk.get(world_to_block(coords));
 }
 
 pub fn process_work(self: *World) !void {
-    self.active_rw.lockShared();
-    defer self.active_rw.unlockShared();
-
     self.work_lock.lock();
     defer self.work_lock.unlock();
+    if (self.finished_work.items.len == 0) return;
 
+    self.active_rw.lock();
+    defer self.active_rw.unlock();
     for (self.finished_work.items) |chunk| {
         try self.active.put(App.static_alloc(), chunk.coords, chunk);
-
         try App.renderer().request_draw_chunk(chunk);
+        for (Chunk.neighbours2) |d| {
+            const other = self.active.get(chunk.coords + d) orelse continue;
+            try App.renderer().request_draw_chunk(other);
+        }
     }
+
     self.finished_work.clearRetainingCapacity();
 }
 
