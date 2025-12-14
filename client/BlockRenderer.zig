@@ -204,6 +204,15 @@ fn process_work(self: *Self) !void {
 
     for (finished_meshes) |mesh| {
         try self.upload_mesh(mesh);
+        const old = try self.meshes.fetchPut(App.static_alloc(), mesh.chunk.coords, mesh);
+        if (old) |kv| {
+            try self.free_meshes.append(App.static_alloc(), kv.value);
+        }
+
+        for (mesh.get_neighbours(self)) |o| {
+            const other = o orelse continue;
+            other.cached_neighbours = @splat(null);
+        }
     }
 
     if (finished_meshes.len != 0) {
@@ -242,9 +251,7 @@ pub fn on_frame_start(self: *Self) !void {
 }
 
 pub fn upload_chunk(self: *Self, chunk: *Chunk) !void {
-    const mesh = if (self.meshes.get(chunk.coords)) |mesh|
-        mesh
-    else if (self.free_meshes.pop()) |mesh| blk: {
+    const mesh = if (self.free_meshes.pop()) |mesh| blk: {
         mesh.chunk = chunk;
         break :blk mesh;
     } else try Mesh.init(chunk);
@@ -431,6 +438,7 @@ const Mesh = struct {
     faces: std.ArrayList(Face),
     handle: GpuAlloc.Handle,
     occlusion: OcclusionMask,
+    cached_neighbours: [6]?*Mesh,
 
     fn init(chunk: *Chunk) !*Mesh {
         const self = try App.static_alloc().create(Mesh);
@@ -441,6 +449,7 @@ const Mesh = struct {
     }
 
     fn build_mesh(self: *Mesh) !void {
+        self.cached_neighbours = @splat(null);
         self.faces.clearRetainingCapacity();
         self.occlusion = .{};
 
@@ -544,13 +553,21 @@ const Mesh = struct {
     }
 
     fn is_occluded(self: *Mesh, renderer: *BlockRenderer) bool {
-        for (Chunk.neighbours, World.BlockFace.list) |d, dir| {
-            const coords = self.chunk.coords + d;
-            const other = renderer.meshes.get(coords) orelse return false;
+        for (self.get_neighbours(renderer), World.BlockFace.list) |o, dir| {
+            const other = o orelse return false;
             const occluded = other.occludes(dir.flip());
             if (!occluded) return false;
         }
         return true;
+    }
+
+    fn get_neighbours(self: *Mesh, renderer: *BlockRenderer) []?*Mesh {
+        for (&self.cached_neighbours, Chunk.neighbours) |*other, d| {
+            if (other.* == null) {
+                other.* = renderer.meshes.get(self.chunk.coords + d);
+            }
+        }
+        return &self.cached_neighbours;
     }
 
     const OcclusionMask = packed struct {
@@ -593,7 +610,6 @@ fn upload_mesh(self: *BlockRenderer, mesh: *Mesh) !void {
         range.size,
         @ptrCast(mesh.faces.items),
     ));
-    try self.meshes.put(App.static_alloc(), mesh.chunk.coords, mesh);
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 }
 
