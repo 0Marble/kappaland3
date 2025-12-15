@@ -7,24 +7,27 @@ pub const Error = error{
     BodyTypeError,
 } || std.mem.Allocator.Error;
 
-events: std.ArrayList(EventData),
+all_events: std.ArrayList(EventData),
+events_with_data: std.ArrayList(Event),
 gpa: std.mem.Allocator,
 callback_data: std.heap.ArenaAllocator,
 
 pub fn init(gpa: std.mem.Allocator) EventManager {
     return .{
-        .events = .empty,
+        .all_events = .empty,
+        .events_with_data = .empty,
         .gpa = gpa,
         .callback_data = .init(gpa),
     };
 }
 
 pub fn deinit(self: *EventManager) void {
-    for (self.events.items) |*evt| {
+    for (self.all_events.items) |*evt| {
         evt.bodies.deinit(self.gpa);
         evt.callbacks.deinit(self.gpa);
     }
-    self.events.deinit(self.gpa);
+    self.events_with_data.deinit(self.gpa);
+    self.all_events.deinit(self.gpa);
     self.callback_data.deinit();
 }
 
@@ -56,8 +59,8 @@ pub fn register_event(self: *EventManager, comptime Body: type) Error!Event {
         }
     };
 
-    const idx = self.events.items.len;
-    try self.events.append(self.gpa, EventData{
+    const idx = self.all_events.items.len;
+    try self.all_events.append(self.gpa, EventData{
         .body_type = type_id(Body),
         .eid = .from_int(idx),
         .callbacks = .empty,
@@ -72,20 +75,25 @@ pub fn register_event(self: *EventManager, comptime Body: type) Error!Event {
 pub fn emit(self: *EventManager, evt: Event, value: anytype) Error!void {
     if (evt == .invalid) return Error.InvalidEvent;
 
-    const event_data = &self.events.items[evt.to_int(usize)];
+    const event_data = &self.all_events.items[evt.to_int(usize)];
     const Value = @TypeOf(value);
     if (event_data.body_type != type_id(Value)) return Error.BodyTypeError;
 
+    if (event_data.bodies.items.len == 0) {
+        try self.events_with_data.append(self.gpa, evt);
+    }
     const buf = try event_data.append(event_data, self.gpa);
     const raw_val = std.mem.asBytes(&value);
     @memcpy(buf, raw_val);
 }
 
 pub fn process(self: *EventManager) void {
-    for (self.events.items) |*evt| {
+    for (self.events_with_data.items) |eid| {
+        const evt = &self.all_events.items[eid.to_int(usize)];
         evt.run(evt);
         evt.bodies.clearRetainingCapacity();
     }
+    self.events_with_data.clearRetainingCapacity();
 }
 
 // func takes parameters of type .{Ctx, Body} and returns void
@@ -100,7 +108,7 @@ pub fn add_listener(self: *EventManager, evt: Event, func: anytype, ctx: anytype
     }
 
     if (evt == .invalid) return Error.InvalidEvent;
-    const event_data = &self.events.items[evt.to_int(usize)];
+    const event_data = &self.all_events.items[evt.to_int(usize)];
     if (type_id(fn_info.params[1].type.?) != event_data.body_type) return Error.CallbackTypeError;
 
     if (@typeInfo(Ctx) == .pointer) {
