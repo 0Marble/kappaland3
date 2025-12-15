@@ -96,51 +96,41 @@ pub fn process(self: *EventManager) void {
     self.events_with_data.clearRetainingCapacity();
 }
 
-// func takes parameters of type .{Ctx, Body} and returns void
-pub fn add_listener(self: *EventManager, evt: Event, func: anytype, ctx: anytype) Error!void {
-    const Ctx = @TypeOf(ctx);
+// func takes parameters of type Args ++ .{ Body} and returns void
+pub fn add_listener(
+    self: *EventManager,
+    evt: Event,
+    comptime func: anytype,
+    args: anytype,
+) Error!EventListenerHandle {
+    const Args = @TypeOf(args);
     const Fn = @TypeOf(func);
     const fn_info = @typeInfo(Fn).@"fn";
-    comptime {
-        std.debug.assert(fn_info.return_type == void);
-        std.debug.assert(fn_info.params[0].type == Ctx);
-        std.debug.assert(fn_info.params.len == 2);
-    }
 
     if (evt == .invalid) return Error.InvalidEvent;
     const event_data = &self.all_events.items[evt.to_int(usize)];
     if (type_id(fn_info.params[1].type.?) != event_data.body_type) return Error.CallbackTypeError;
 
-    if (@typeInfo(Ctx) == .pointer) {
-        const callback = Callback{
-            .data = @ptrCast(ctx),
-            .fptr = @ptrCast(&func),
-        };
+    const Closure = struct {
+        args: Args,
 
-        try event_data.callbacks.append(self.gpa, callback);
-    } else {
-        const Closure = struct {
-            fptr: *const Fn,
-            ctx: Ctx,
+        fn callback(closure: *@This(), body: fn_info.params[1].type.?) void {
+            @call(.auto, func, closure.args ++ .{body});
+        }
+    };
 
-            fn callback(closure: *@This(), body: fn_info.params[1].type.?) void {
-                closure.fptr(closure.ctx, body);
-            }
-        };
+    const closure = try self.callback_data.allocator().create(Closure);
+    closure.* = Closure{
+        .args = args,
+    };
 
-        const closure = try self.callback_data.allocator().create(Closure);
-        closure.* = Closure{
-            .ctx = ctx,
-            .fptr = &func,
-        };
+    const callback = Callback{
+        .data = @ptrCast(closure),
+        .fptr = @ptrCast(&Closure.callback),
+    };
 
-        const callback = Callback{
-            .data = @ptrCast(closure),
-            .fptr = @ptrCast(&Closure.callback),
-        };
-
-        try event_data.callbacks.append(self.gpa, callback);
-    }
+    try event_data.callbacks.append(self.gpa, callback);
+    return .from_int(event_data.callbacks.items.len - 1);
 }
 
 pub const Event = enum(usize) {
@@ -154,6 +144,20 @@ pub const Event = enum(usize) {
     }
 
     fn from_int(int: anytype) Event {
+        return @enumFromInt(int + OFFSET);
+    }
+};
+
+pub const EventListenerHandle = enum(usize) {
+    const OFFSET = 1;
+    invalid = 0,
+    _,
+
+    fn to_int(self: @This(), comptime Int: type) Int {
+        return @intFromEnum(self) - OFFSET;
+    }
+
+    fn from_int(int: anytype) @This() {
         return @enumFromInt(int + OFFSET);
     }
 };
@@ -211,9 +215,9 @@ test {
 
     var handler = Handler{};
 
-    try events.add_listener(e1, Handler.on_e1, &handler);
-    try events.add_listener(e2, Handler.on_e2, &handler);
-    try std.testing.expectError(Error.CallbackTypeError, events.add_listener(e1, Handler.on_e3, &handler));
+    _ = try events.add_listener(e1, Handler.on_e1, .{&handler});
+    _ = try events.add_listener(e2, Handler.on_e2, .{&handler});
+    try std.testing.expectError(Error.CallbackTypeError, events.add_listener(e1, Handler.on_e3, .{&handler}));
 
     events.process();
     try std.testing.expectEqual(69, handler.got_u32);
@@ -233,26 +237,24 @@ test {
     try std.testing.expectEqualStrings("hello world", handler.got_str);
 }
 
-test "Non-pointer context" {
+test "Multi arg" {
     var events = EventManager.init(std.testing.allocator);
     defer events.deinit();
     const evt = try events.register_event(u32);
 
     const Handler = struct {
-        var result: u32 = 0;
-
-        data: u32 = 69,
-        fn callback(self: @This(), x: u32) void {
-            result += x * self.data;
+        fn callback(x: *u32, y: u32, z: u32) void {
+            x.* += y * z;
         }
     };
-    const handler = Handler{};
-    try events.add_listener(evt, Handler.callback, handler);
+
+    var res: u32 = 0;
+    _ = try events.add_listener(evt, Handler.callback, .{ &res, 69 });
 
     try events.emit(evt, @as(u32, 1));
     try events.emit(evt, @as(u32, 100));
     try events.emit(evt, @as(u32, 10000));
 
     events.process();
-    try std.testing.expectEqual(696969, Handler.result);
+    try std.testing.expectEqual(696969, res);
 }
