@@ -1,6 +1,5 @@
 const std = @import("std");
 const c = @import("c.zig").c;
-const Log = @import("libmine").Log;
 const App = @import("App.zig");
 const Options = @import("ClientOptions");
 
@@ -20,15 +19,15 @@ frames: FrameContentsMap,
 const DebugUi = @This();
 pub fn init(app: *App) !DebugUi {
     _ = c.igCreateContext(null) orelse {
-        Log.log(.err, "Could not create imgui context", .{});
+        std.log.err( "Could not create imgui context", .{});
         return error.ImguiError;
     };
     if (!c.ig_ImplSDL3_InitForOpenGL(app.win, app.gl_ctx)) {
-        Log.log(.err, "Could not init imgui for SDL3+OpenGL", .{});
+        std.log.err( "Could not init imgui for SDL3+OpenGL", .{});
         return error.ImguiError;
     }
     if (!c.ig_ImplOpenGL3_Init("#version 460 core")) {
-        Log.log(.err, "Could not init imgui for OpenGL", .{});
+        std.log.err( "Could not init imgui for OpenGL", .{});
         return error.ImguiError;
     }
 

@@ -1,5 +1,4 @@
 const c = @import("c.zig").c;
-const Log = @import("libmine").Log;
 const gl = @import("gl");
 const std = @import("std");
 const Options = @import("ClientOptions");
@@ -106,9 +105,9 @@ pub fn gl_call(res: anytype) !@TypeOf(res) {
         const err = gl.GetError();
         if (err != gl.NO_ERROR) {
             if (gl_err_to_str(err)) |msg| {
-                Log.log(.err, "GL error: {s}", .{msg});
+                std.log.err( "GL error: {s}", .{msg});
             } else {
-                Log.log(.err, "GL error: {X}", .{err});
+                std.log.err( "GL error: {X}", .{err});
             }
             ok = false;
         } else break;
@@ -131,13 +130,13 @@ fn sdl_res_type(comptime T: type) type {
 pub fn sdl_call(res: anytype) sdl_res_type(@TypeOf(res)) {
     switch (@typeInfo(@TypeOf(res))) {
         .bool => if (!res) {
-            Log.log(.err, "SDL error: {s}", .{c.SDL_GetError()});
+            std.log.err( "SDL error: {s}", .{c.SDL_GetError()});
             return SdlError.SdlError;
         } else return,
         .optional => if (res) |x| {
             return x;
         } else {
-            Log.log(.err, "SDL error: {s}", .{c.SDL_GetError()});
+            std.log.err( "SDL error: {s}", .{c.SDL_GetError()});
             return SdlError.SdlError;
         },
         else => return res,

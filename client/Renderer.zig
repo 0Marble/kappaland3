@@ -6,7 +6,6 @@ const Chunk = @import("Chunk.zig");
 const World = @import("World.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
-const Log = @import("libmine").Log;
 const Mesh = @import("Mesh.zig");
 const Shader = @import("Shader.zig");
 const zm = @import("zm");
@@ -252,7 +251,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     };
     try gl_call(gl.DrawBuffers(@intCast(g_buffer_draw_buffers.len), @ptrCast(g_buffer_draw_buffers)));
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'g_buffer' incomplete!", .{self});
+        std.log.warn("{*}: framebuffer 'g_buffer' incomplete!", .{self});
     }
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
@@ -274,7 +273,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     };
     try gl_call(gl.DrawBuffers(@intCast(ssao_draw_buffers.len), @ptrCast(ssao_draw_buffers)));
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'ssao_fbo' incomplete!", .{self});
+        std.log.warn("{*}: framebuffer 'ssao_fbo' incomplete!", .{self});
     }
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_blur_fbo));
@@ -296,7 +295,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     };
     try gl_call(gl.DrawBuffers(@intCast(ssao_blur_draw_buffers.len), @ptrCast(ssao_blur_draw_buffers)));
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'ssao_blur_fbo' incomplete!", .{self});
+        std.log.warn("{*}: framebuffer 'ssao_blur_fbo' incomplete!", .{self});
     }
 
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.render_fbo));
@@ -316,7 +315,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     ));
 
     if (try gl_call(gl.CheckFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)) {
-        Log.log(.warn, "{*}: framebuffer 'render_fbo' incomplete!", .{self});
+        std.log.warn("{*}: framebuffer 'render_fbo' incomplete!", .{self});
     }
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, 0));

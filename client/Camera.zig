@@ -1,6 +1,5 @@
 const std = @import("std");
 const zm = @import("zm");
-const Log = @import("libmine").Log;
 const App = @import("App.zig");
 const Controller = @import("controller.zig").Controller(@This(), Controls);
 const Scancode = @import("Keys.zig").Scancode;
@@ -73,11 +72,11 @@ pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
 
     if (btn.button == .left) {
         App.game_state().world.set_block(raycast.hit_coords, .air) catch |err| {
-            Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
+            std.log.warn( "{*}: Could not place block: {}", .{ self, err });
         };
     } else if (btn.button == .right) {
         App.game_state().world.set_block(raycast.prev_coords, .stone) catch |err| {
-            Log.log(.warn, "{*}: Could not place block: {}", .{ self, err });
+            std.log.warn( "{*}: Could not place block: {}", .{ self, err });
         };
     }
 }

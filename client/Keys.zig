@@ -1,5 +1,4 @@
 const App = @import("App.zig");
-const Log = @import("libmine").Log;
 const std = @import("std");
 const c = @import("c.zig").c;
 const Ecs = @import("libmine").Ecs;
@@ -15,7 +14,7 @@ pub const MouseButton = enum {
             2 => return .middle,
             3 => return .right,
             else => {
-                Log.log(.warn, "MouseButton value {d} unsupported...", .{button});
+                std.log.warn("MouseButton value {d} unsupported...", .{button});
                 return .left;
             },
         }

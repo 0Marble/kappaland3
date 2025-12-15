@@ -1,7 +1,6 @@
 const gl = @import("gl");
 const std = @import("std");
 const App = @import("App.zig");
-const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
 const gl_call = @import("util.zig").gl_call;
 const zm = @import("zm");
@@ -27,8 +26,7 @@ pub fn observe_settings(
                 f32 => shader.set_float(name, val),
                 else => @compileError("Todo: support type " ++ @typeName(T)),
             } catch |err| {
-                Log.log(
-                    .warn,
+                std.log.warn(
                     "{*}: could not set uniform '{s}': {}",
                     .{ shader, name, err },
                 );
@@ -48,9 +46,9 @@ pub const Source = struct {
     pub fn ensure_compiled(self: *Source) !void {
         if (self.shader_id != 0) return;
         errdefer {
-            Log.log(.err, "Failed to compile shader:", .{});
+            std.log.err("Failed to compile shader:", .{});
             for (self.sources) |s| {
-                Log.log(.err, "{s}", .{s});
+                std.log.err("{s}", .{s});
             }
         }
 
@@ -79,12 +77,12 @@ pub const Source = struct {
                     @ptrCast(buf),
                 ));
             }
-            Log.log(.err, "Could not compile shader {s}:\n{s}", .{ self.name, buf });
+            std.log.err("Could not compile shader {s}:\n{s}", .{ self.name, buf });
             return error.CouldNotCompileShader;
         }
 
         self.shader_id = shader;
-        Log.log(.debug, "Compiled shader '{s}', kind: {X}, handle: {d}", .{ self.name, self.kind, self.shader_id });
+        std.log.debug("Compiled shader '{s}', kind: {X}, handle: {d}", .{ self.name, self.kind, self.shader_id });
     }
 
     pub fn deinit(self: *Source) void {
@@ -118,7 +116,7 @@ pub fn init(sources: []Source) !Shader {
                 &read,
                 @ptrCast(buf),
             ));
-            Log.log(.err, "Could not link shader:\n{s}", .{buf});
+            std.log.err("Could not link shader:\n{s}", .{buf});
             return error.CouldNotCompileShader;
         }
     }

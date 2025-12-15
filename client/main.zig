@@ -4,7 +4,6 @@ pub const utils = @import("util.zig");
 const gl = @import("gl");
 const c = @import("c.zig").c;
 const libmine = @import("libmine");
-const Log = libmine.Log;
 
 const Options = @import("ClientOptions");
 

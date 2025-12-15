@@ -1,7 +1,6 @@
 const std = @import("std");
 const gl = @import("gl");
 const gl_call = @import("util.zig").gl_call;
-const Log = @import("libmine").Log;
 
 vao: gl.uint,
 vbo: gl.uint,
@@ -31,7 +30,7 @@ pub fn init(
         @ptrCast(verts),
         usage,
     ));
-    Log.log(.debug, "Allocated ARRAY_BUFFER: size: {d}", .{verts.len * @sizeOf(Vert)});
+    std.log.debug( "Allocated ARRAY_BUFFER: size: {d}", .{verts.len * @sizeOf(Vert)});
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.ibo));
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
@@ -39,7 +38,7 @@ pub fn init(
         @ptrCast(inds),
         usage,
     ));
-    Log.log(.debug, "Allocated ELEMENT_ARRAY_BUFFER: size: {d}", .{inds.len * @sizeOf(Idx)});
+    std.log.debug( "Allocated ELEMENT_ARRAY_BUFFER: size: {d}", .{inds.len * @sizeOf(Idx)});
 
     try Vert.setup_attribs();
 

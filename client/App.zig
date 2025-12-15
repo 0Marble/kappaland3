@@ -3,7 +3,6 @@ const std = @import("std");
 pub const util = @import("util.zig");
 const sdl_call = util.sdl_call;
 const gl_call = util.gl_call;
-const Log = @import("libmine").Log;
 const gl = @import("gl");
 pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
@@ -40,7 +39,7 @@ var app: App = undefined;
 var main_alloc: Gpa = .init;
 
 pub fn init() !void {
-    Log.log(.debug, "Initialization...", .{});
+    std.log.debug("Initialization...", .{});
 
     @memset(std.mem.asBytes(&app), 0xbc);
 
@@ -57,7 +56,7 @@ pub fn init() !void {
     try init_gl();
     try init_game();
 
-    Log.log(.debug, "Started the client", .{});
+    std.log.debug("Started the client", .{});
 }
 
 fn init_memory() !void {
@@ -83,9 +82,9 @@ fn init_game() !void {
 }
 
 fn init_sdl() !void {
-    Log.log(.debug, "Initialization: SDL...", .{});
+    std.log.debug("Initialization: SDL...", .{});
     try sdl_call(c.SDL_Init(c.SDL_INIT_VIDEO));
-    Log.log(.debug, "Initialized SDL", .{});
+    std.log.debug("Initialized SDL", .{});
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, gl.info.version_major));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, gl.info.version_minor));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
@@ -94,7 +93,7 @@ fn init_sdl() !void {
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
             if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
-    Log.log(.debug, "Set OpenGL attributes", .{});
+    std.log.debug("Set OpenGL attributes", .{});
 
     app.win = try sdl_call(c.SDL_CreateWindow(
         "Client",
@@ -102,12 +101,12 @@ fn init_sdl() !void {
         480,
         c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_OPENGL,
     ));
-    Log.log(.debug, "Created SDL Window", .{});
-    Log.log(.debug, "Initialized SDL", .{});
+    std.log.debug("Created SDL Window", .{});
+    std.log.debug("Initialized SDL", .{});
 }
 
 fn init_gl() !void {
-    Log.log(.debug, "Initialization: OpenGL...", .{});
+    std.log.debug("Initialization: OpenGL...", .{});
     app.gl_ctx = try sdl_call(c.SDL_GL_CreateContext(app.win));
     try sdl_call(c.SDL_GL_MakeCurrent(app.win, app.gl_ctx));
     try sdl_call(app.gl_procs.init(&c.SDL_GL_GetProcAddress));
@@ -122,16 +121,16 @@ fn init_gl() !void {
         var flags: u32 = 0;
         try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
         if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {
-            Log.log(.warn, "Could not enable OpenGL debug output!", .{});
+            std.log.warn("Could not enable OpenGL debug output!", .{});
         } else {
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
             try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
-            Log.log(.debug, "Enabled OpenGL debug output", .{});
+            std.log.debug("Enabled OpenGL debug output", .{});
         }
     }
 
-    Log.log(.debug, "Initialized OpenGL", .{});
+    std.log.debug("Initialized OpenGL", .{});
 }
 
 fn gl_debug_callback(
@@ -147,9 +146,9 @@ fn gl_debug_callback(
     msg_slice.ptr = msg;
     msg_slice.len = @intCast(size);
 
-    Log.log(.warn, "--------", .{});
-    Log.log(.warn, "{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
-    Log.log(.warn, "--------", .{});
+    std.log.warn("--------", .{});
+    std.log.warn("{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
+    std.log.warn("--------", .{});
 }
 
 pub fn deinit() void {
@@ -245,7 +244,7 @@ pub fn run() !void {
 
         try renderer().draw();
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
-            Log.log(.warn, "Could not swap window: {s}", .{c.SDL_GetError()});
+            std.log.warn("Could not swap window: {s}", .{c.SDL_GetError()});
         }
 
         try app.game.on_frame_end();
@@ -361,11 +360,11 @@ const FrameData = struct {
                 .{fps},
                 0,
             ) catch |err| blk: {
-                Log.log(.warn, "Could not allocate a string for FPS measurement: {}", .{err});
+                std.log.warn("Could not allocate a string for FPS measurement: {}", .{err});
                 break :blk "FPS: ???";
             };
             sdl_call(c.SDL_SetWindowTitle(app.win, @ptrCast(str))) catch |err| {
-                Log.log(.warn, "Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
+                std.log.warn("Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
             };
             self.last_fps_measurement_time = self.this_frame_start;
             self.last_fps_measurement_frame = self.cur_frame;

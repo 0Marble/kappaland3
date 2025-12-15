@@ -3,7 +3,6 @@ const App = @import("App.zig");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
-const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
 
 map: Map,
@@ -21,7 +20,7 @@ pub fn init() !Settings {
     };
     try self.load_template();
     self.load() catch |err| {
-        Log.log(.warn, "Could not load settings file: {}", .{err});
+        std.log.warn("Could not load settings file: {}", .{err});
     };
 
     return self;
@@ -39,7 +38,7 @@ fn load_template(self: *Settings) !void {
 
 pub fn deinit(self: *Settings) void {
     self.save() catch |err| {
-        Log.log(.warn, "Couldn't save settings: {}", .{err});
+        std.log.warn("Couldn't save settings: {}", .{err});
     };
 }
 
@@ -50,7 +49,7 @@ fn set_value(self: *Settings, name: [:0]const u8, val: Node) error{OutOfMemory}!
             inline else => |tag| {
                 const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
                 App.ecs().emit_event(Value, evt, @field(val, @tagName(tag)).value) catch |err| {
-                    Log.log(.warn, "Settings.set_value: Couldn't emit event: {}", .{err});
+                    std.log.warn("Settings.set_value: Couldn't emit event: {}", .{err});
                 };
             },
         }
@@ -88,7 +87,7 @@ pub fn load(self: *Settings) !void {
                 const ast_node = ZonIndex.root.getAstNode(this.zoir);
                 const tok = this.ast.nodeMainToken(ast_node);
                 const loc = this.ast.tokenLocation(0, tok);
-                Log.log(.warn, "Settings file invalid, expected an array_literal: {s}:{d}:{d}", .{
+                std.log.warn("Settings file invalid, expected an array_literal: {s}:{d}:{d}", .{
                     Options.settings_file,
                     loc.line,
                     loc.column,
@@ -135,20 +134,20 @@ pub fn load(self: *Settings) !void {
 
 fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) !void {
     if (zoir.hasCompileErrors()) {
-        Log.log(.warn, "Couldn't parse settings file: invalid ZON:", .{});
+        std.log.warn("Couldn't parse settings file: invalid ZON:", .{});
         for (zoir.compile_errors) |err| {
-            Log.log(.warn, "{s}", .{err.msg.get(zoir)});
+            std.log.warn("{s}", .{err.msg.get(zoir)});
             for (err.getNotes(zoir)) |note| {
                 if (note.token.unwrap()) |tok| {
                     const loc = ast.tokenLocation(note.node_or_offset, tok);
-                    Log.log(.warn, "{s}:{d}:{d}: {s}", .{
+                    std.log.warn("{s}:{d}:{d}: {s}", .{
                         Options.settings_file,
                         loc.line,
                         loc.column,
                         note.msg.get(zoir),
                     });
                 } else {
-                    Log.log(.warn, "{s}: {s}", .{
+                    std.log.warn("{s}: {s}", .{
                         Options.settings_file,
                         note.msg.get(zoir),
                     });
@@ -206,7 +205,7 @@ pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const
             inline else => |tag| {
                 const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
                 if (Value != Body) {
-                    Log.log(.warn, "Type mismatch for setting '{s}', expected {s} got {s}", .{
+                    std.log.warn("Type mismatch for setting '{s}', expected {s} got {s}", .{
                         name,
                         @typeName(Value),
                         @typeName(Body),
@@ -217,7 +216,7 @@ pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const
         }
         break :blk n;
     } else blk: {
-        Log.log(.warn, "Listening for non-existant settings '{s}'", .{name});
+        std.log.warn("Listening for non-existant settings '{s}'", .{name});
         break :blk null;
     };
 
@@ -243,7 +242,7 @@ pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const
 
 pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
     const node = self.map.get(name) orelse {
-        Log.log(.warn, "Attempted to access non-existant setting: {s}", .{name});
+        std.log.warn("Attempted to access non-existant setting: {s}", .{name});
         return null;
     };
     switch (std.meta.activeTag(node)) {
@@ -252,7 +251,7 @@ pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
             const Body = @FieldType(Node, @tagName(tag));
             const Value = @FieldType(Body, "value");
             if (Value != T) {
-                Log.log(.warn, "Setting '{s}' type mismatch, expected {s} got {s}", .{
+                std.log.warn("Setting '{s}' type mismatch, expected {s} got {s}", .{
                     name,
                     @typeName(Value),
                     @typeName(T),
@@ -277,7 +276,7 @@ fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
             const Body = @FieldType(Node, @tagName(tag));
             const Value = @FieldType(Body, "value");
             App.ecs().emit_event(Value, evt, @field(@field(node, @tagName(tag)), "value")) catch |err| {
-                Log.log(.warn, "Settings.emit_on_changed: {s}: Ecs.emit_event: {}", .{ name, err });
+                std.log.warn("Settings.emit_on_changed: {s}: Ecs.emit_event: {}", .{ name, err });
             };
         },
     }
@@ -287,12 +286,12 @@ fn on_imgui_impl(self: *Settings) !void {
     _ = c.igCheckbox("Save on exit", &self.save_on_exit);
     if (c.igButton("Save", .{})) {
         self.save() catch |err| {
-            Log.log(.warn, "Couldn't save settings: {}", .{err});
+            std.log.warn("Couldn't save settings: {}", .{err});
         };
     }
     if (c.igButton("Restore", .{})) {
         self.load_template() catch |err| {
-            Log.log(.warn, "Couldn't load settings template: {}", .{err});
+            std.log.warn("Couldn't load settings template: {}", .{err});
         };
     }
 

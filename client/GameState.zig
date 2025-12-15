@@ -1,7 +1,6 @@
 const App = @import("App.zig");
 const libmine = @import("libmine");
 const Ecs = libmine.Ecs;
-const Log = libmine.Log;
 const std = @import("std");
 const c = @import("c.zig").c;
 const Camera = @import("Camera.zig");

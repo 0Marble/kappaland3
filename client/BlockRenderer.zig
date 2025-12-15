@@ -3,7 +3,6 @@ const App = @import("App.zig");
 const World = @import("World.zig");
 const Chunk = @import("Chunk.zig");
 const Options = @import("ClientOptions");
-const Log = @import("libmine").Log;
 const gl = @import("gl");
 const zm = @import("zm");
 const GpuAlloc = @import("GpuAlloc.zig");
@@ -43,7 +42,7 @@ work_lock: std.Thread.Mutex,
 work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
 
 pub fn init(self: *Self) !void {
-    Log.log(.debug, "{*} Initializing...", .{self});
+    std.log.debug("{*} Initializing...", .{self});
 
     self.drawn_chunks_cnt = 0;
     self.triangle_cnt = 0;
@@ -68,7 +67,7 @@ pub fn init(self: *Self) !void {
         },
     };
     self.block_pass = try .init(&sources);
-    Log.log(.debug, "{*} Initialized block pass", .{self});
+    std.log.debug("{*} Initialized block pass", .{self});
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
@@ -80,11 +79,11 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.BindVertexArray(self.block_vao));
 
     try self.init_block_model();
-    Log.log(.debug, "{*} Initialized block model", .{self});
+    std.log.debug("{*} Initialized block model", .{self});
     try self.init_face_attribs();
-    Log.log(.debug, "{*} Initialized face data buffers", .{self});
+    std.log.debug("{*} Initialized face data buffers", .{self});
     try self.init_chunk_data();
-    Log.log(.debug, "{*} Initialized chunk data buffers", .{self});
+    std.log.debug("{*} Initialized chunk data buffers", .{self});
 
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
@@ -95,7 +94,7 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao");
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor");
 
-    Log.log(.debug, "{*} Finished initializing...", .{self});
+    std.log.debug("{*} Finished initializing...", .{self});
 }
 
 fn init_block_model(self: *Self) !void {
@@ -261,8 +260,7 @@ pub fn request_draw_chunk(self: *Self, chunk: *Chunk) !void {
 
 fn build_mesh_task(self: *Self, mesh: *Mesh) void {
     mesh.build_mesh() catch |err| {
-        Log.log(
-            .warn,
+        std.log.warn(
             "{*}: could not build chunk {} mesh: {}",
             .{ self, mesh.chunk.coords, err },
         );
@@ -273,8 +271,7 @@ fn build_mesh_task(self: *Self, mesh: *Mesh) void {
     defer self.work_lock.unlock();
 
     self.finished_meshes.append(self.work_alloc.allocator(), mesh) catch |err| {
-        Log.log(
-            .warn,
+        std.log.warn(
             "{*}: could not append chunk {} to finished_meshes: {}",
             .{ self, mesh.chunk.coords, err },
         );

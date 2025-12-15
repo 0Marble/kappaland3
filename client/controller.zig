@@ -1,6 +1,5 @@
 const Ecs = @import("libmine").Ecs;
 const App = @import("App.zig");
-const Log = @import("libmine").Log;
 const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 const std = @import("std");
@@ -75,7 +74,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         }
 
         pub fn bind_keydown(self: *Self, scancode: Scancode, cmd: Command) !void {
-            Log.log(.debug, "{*}: bind scancode {} to command {}", .{ self, scancode, cmd });
+            std.log.debug( "{*}: bind scancode {} to command {}", .{ self, scancode, cmd });
             const entry = try self.keydown_binds.getOrPutValue(App.gpa(), scancode, .empty);
             try entry.value_ptr.append(App.gpa(), cmd);
 
@@ -88,7 +87,7 @@ pub fn Controller(comptime Ctx: type, comptime Command: type) type {
         pub fn unbind_keydown(self: *Self, scancode: Scancode, cmd: Command) void {
             const entry = try self.keydown_binds.getOrPutValue(App.gpa(), scancode, .empty);
             const idx = std.mem.indexOfScalar(Command, entry.value_ptr.items, cmd) orelse return;
-            Log.log(.debug, "{*}: unbind scancode {} from command {}", .{ self, scancode, cmd });
+            std.log.debug( "{*}: unbind scancode {} from command {}", .{ self, scancode, cmd });
 
             _ = entry.value_ptr.swapRemove(idx);
             if (entry.value_ptr.items.len == 0) {

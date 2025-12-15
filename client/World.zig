@@ -1,4 +1,3 @@
-const Log = @import("libmine").Log;
 const Ecs = @import("libmine").Ecs;
 const std = @import("std");
 const zm = @import("zm");
@@ -38,7 +37,7 @@ pub fn deinit(self: *World) void {
 }
 
 pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
-    Log.log(.debug, "{*}: request_load_chunk({})", .{ self, coords });
+    std.log.debug( "{*}: request_load_chunk({})", .{ self, coords });
     if (self.active.contains(coords)) return;
 
     const chunk = if (self.freelist.pop()) |chunk| blk: {
@@ -56,7 +55,7 @@ fn load_chunk_task(self: *World, chunk: *Chunk) void {
     defer self.work_lock.unlock();
 
     self.finished_work.append(self.work_alloc.allocator(), chunk) catch |err| {
-        Log.log(.warn, "{*}: could not load chunk {}: {}", .{ self, chunk.coords, err });
+        std.log.warn( "{*}: could not load chunk {}: {}", .{ self, chunk.coords, err });
     };
 }
 
@@ -64,7 +63,7 @@ pub fn set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
     const chunk_coords = world_to_chunk(coords);
     const block_coords = world_to_block(coords);
     const chunk = self.active.get(chunk_coords) orelse {
-        Log.log(.warn, "{*}: set_block in inactive chunk {}", .{ self, chunk_coords });
+        std.log.warn( "{*}: set_block in inactive chunk {}", .{ self, chunk_coords });
         return;
     };
     chunk.set(block_coords, id);
@@ -123,8 +122,8 @@ pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
     var iter_cnt: usize = 0;
     while (cur_t <= max_t) : (iter_cnt += 1) {
         if (iter_cnt >= 100) {
-            Log.log(.warn, "The raycasting bug: {}", .{ray});
-            Log.log(.warn, "Goodbye!", .{});
+            std.log.warn( "The raycasting bug: {}", .{ray});
+            std.log.warn( "Goodbye!", .{});
             std.debug.assert(false);
         }
 

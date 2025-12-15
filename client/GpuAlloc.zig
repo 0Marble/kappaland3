@@ -2,7 +2,6 @@ const gl = @import("gl");
 const gl_call = @import("util.zig").gl_call;
 const MemoryUsage = @import("util.zig").MemoryUsage;
 
-const Log = @import("libmine").Log;
 const std = @import("std");
 const Options = @import("ClientOptions");
 
@@ -89,7 +88,7 @@ pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle
     if (size == 0) return .empty;
 
     if (Options.gpu_alloc_log) {
-        Log.log(.debug, "{*}: alloc({}, {})", .{ self, size, alignment });
+        std.log.debug("{*}: alloc({}, {})", .{ self, size, alignment });
     }
 
     for (self.freelist.items, 0..) |old, i| {
@@ -98,7 +97,7 @@ pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle
             const handle = Handle.from_idx(old);
 
             if (Options.gpu_alloc_log) {
-                Log.log(.debug, "{*}: alloc({}, {}): reuse {}", .{ self, size, alignment, handle });
+                std.log.debug("{*}: alloc({}, {}): reuse {}", .{ self, size, alignment, handle });
             }
             return handle;
         }
@@ -115,7 +114,7 @@ pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle
 
         const handle = Handle.from_idx(last_idx);
         if (Options.gpu_alloc_log) {
-            Log.log(.debug, "{*}: alloc({}, {}): allocate {}@{}-{}", .{
+            std.log.debug("{*}: alloc({}, {}): allocate {}@{}-{}", .{
                 self,
                 size,
                 alignment,
@@ -141,7 +140,7 @@ pub fn realloc(
     if (handle == .empty or handle == .invalid) return self.alloc(new_size, alignment);
 
     if (Options.gpu_alloc_log) {
-        Log.log(.debug, "{*}: realloc({}, {})", .{ self, handle, new_size });
+        std.log.debug("{*}: realloc({}, {})", .{ self, handle, new_size });
     }
 
     const idx = handle.to_idx();
@@ -150,7 +149,7 @@ pub fn realloc(
     if (entry.start + entry.offset + new_size < end) {
         entry.size = new_size;
         if (Options.gpu_alloc_log) {
-            Log.log(.debug, "{*}: realloc({}, {}): expanded", .{ self, handle, new_size });
+            std.log.debug("{*}: realloc({}, {}): expanded", .{ self, handle, new_size });
         }
         return handle;
     }
@@ -170,27 +169,27 @@ pub fn realloc(
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 
     if (Options.gpu_alloc_log) {
-        Log.log(.debug, "{*}: realloc({}, {}): allocated new {}", .{ self, handle, new_size, new });
+        std.log.debug("{*}: realloc({}, {}): allocated new {}", .{ self, handle, new_size, new });
     }
     return new;
 }
 
 pub fn free(self: *GpuAlloc, handle: Handle) void {
     if (handle == .invalid) {
-        Log.log(.warn, "{*}: Freeing an invalid handle!", .{self});
+        std.log.warn("{*}: Freeing an invalid handle!", .{self});
     }
     if (handle == .empty) return;
 
     const idx = handle.to_idx();
     const entry = &self.allocations.items[idx];
     if (entry.size == 0) {
-        Log.log(.warn, "{*}: double free {}", .{ self, handle });
+        std.log.warn("{*}: double free {}", .{ self, handle });
         return;
     }
 
     entry.size = 0;
     self.freelist.append(self.gpa, idx) catch |err| {
-        Log.log(.warn, "{*}: couldnt put a freed entry into a freelist: {}", .{ self, err });
+        std.log.warn("{*}: couldnt put a freed entry into a freelist: {}", .{ self, err });
     };
 }
 
@@ -247,5 +246,5 @@ fn full_realloc(self: *GpuAlloc) !void {
     }
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     self.size = new_size;
-    Log.log(.debug, "{*}: Allocated {f} on the gpu", .{ self, MemoryUsage.from_bytes(self.size) });
+    std.log.debug("{*}: Allocated {f} on the gpu", .{ self, MemoryUsage.from_bytes(self.size) });
 }
