@@ -22,6 +22,7 @@
 - threading: chunk meshe faces are allocated on threadlocal static arenas, what if after unloading the mesh another thread picks it up? Since I only do `clearRetainingCapacity`.
 - renderer: there is a maximum allocation size on the gpu, (around 4gigs or `-Dworld_size=128` on flat world).
 - threading: I think it is possible to get rid of the RwLock at `World.get_block` if we store neighbour chunks?
+- renderer: after the threadpool introduction, gpu memory usage suddenly became very high (64mb => 256 mb on balls). Why?
 
 # Done
 
