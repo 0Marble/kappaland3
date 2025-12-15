@@ -1,0 +1,250 @@
+const std = @import("std");
+
+const EventManager = @This();
+pub const Error = error{
+    InvalidEvent,
+    CallbackTypeError,
+    BodyTypeError,
+} || std.mem.Allocator.Error;
+
+events: std.ArrayList(EventData),
+gpa: std.mem.Allocator,
+callback_data: std.heap.ArenaAllocator,
+
+pub fn init(gpa: std.mem.Allocator) EventManager {
+    return .{
+        .events = .empty,
+        .gpa = gpa,
+        .callback_data = .init(gpa),
+    };
+}
+
+pub fn deinit(self: *EventManager) void {
+    for (self.events.items) |*evt| {
+        evt.bodies.deinit(self.gpa);
+        evt.callbacks.deinit(self.gpa);
+    }
+    self.events.deinit(self.gpa);
+    self.callback_data.deinit();
+}
+
+pub fn register_event(self: *EventManager, comptime Body: type) Error!Event {
+    const Handler = struct {
+        fn run(evt_data: *EventData) void {
+            const bodies: []const Body = @ptrCast(@alignCast(evt_data.bodies.items));
+            for (evt_data.callbacks.items) |cb| {
+                const fptr: *const fn (*anyopaque, Body) void = @ptrCast(cb.fptr);
+                for (bodies) |b| {
+                    fptr(cb.data, b);
+                }
+            }
+        }
+
+        fn append(evt_data: *EventData, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+            if (evt_data.bodies.capacity == 0) {
+                try evt_data.bodies.append(gpa, 0);
+                _ = evt_data.bodies.pop();
+            }
+
+            const end: usize = @intFromPtr(evt_data.bodies.items.ptr + evt_data.bodies.items.len);
+            const next_start = std.mem.Alignment.of(Body).forward(end);
+            const next_end = next_start + @sizeOf(Body);
+            const size = next_end - end;
+            const offset = next_start - end;
+            const buf = try evt_data.bodies.addManyAsSlice(gpa, size);
+            return buf[offset..];
+        }
+    };
+
+    const idx = self.events.items.len;
+    try self.events.append(self.gpa, EventData{
+        .body_type = type_id(Body),
+        .eid = .from_int(idx),
+        .callbacks = .empty,
+        .bodies = .empty,
+        .run = @ptrCast(&Handler.run),
+        .append = @ptrCast(&Handler.append),
+    });
+
+    return Event.from_int(idx);
+}
+
+pub fn emit(self: *EventManager, evt: Event, value: anytype) Error!void {
+    if (evt == .invalid) return Error.InvalidEvent;
+
+    const event_data = &self.events.items[evt.to_int(usize)];
+    const Value = @TypeOf(value);
+    if (event_data.body_type != type_id(Value)) return Error.BodyTypeError;
+
+    const buf = try event_data.append(event_data, self.gpa);
+    const raw_val = std.mem.asBytes(&value);
+    @memcpy(buf, raw_val);
+}
+
+pub fn process(self: *EventManager) void {
+    for (self.events.items) |*evt| {
+        evt.run(evt);
+        evt.bodies.clearRetainingCapacity();
+    }
+}
+
+// func takes parameters of type .{Ctx, Body} and returns void
+pub fn add_listener(self: *EventManager, evt: Event, func: anytype, ctx: anytype) Error!void {
+    const Ctx = @TypeOf(ctx);
+    const Fn = @TypeOf(func);
+    const fn_info = @typeInfo(Fn).@"fn";
+    comptime {
+        std.debug.assert(fn_info.return_type == void);
+        std.debug.assert(fn_info.params[0].type == Ctx);
+        std.debug.assert(fn_info.params.len == 2);
+    }
+
+    if (evt == .invalid) return Error.InvalidEvent;
+    const event_data = &self.events.items[evt.to_int(usize)];
+    if (type_id(fn_info.params[1].type.?) != event_data.body_type) return Error.CallbackTypeError;
+
+    if (@typeInfo(Ctx) == .pointer) {
+        const callback = Callback{
+            .data = @ptrCast(ctx),
+            .fptr = @ptrCast(&func),
+        };
+
+        try event_data.callbacks.append(self.gpa, callback);
+    } else {
+        const Closure = struct {
+            fptr: *const Fn,
+            ctx: Ctx,
+
+            fn callback(closure: *@This(), body: fn_info.params[1].type.?) void {
+                closure.fptr(closure.ctx, body);
+            }
+        };
+
+        const closure = try self.callback_data.allocator().create(Closure);
+        closure.* = Closure{
+            .ctx = ctx,
+            .fptr = &func,
+        };
+
+        const callback = Callback{
+            .data = @ptrCast(closure),
+            .fptr = @ptrCast(&Closure.callback),
+        };
+
+        try event_data.callbacks.append(self.gpa, callback);
+    }
+}
+
+pub const Event = enum(usize) {
+    const OFFSET = 1;
+    invalid = 0,
+
+    _,
+
+    fn to_int(self: Event, comptime Int: type) Int {
+        return @intFromEnum(self) - OFFSET;
+    }
+
+    fn from_int(int: anytype) Event {
+        return @enumFromInt(int + OFFSET);
+    }
+};
+
+const Callback = struct {
+    data: *anyopaque,
+    fptr: *const anyopaque,
+};
+
+const EventData = struct {
+    body_type: usize,
+    eid: Event,
+    callbacks: std.ArrayList(Callback),
+    bodies: std.ArrayList(u8),
+    run: *const fn (self: *EventData) void,
+    append: *const fn (self: *EventData, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8,
+};
+
+fn type_id(comptime T: type) usize {
+    const H = struct {
+        var instance: T = undefined;
+    };
+    return @intFromPtr(&H.instance);
+}
+
+test type_id {
+    try std.testing.expectEqual(type_id(u32), type_id(u32));
+    try std.testing.expect(type_id(u32) != type_id(i32));
+}
+
+test {
+    var events = EventManager.init(std.testing.allocator);
+    defer events.deinit();
+
+    const e1 = try events.register_event(u32);
+    const e2 = try events.register_event([]const u8);
+
+    const Handler = struct {
+        got_u32: u32 = 69,
+        got_str: []const u8 = "default",
+
+        const Handler = @This();
+        fn on_e1(self: *Handler, val: u32) void {
+            self.got_u32 = val;
+        }
+
+        fn on_e2(self: *Handler, val: []const u8) void {
+            self.got_str = val;
+        }
+
+        fn on_e3(self: *Handler, val: usize) void {
+            std.debug.panic("{*}: Should be unreachable: {}", .{ self, val });
+        }
+    };
+
+    var handler = Handler{};
+
+    try events.add_listener(e1, Handler.on_e1, &handler);
+    try events.add_listener(e2, Handler.on_e2, &handler);
+    try std.testing.expectError(Error.CallbackTypeError, events.add_listener(e1, Handler.on_e3, &handler));
+
+    events.process();
+    try std.testing.expectEqual(69, handler.got_u32);
+    try std.testing.expectEqualStrings("default", handler.got_str);
+
+    try events.emit(e1, @as(u32, 420));
+    try events.emit(e1, @as(u32, 1337));
+    try events.emit(e2, @as([]const u8, "hello world"));
+    try std.testing.expectError(Error.BodyTypeError, events.emit(e1, @as(usize, 69)));
+
+    events.process();
+    try std.testing.expectEqual(1337, handler.got_u32);
+    try std.testing.expectEqualStrings("hello world", handler.got_str);
+
+    events.process();
+    try std.testing.expectEqual(1337, handler.got_u32);
+    try std.testing.expectEqualStrings("hello world", handler.got_str);
+}
+
+test "Non-pointer context" {
+    var events = EventManager.init(std.testing.allocator);
+    defer events.deinit();
+    const evt = try events.register_event(u32);
+
+    const Handler = struct {
+        var result: u32 = 0;
+
+        data: u32 = 69,
+        fn callback(self: @This(), x: u32) void {
+            result += x * self.data;
+        }
+    };
+    const handler = Handler{};
+    try events.add_listener(evt, Handler.callback, handler);
+
+    try events.emit(evt, @as(u32, 1));
+    try events.emit(evt, @as(u32, 100));
+    try events.emit(evt, @as(u32, 10000));
+
+    events.process();
+    try std.testing.expectEqual(696969, Handler.result);
+}
