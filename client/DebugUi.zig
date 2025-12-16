@@ -19,15 +19,15 @@ frames: FrameContentsMap,
 const DebugUi = @This();
 pub fn init(app: *App) !DebugUi {
     _ = c.igCreateContext(null) orelse {
-        std.log.err( "Could not create imgui context", .{});
+        std.log.err("Could not create imgui context", .{});
         return error.ImguiError;
     };
     if (!c.ig_ImplSDL3_InitForOpenGL(app.win, app.gl_ctx)) {
-        std.log.err( "Could not init imgui for SDL3+OpenGL", .{});
+        std.log.err("Could not init imgui for SDL3+OpenGL", .{});
         return error.ImguiError;
     }
     if (!c.ig_ImplOpenGL3_Init("#version 460 core")) {
-        std.log.err( "Could not init imgui for OpenGL", .{});
+        std.log.err("Could not init imgui for OpenGL", .{});
         return error.ImguiError;
     }
 
@@ -74,19 +74,31 @@ pub fn on_frame_start(self: *DebugUi) !void {
     c.igNewFrame();
 }
 
-pub fn update(self: *DebugUi) !void {
+pub fn draw(self: *DebugUi) void {
     for (self.frames.keys(), self.frames.values()) |frame, contents| {
         _ = c.igBegin(@ptrCast(frame), null, 0);
         for (contents.items) |cb| {
-            try cb.do();
+            cb.do() catch |err| {
+                const err_str = @errorName(err);
+                const red: c.ImVec4 = .{ .x = 1, .y = 0, .z = 0, .w = 1 };
+                if (Options.ui_store_src) {
+                    c.igTextColored(
+                        red,
+                        "[%s:%d:%d] Error: '%s'",
+                        cb.src.file.ptr,
+                        cb.src.line,
+                        cb.src.column,
+                        err_str.ptr,
+                    );
+                } else {
+                    c.igTextColored(red, "Error: '%s'", err_str.ptr);
+                }
+            };
         }
         c.igEnd();
     }
-
     c.igRender();
-}
 
-pub fn draw(self: *DebugUi) !void {
     self.frames = .empty;
     c.ig_ImplOpenGL3_RenderDrawData(c.igGetDrawData());
 }

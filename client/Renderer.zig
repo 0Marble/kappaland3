@@ -188,8 +188,6 @@ pub fn draw(self: *Renderer) !void {
     try self.postprocessing_pass.set_vec2("u_render_size", render_size);
     try self.screen_quad.draw(gl.TRIANGLES);
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, 0));
-
-    try App.gui().draw();
 }
 
 pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {

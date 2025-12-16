@@ -245,10 +245,11 @@ pub fn run() !void {
         try app.main_renderer.on_frame_start();
         app.events.process();
 
-        try app.debug_ui.update();
         try app.game.update();
 
         try renderer().draw();
+        app.debug_ui.draw();
+
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
             std.log.warn("Could not swap window: {s}", .{c.SDL_GetError()});
         }

@@ -96,7 +96,8 @@ fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
     };
 }
 
-pub fn gl_call(res: anytype) !@TypeOf(res) {
+pub const GlError = error{GlError};
+pub fn gl_call(res: anytype) GlError!@TypeOf(res) {
     if (!Options.gl_check_errors) {
         return res;
     }
@@ -105,15 +106,15 @@ pub fn gl_call(res: anytype) !@TypeOf(res) {
         const err = gl.GetError();
         if (err != gl.NO_ERROR) {
             if (gl_err_to_str(err)) |msg| {
-                std.log.err( "GL error: {s}", .{msg});
+                std.log.err("GL error: {s}", .{msg});
             } else {
-                std.log.err( "GL error: {X}", .{err});
+                std.log.err("GL error: {X}", .{err});
             }
             ok = false;
         } else break;
     }
     if (!ok) {
-        return error.GlError;
+        return GlError.GlError;
     }
     return res;
 }
@@ -130,13 +131,13 @@ fn sdl_res_type(comptime T: type) type {
 pub fn sdl_call(res: anytype) sdl_res_type(@TypeOf(res)) {
     switch (@typeInfo(@TypeOf(res))) {
         .bool => if (!res) {
-            std.log.err( "SDL error: {s}", .{c.SDL_GetError()});
+            std.log.err("SDL error: {s}", .{c.SDL_GetError()});
             return SdlError.SdlError;
         } else return,
         .optional => if (res) |x| {
             return x;
         } else {
-            std.log.err( "SDL error: {s}", .{c.SDL_GetError()});
+            std.log.err("SDL error: {s}", .{c.SDL_GetError()});
             return SdlError.SdlError;
         },
         else => return res,
