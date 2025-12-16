@@ -1,39 +1,46 @@
-const World = @import("World.zig");
 const std = @import("std");
 const App = @import("App.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
 
-const CHUNK_SIZE = World.CHUNK_SIZE;
+pub const CHUNK_SIZE = 16;
 pub const X_OFFSET = 1;
 pub const Z_OFFSET = CHUNK_SIZE;
 pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
+pub const Coords = @Vector(3, i32);
 
-coords: World.ChunkCoords,
-blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]World.BlockId,
+pub const BlockId = enum(u8) {
+    air = 0,
+    stone,
+    dirt,
+    grass,
+};
+
+coords: Coords,
+blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]BlockId,
+locked: bool,
 
 const Chunk = @This();
 
-pub fn init(coords: World.ChunkCoords) !*Chunk {
-    const self = try App.static_alloc().create(Chunk);
+pub fn init(self: *Chunk, coords: Coords) void {
+    self.locked = false;
     self.coords = coords;
-    return self;
 }
 
-pub fn get(self: *Chunk, pos: World.BlockCoords) World.BlockId {
-    const i = @reduce(.Add, pos * World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+pub fn get(self: *Chunk, pos: Coords) BlockId {
+    const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
     return self.blocks[@intCast(i)];
 }
 
-pub fn is_solid(self: *Chunk, pos: World.BlockCoords) bool {
+pub fn is_solid(self: *Chunk, pos: Coords) bool {
     const b = self.get_safe(pos);
     if (b == null or b == .air) return false;
     return true;
 }
 
-pub fn get_safe(self: *Chunk, pos: World.BlockCoords) ?World.BlockId {
-    const size = World.BlockCoords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
-    const stride = World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
+pub fn get_safe(self: *Chunk, pos: Coords) ?BlockId {
+    const size = Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
+    const stride = Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
     const zero = zm.vec.zero(3, i32);
     const a = pos < size;
     const b = pos >= zero;
@@ -45,8 +52,8 @@ pub fn get_safe(self: *Chunk, pos: World.BlockCoords) ?World.BlockId {
     return self.blocks[@intCast(i)];
 }
 
-pub fn set(self: *Chunk, pos: World.BlockCoords, block: World.BlockId) void {
-    const i = @reduce(.Add, pos * World.BlockCoords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+pub fn set(self: *Chunk, pos: Coords, block: BlockId) void {
+    const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
     self.blocks[@intCast(i)] = block;
 }
 
@@ -70,7 +77,7 @@ fn generate_flat(self: *Chunk) void {
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |y| {
-                const pos: World.BlockCoords = @intCast(@Vector(3, usize){ x, y, z });
+                const pos: Coords = @intCast(@Vector(3, usize){ x, y, z });
                 switch (y) {
                     0...4 => self.set(pos, .stone),
                     5...7 => self.set(pos, .dirt),
@@ -84,12 +91,12 @@ fn generate_flat(self: *Chunk) void {
 
 fn generate_balls(self: *Chunk) void {
     const scale: zm.Vec3f = @splat(std.math.pi / 8.0);
-    const size: World.BlockCoords = @splat(CHUNK_SIZE);
+    const size: Coords = @splat(CHUNK_SIZE);
 
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |j| {
             for (0..CHUNK_SIZE) |k| {
-                const pos = World.BlockCoords{
+                const pos = Coords{
                     @intCast(i),
                     @intCast(j),
                     @intCast(k),
@@ -118,7 +125,7 @@ fn generate_wavy(self: *Chunk) void {
             const top: f32 = (@sin(x * scale) + @cos(z * scale)) * 4.0 + 8.0;
 
             for (0..CHUNK_SIZE) |j| {
-                const pos = World.BlockCoords{
+                const pos = Coords{
                     @intCast(i),
                     @intCast(j),
                     @intCast(k),
@@ -144,7 +151,7 @@ pub fn aabb(self: *Chunk) zm.AABBf {
 }
 
 pub fn get_occluder(self: *Chunk) ?zm.AABBf {
-    const all_full = std.mem.indexOfScalar(World.BlockId, &self.blocks, .air) == null;
+    const all_full = std.mem.indexOfScalar(Coords, &self.blocks, .air) == null;
     if (!all_full) return null;
     return self.aabb();
 }
@@ -158,7 +165,7 @@ pub fn bounding_sphere(self: *Chunk) zm.Vec4f {
     return .{ pos[0], pos[1], pos[2], rad };
 }
 
-pub const neighbours: [6]World.ChunkCoords = .{
+pub const neighbours: [6]Coords = .{
     .{ 0, 0, 1 },
     .{ 0, 0, -1 },
     .{ 1, 0, 0 },
@@ -168,14 +175,14 @@ pub const neighbours: [6]World.ChunkCoords = .{
 };
 
 pub const neighbours2 = blk: {
-    var res = std.mem.zeroes([26]World.ChunkCoords);
-    const zero: World.ChunkCoords = @splat(0);
+    var res = std.mem.zeroes([26]Coords);
+    const zero: Coords = @splat(0);
 
     var l: usize = 0;
     for (0..3) |i| {
         for (0..3) |j| {
             for (0..3) |k| {
-                const pos: World.ChunkCoords = .{
+                const pos: Coords = .{
                     @as(i32, @intCast(i)) - 1,
                     @as(i32, @intCast(j)) - 1,
                     @as(i32, @intCast(k)) - 1,

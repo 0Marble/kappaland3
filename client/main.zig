@@ -1,11 +1,5 @@
 const std = @import("std");
 pub const App = @import("App.zig");
-pub const utils = @import("util.zig");
-const gl = @import("gl");
-const c = @import("c.zig").c;
-const libmine = @import("libmine");
-
-const Options = @import("ClientOptions");
 
 pub fn main() !void {
     try App.init();
