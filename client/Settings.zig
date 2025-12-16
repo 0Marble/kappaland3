@@ -11,6 +11,8 @@ save_on_exit: bool,
 
 const Map = std.StringArrayHashMapUnmanaged(Node);
 
+const OOM = std.mem.Allocator.Error;
+
 const Settings = @This();
 pub fn init() !Settings {
     var self: Settings = .{
@@ -26,14 +28,13 @@ pub fn init() !Settings {
     return self;
 }
 
-fn load_template(self: *Settings) !void {
+fn load_template(self: *Settings) OOM!void {
     const Visitor = struct {
-        const OOM = std.mem.Allocator.Error;
         fn add_node_callback(this: *Settings, name: [:0]const u8, node: Node) OOM!void {
             try this.set_value(name, node);
         }
     };
-    try Scanner(*Settings, Visitor.OOM).scan(self, &Visitor.add_node_callback);
+    try Scanner(*Settings, OOM).scan(self, &Visitor.add_node_callback);
 }
 
 pub fn deinit(self: *Settings) void {
@@ -42,7 +43,7 @@ pub fn deinit(self: *Settings) void {
     };
 }
 
-fn set_value(self: *Settings, name: [:0]const u8, val: Node) error{OutOfMemory}!void {
+fn set_value(self: *Settings, name: [:0]const u8, val: Node) OOM!void {
     if (self.events.get(name)) |evt| {
         switch (std.meta.activeTag(val)) {
             .section => {},
@@ -57,7 +58,8 @@ fn set_value(self: *Settings, name: [:0]const u8, val: Node) error{OutOfMemory}!
     try self.map.put(App.static_alloc(), name, val);
 }
 
-pub fn load(self: *Settings) !void {
+const LoadError = error{ ParseZon, ZonSchemaError } || std.fs.File.ReadError || OOM || std.fs.File.OpenError;
+pub fn load(self: *Settings) LoadError!void {
     var file = try std.fs.cwd().openFile(Options.settings_file, .{});
     defer file.close();
 
@@ -78,9 +80,8 @@ pub fn load(self: *Settings) !void {
         const ZonIndex = std.zig.Zoir.Node.Index;
         const Ast = std.zig.Ast;
         const Visitor = @This();
-        const Error = error{ OutOfMemory, ParseZon };
 
-        fn callback(this: *Visitor, name: [:0]const u8, node: Node) Error!void {
+        fn callback(this: *Visitor, name: [:0]const u8, node: Node) LoadError!void {
             const root = ZonIndex.root.get(this.zoir);
             if (root != .struct_literal) {
                 const ast_node = ZonIndex.root.getAstNode(this.zoir);
@@ -128,10 +129,10 @@ pub fn load(self: *Settings) !void {
         .zoir = zoir,
         .ast = ast,
     };
-    try Scanner(*Visitor, Visitor.Error).scan(&visitor, Visitor.callback);
+    try Scanner(*Visitor, LoadError).scan(&visitor, Visitor.callback);
 }
 
-fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) !void {
+fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) error{ZonSchemaError}!void {
     if (zoir.hasCompileErrors()) {
         std.log.warn("Couldn't parse settings file: invalid ZON:", .{});
         for (zoir.compile_errors) |err| {
@@ -154,19 +155,18 @@ fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) !void {
             }
         }
 
-        return error.ZonError;
+        return error.ZonSchemaError;
     }
 }
 
-pub fn save(self: *Settings) !void {
+const SaveError = std.zon.Serializer.Error || std.Io.Writer.Error || std.fs.File.OpenError;
+pub fn save(self: *Settings) SaveError!void {
     const Visitor = struct {
-        const Error = std.zon.Serializer.Error;
-
         settings: *Settings,
         struct_builder: *std.zon.Serializer.Struct,
 
         const Visitor = @This();
-        fn save_node_callback(this: *Visitor, name: [:0]const u8, node: Node) Error!void {
+        fn save_node_callback(this: *Visitor, name: [:0]const u8, node: Node) SaveError!void {
             switch (std.meta.activeTag(node)) {
                 .section => unreachable,
                 inline else => |tag| {
@@ -191,13 +191,16 @@ pub fn save(self: *Settings) !void {
         .settings = self,
         .struct_builder = &struct_builder,
     };
-    try Scanner(*Visitor, Visitor.Error).scan(&visitor, Visitor.save_node_callback);
+    try Scanner(*Visitor, SaveError).scan(&visitor, Visitor.save_node_callback);
 
     try struct_builder.end();
     try writer.interface.flush();
 }
 
-pub fn settings_change_event(self: *Settings, name: []const u8) !EventManager.Event {
+pub fn settings_change_event(
+    self: *Settings,
+    name: []const u8,
+) (error{NoSuchSetting} || OOM)!EventManager.Event {
     if (self.map.get(name)) |n| {
         switch (std.meta.activeTag(n)) {
             .section => unreachable,
@@ -208,7 +211,13 @@ pub fn settings_change_event(self: *Settings, name: []const u8) !EventManager.Ev
 
                 const evt = try App.event_manager().register_event(Value);
                 entry.value_ptr.* = evt;
-                try App.event_manager().emit(evt, @field(@field(n, @tagName(tag)), "value"));
+                App.event_manager().emit(
+                    evt,
+                    @field(@field(n, @tagName(tag)), "value"),
+                ) catch |err| switch (err) {
+                    OOM.OutOfMemory => return @errorCast(err),
+                    else => unreachable,
+                };
                 return evt;
             },
         }
@@ -241,7 +250,7 @@ pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
     }
 }
 
-pub fn on_imgui(self: *Settings) !void {
+pub fn on_imgui(self: *Settings) OOM!void {
     try App.gui().add_to_frame(Settings, "Settings", self, on_imgui_impl, @src());
 }
 

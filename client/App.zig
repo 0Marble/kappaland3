@@ -237,7 +237,7 @@ pub fn run() !void {
 
         if (!try handle_events()) break;
 
-        try app.debug_ui.on_frame_start();
+        app.debug_ui.on_frame_start();
         try gui().add_to_frame(App, "Debug", &app, on_imgui, @src());
         try app.settings_store.on_imgui();
 

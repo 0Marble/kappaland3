@@ -3,6 +3,8 @@ const c = @import("c.zig").c;
 const App = @import("App.zig");
 const Options = @import("ClientOptions");
 
+const OOM = std.mem.Allocator.Error;
+
 const ContentsCallback = struct {
     src: if (Options.ui_store_src) std.builtin.SourceLocation else void,
     data: *anyopaque,
@@ -50,7 +52,7 @@ pub fn add_to_frame(
     ctx: *Ctx,
     contents: *const fn (ctx: *Ctx) anyerror!void,
     src: std.builtin.SourceLocation,
-) !void {
+) OOM!void {
     const entry = try self.frames.getOrPutValue(App.frame_alloc(), name, .empty);
     try entry.value_ptr.append(App.frame_alloc(), .{
         .data = @ptrCast(ctx),
@@ -66,7 +68,7 @@ pub fn handle_event(self: *DebugUi, evt: *c.SDL_Event) EventStatus {
     return .fallthrough;
 }
 
-pub fn on_frame_start(self: *DebugUi) !void {
+pub fn on_frame_start(self: *DebugUi) void {
     _ = self;
 
     c.ig_ImplOpenGL3_NewFrame();
