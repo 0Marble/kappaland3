@@ -3,11 +3,13 @@ const std = @import("std");
 const EventManager = @This();
 pub const Error = error{
     InvalidEvent,
-    CallbackTypeError,
-    BodyTypeError,
-} || std.mem.Allocator.Error;
+    EventBodyTypeMismatch,
+    EventNameExists,
+} || OOM;
+const OOM = std.mem.Allocator.Error;
 
 all_events: std.ArrayList(EventData),
+named: std.StringArrayHashMapUnmanaged(Event),
 events_with_data: std.ArrayList(Event),
 gpa: std.mem.Allocator,
 callback_data: std.heap.ArenaAllocator,
@@ -16,6 +18,7 @@ pub fn init(gpa: std.mem.Allocator) EventManager {
     return .{
         .all_events = .empty,
         .events_with_data = .empty,
+        .named = .empty,
         .gpa = gpa,
         .callback_data = .init(gpa),
     };
@@ -29,9 +32,10 @@ pub fn deinit(self: *EventManager) void {
     self.events_with_data.deinit(self.gpa);
     self.all_events.deinit(self.gpa);
     self.callback_data.deinit();
+    self.named.deinit(self.gpa);
 }
 
-pub fn register_event(self: *EventManager, comptime Body: type) Error!Event {
+pub fn register_event(self: *EventManager, comptime Body: type) OOM!Event {
     const Handler = struct {
         fn run(evt_data: *EventData) void {
             const bodies: []const Body = @ptrCast(@alignCast(evt_data.bodies.items));
@@ -72,12 +76,22 @@ pub fn register_event(self: *EventManager, comptime Body: type) Error!Event {
     return Event.from_int(idx);
 }
 
+pub fn name_event(self: *EventManager, evt: Event, name: []const u8) Error!void {
+    const entry = try self.named.getOrPut(self.gpa, name);
+    if (entry.found_existing) return Error.EventNameExists;
+    entry.value_ptr.* = evt;
+}
+
+pub fn get_named(self: *EventManager, name: []const u8) ?Event {
+    return self.named.get(name);
+}
+
 pub fn emit(self: *EventManager, evt: Event, value: anytype) Error!void {
     if (evt == .invalid) return Error.InvalidEvent;
 
     const event_data = &self.all_events.items[evt.to_int(usize)];
     const Value = @TypeOf(value);
-    if (event_data.body_type != type_id(Value)) return Error.BodyTypeError;
+    if (event_data.body_type != type_id(Value)) return Error.EventBodyTypeMismatch;
 
     if (event_data.bodies.items.len == 0) {
         try self.events_with_data.append(self.gpa, evt);
@@ -106,15 +120,16 @@ pub fn add_listener(
     const Args = @TypeOf(args);
     const Fn = @TypeOf(func);
     const fn_info = @typeInfo(Fn).@"fn";
+    const Body = fn_info.params[fn_info.params.len - 1].type.?;
 
     if (evt == .invalid) return Error.InvalidEvent;
     const event_data = &self.all_events.items[evt.to_int(usize)];
-    if (type_id(fn_info.params[1].type.?) != event_data.body_type) return Error.CallbackTypeError;
+    if (type_id(Body) != event_data.body_type) return Error.EventBodyTypeMismatch;
 
     const Closure = struct {
         args: Args,
 
-        fn callback(closure: *@This(), body: fn_info.params[1].type.?) void {
+        fn callback(closure: *@This(), body: Body) void {
             @call(.auto, func, closure.args ++ .{body});
         }
     };
@@ -130,7 +145,10 @@ pub fn add_listener(
     };
 
     try event_data.callbacks.append(self.gpa, callback);
-    return .from_int(event_data.callbacks.items.len - 1);
+    return .{
+        .evt = evt,
+        .idx = event_data.callbacks.items.len - 1,
+    };
 }
 
 pub const Event = enum(usize) {
@@ -148,18 +166,9 @@ pub const Event = enum(usize) {
     }
 };
 
-pub const EventListenerHandle = enum(usize) {
-    const OFFSET = 1;
-    invalid = 0,
-    _,
-
-    fn to_int(self: @This(), comptime Int: type) Int {
-        return @intFromEnum(self) - OFFSET;
-    }
-
-    fn from_int(int: anytype) @This() {
-        return @enumFromInt(int + OFFSET);
-    }
+pub const EventListenerHandle = struct {
+    evt: Event,
+    idx: usize,
 };
 
 const Callback = struct {
@@ -217,7 +226,10 @@ test {
 
     _ = try events.add_listener(e1, Handler.on_e1, .{&handler});
     _ = try events.add_listener(e2, Handler.on_e2, .{&handler});
-    try std.testing.expectError(Error.CallbackTypeError, events.add_listener(e1, Handler.on_e3, .{&handler}));
+    try std.testing.expectError(
+        Error.EventBodyTypeMismatch,
+        events.add_listener(e1, Handler.on_e3, .{&handler}),
+    );
 
     events.process();
     try std.testing.expectEqual(69, handler.got_u32);
@@ -226,7 +238,7 @@ test {
     try events.emit(e1, @as(u32, 420));
     try events.emit(e1, @as(u32, 1337));
     try events.emit(e2, @as([]const u8, "hello world"));
-    try std.testing.expectError(Error.BodyTypeError, events.emit(e1, @as(usize, 69)));
+    try std.testing.expectError(Error.EventBodyTypeMismatch, events.emit(e1, @as(usize, 69)));
 
     events.process();
     try std.testing.expectEqual(1337, handler.got_u32);
