@@ -11,6 +11,8 @@ const Shader = @import("Shader.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
+const OOM = std.mem.Allocator.Error;
+const GlError = util.GlError;
 
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
@@ -118,7 +120,7 @@ pub fn request_draw_chunk(self: *Renderer, chunk: *Chunk) !void {
     try self.block_renderer.request_draw_chunk(chunk);
 }
 
-pub fn draw(self: *Renderer) !void {
+pub fn draw(self: *Renderer) (OOM || GlError)!void {
     const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable") orelse false;
     const render_size = zm.Vec2f{ @floatFromInt(self.cur_width), @floatFromInt(self.cur_height) };
 

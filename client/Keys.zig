@@ -2,6 +2,7 @@ const App = @import("App.zig");
 const std = @import("std");
 const c = @import("c.zig").c;
 const EventManager = @import("libmine").EventManager;
+const OOM = std.mem.Allocator.Error;
 
 this_frame_pressed_keys: std.AutoHashMapUnmanaged(Scancode, void),
 prev_frame_pressed_keys: std.AutoHashMapUnmanaged(Scancode, void),
@@ -94,14 +95,17 @@ pub fn is_mouse_just_down(self: *Keys, button: MouseButton) bool {
     }
 }
 
-pub fn on_frame_start(self: *Keys) !void {
+pub fn on_frame_start(self: *Keys) OOM!void {
     const dx = self.this_frame_mouse_state.x - self.prev_frame_mouse_state.x;
     const dy = self.this_frame_mouse_state.y - self.prev_frame_mouse_state.y;
     if (dx != 0 or dy != 0) {
         var it = self.mouse_move_actions.first;
         while (it) |link| : (it = link.next) {
             const action = ActionData.from_link(link);
-            try App.event_manager().emit(action.event, action.name);
+            App.event_manager().emit(action.event, action.name) catch |err| switch (err) {
+                OOM.OutOfMemory => return @errorCast(err),
+                else => std.debug.panic("{*}: got error {}", .{ self, err }),
+            };
         }
     }
 
@@ -111,7 +115,10 @@ pub fn on_frame_start(self: *Keys) !void {
             var it = list.first;
             while (it) |link| : (it = link.next) {
                 const action = ActionData.from_link(link);
-                try App.event_manager().emit(action.event, action.name);
+                App.event_manager().emit(action.event, action.name) catch |err| switch (err) {
+                    OOM.OutOfMemory => return @errorCast(err),
+                    else => std.debug.panic("{*}: got error {}", .{ self, err }),
+                };
             }
         }
     }
@@ -122,12 +129,15 @@ pub fn on_frame_start(self: *Keys) !void {
         var it = list.first;
         while (it) |link| : (it = link.next) {
             const action = ActionData.from_link(link);
-            try App.event_manager().emit(action.event, action.name);
+            App.event_manager().emit(action.event, action.name) catch |err| switch (err) {
+                OOM.OutOfMemory => return @errorCast(err),
+                else => std.debug.panic("{*}: got error {}", .{ self, err }),
+            };
         }
     }
 }
 
-pub fn on_frame_end(self: *Keys) !void {
+pub fn on_frame_end(self: *Keys) OOM!void {
     self.prev_frame_pressed_keys.clearRetainingCapacity();
     var it = self.this_frame_pressed_keys.iterator();
     while (it.next()) |entry| {

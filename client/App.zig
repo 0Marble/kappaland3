@@ -231,7 +231,7 @@ fn on_imgui(self: *App) !void {
     c.igText("%s", mem_str.ptr);
 }
 
-pub fn run() !void {
+pub fn run() (std.mem.Allocator.Error || util.GlError)!void {
     while (true) {
         app.frame_data.on_frame_start();
 

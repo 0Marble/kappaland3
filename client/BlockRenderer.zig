@@ -12,6 +12,8 @@ const util = @import("util.zig");
 const gl_call = util.gl_call;
 const BlockModel = @import("Block");
 const c = @import("c.zig").c;
+const OOM = std.mem.Allocator.Error;
+const GlError = util.GlError;
 
 const Self = @This();
 const BlockRenderer = @This();
@@ -166,7 +168,7 @@ pub fn deinit(self: *Self) void {
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
 }
 
-pub fn draw(self: *Self) !void {
+pub fn draw(self: *Self) (OOM || GlError)!void {
     const draw_count = try self.compute_drawn_chunk_data();
 
     const cam = &App.game_state().camera;
