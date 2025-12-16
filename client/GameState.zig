@@ -1,20 +1,17 @@
 const App = @import("App.zig");
 const libmine = @import("libmine");
-const Ecs = libmine.Ecs;
 const std = @import("std");
 const c = @import("c.zig").c;
 const Camera = @import("Camera.zig");
 const World = @import("World.zig");
 const Keys = @import("Keys.zig");
 
-ecs: Ecs,
 keys: Keys,
 camera: Camera,
 world: World,
 
 const GameState = @This();
 pub fn init(self: *GameState) !void {
-    self.ecs = .init(App.gpa());
     try self.keys.init();
     try self.camera.init(std.math.pi * 0.5, 640.0 / 480.0);
     try self.world.init();
@@ -23,7 +20,6 @@ pub fn init(self: *GameState) !void {
 pub fn deinit(self: *GameState) void {
     self.camera.deinit();
     self.keys.deinit();
-    self.ecs.deinit();
     self.world.deinit();
 }
 
@@ -53,6 +49,5 @@ pub fn on_frame_end(self: *GameState) !void {
 }
 
 pub fn update(self: *GameState) !void {
-    try self.ecs.evaluate();
     try self.world.process_work();
 }

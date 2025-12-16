@@ -11,7 +11,6 @@ const Shader = @import("Shader.zig");
 const zm = @import("zm");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
-const Ecs = @import("libmine").Ecs;
 
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
@@ -56,8 +55,6 @@ ssao_blur_pass: Shader,
 lighting_pass: Shader,
 ssao_samples: [SSAO_SAMPLES_COUNT]zm.Vec3f,
 
-renderer_eid: Ecs.EntityRef,
-
 const Renderer = @This();
 pub fn init(self: *Renderer) !void {
     try self.init_buffers();
@@ -67,8 +64,6 @@ pub fn init(self: *Renderer) !void {
 }
 
 fn init_settings(self: *Renderer) !void {
-    self.renderer_eid = try App.ecs().spawn();
-
     try self.lighting_pass.observe_settings(SSAO_SETTINGS ++ ".enable", bool, "u_ssao_enabled");
     try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur");
     try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius");

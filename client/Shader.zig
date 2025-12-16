@@ -7,7 +7,6 @@ const zm = @import("zm");
 
 program: gl.uint,
 uniforms: std.StringHashMapUnmanaged(gl.int) = .{},
-eid: Ecs.EntityRef,
 
 pub fn observe_settings(
     self: *Shader,
@@ -15,11 +14,10 @@ pub fn observe_settings(
     comptime T: type,
     comptime name: [:0]const u8,
 ) !void {
-    const evt = try App.settings().settings_change_event(T, setting);
+    const evt = try App.settings().settings_change_event(setting);
 
     const Callback = struct {
-        fn callback(shader: *Shader, vals: []T) void {
-            const val = vals[vals.len - 1];
+        fn callback(shader: *Shader, val: T) void {
             _ = switch (T) {
                 bool => shader.set_uint(name, if (val) 1 else 0),
                 i32 => shader.set_int(name, val),
@@ -34,7 +32,7 @@ pub fn observe_settings(
         }
     };
 
-    try App.ecs().add_event_listener(self.eid, T, *Shader, evt, self, Callback.callback);
+    _ = try App.event_manager().add_listener(evt, Callback.callback, .{self});
 }
 
 pub const Source = struct {
@@ -124,7 +122,7 @@ pub fn init(sources: []Source) !Shader {
         s.deinit();
     }
 
-    return Shader{ .program = program, .eid = try App.ecs().spawn() };
+    return Shader{ .program = program };
 }
 
 pub fn deinit(self: *Shader) void {

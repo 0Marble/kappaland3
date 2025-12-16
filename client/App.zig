@@ -7,7 +7,7 @@ const gl = @import("gl");
 pub const GameState = @import("GameState.zig");
 const zm = @import("zm");
 pub const Keys = @import("Keys.zig");
-const Ecs = @import("libmine").Ecs;
+const EventManager = @import("libmine").EventManager;
 const Options = @import("ClientOptions");
 pub const DebugUi = @import("DebugUi.zig");
 pub const Renderer = @import("Renderer.zig");
@@ -20,6 +20,8 @@ gl_procs: gl.ProcTable,
 thread_gpa: []Gpa,
 frame_memory: Arena,
 static_memory: []Arena,
+
+events: EventManager,
 
 thread_pool: std.Thread.Pool,
 main_thread_id: std.Thread.Id,
@@ -51,6 +53,7 @@ pub fn init() !void {
     try init_memory();
 
     app.settings_store = try .init();
+    app.events = .init(App.main_alloc.allocator());
 
     try init_sdl();
     try init_gl();
@@ -157,6 +160,7 @@ pub fn deinit() void {
     app.main_renderer.deinit();
     app.settings_store.deinit();
     app.thread_pool.deinit();
+    app.events.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -230,6 +234,7 @@ fn on_imgui(self: *App) !void {
 pub fn run() !void {
     while (true) {
         app.frame_data.on_frame_start();
+
         if (!try handle_events()) break;
 
         try app.debug_ui.on_frame_start();
@@ -238,6 +243,7 @@ pub fn run() !void {
 
         try app.game.on_frame_start();
         try app.main_renderer.on_frame_start();
+        app.events.process();
 
         try app.debug_ui.update();
         try app.game.update();
@@ -277,21 +283,21 @@ fn handle_events() !bool {
                     @as(f32, @floatFromInt(evt.window.data2)));
             },
             c.SDL_EVENT_KEY_DOWN => {
-                try key_state().on_keydown(.from_sdl(evt.key.scancode));
+                try key_state().emit_keydown(.from_sdl(evt.key.scancode));
             },
             c.SDL_EVENT_KEY_UP => {
-                try key_state().on_keyup(.from_sdl(evt.key.scancode));
+                try key_state().emit_keyup(.from_sdl(evt.key.scancode));
             },
             c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                key_state().on_mouse_down(.from_sdl(evt.button.button));
-                key_state().on_mouse_motion(evt.button.x, evt.button.y);
+                key_state().emit_mouse_down(.from_sdl(evt.button.button));
+                key_state().emit_mouse_motion(evt.button.x, evt.button.y);
             },
             c.SDL_EVENT_MOUSE_BUTTON_UP => {
-                key_state().on_mouse_up(.from_sdl(evt.button.button));
-                key_state().on_mouse_motion(evt.button.x, evt.button.y);
+                key_state().emit_mouse_up(.from_sdl(evt.button.button));
+                key_state().emit_mouse_motion(evt.button.x, evt.button.y);
             },
             c.SDL_EVENT_MOUSE_MOTION => {
-                key_state().on_mouse_motion(evt.motion.x, evt.motion.y);
+                key_state().emit_mouse_motion(evt.motion.x, evt.motion.y);
             },
             else => {},
         }
@@ -304,8 +310,8 @@ pub fn frametime() f32 {
     return @floatFromInt(app.frame_data.frame_end_time - app.frame_data.frame_start_time);
 }
 
-pub fn ecs() *Ecs {
-    return &game_state().ecs;
+pub fn event_manager() *EventManager {
+    return &app.events;
 }
 
 pub fn current_frame() u64 {

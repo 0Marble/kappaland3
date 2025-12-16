@@ -3,10 +3,10 @@ const App = @import("App.zig");
 const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
-const Ecs = @import("libmine").Ecs;
+const EventManager = @import("libmine").EventManager;
 
 map: Map,
-events: std.StringHashMapUnmanaged(Ecs.EventRef),
+events: std.StringHashMapUnmanaged(EventManager.Event),
 save_on_exit: bool,
 
 const Map = std.StringArrayHashMapUnmanaged(Node);
@@ -47,8 +47,7 @@ fn set_value(self: *Settings, name: [:0]const u8, val: Node) error{OutOfMemory}!
         switch (std.meta.activeTag(val)) {
             .section => {},
             inline else => |tag| {
-                const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
-                App.ecs().emit_event(Value, evt, @field(val, @tagName(tag)).value) catch |err| {
+                App.event_manager().emit(evt, @field(val, @tagName(tag)).value) catch |err| {
                     std.log.warn("Settings.set_value: Couldn't emit event: {}", .{err});
                 };
             },
@@ -198,46 +197,24 @@ pub fn save(self: *Settings) !void {
     try writer.interface.flush();
 }
 
-pub fn settings_change_event(self: *Settings, comptime Body: type, name: []const u8) !Ecs.EventRef {
-    const node: ?Node = if (self.map.get(name)) |n| blk: {
+pub fn settings_change_event(self: *Settings, name: []const u8) !EventManager.Event {
+    if (self.map.get(name)) |n| {
         switch (std.meta.activeTag(n)) {
-            .section => {},
+            .section => unreachable,
             inline else => |tag| {
                 const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
-                if (Value != Body) {
-                    std.log.warn("Type mismatch for setting '{s}', expected {s} got {s}", .{
-                        name,
-                        @typeName(Value),
-                        @typeName(Body),
-                    });
-                    break :blk null;
-                }
+                const entry = try self.events.getOrPut(App.static_alloc(), name);
+                if (entry.found_existing) return entry.value_ptr.*;
+
+                const evt = try App.event_manager().register_event(Value);
+                entry.value_ptr.* = evt;
+                try App.event_manager().emit(evt, @field(@field(n, @tagName(tag)), "value"));
+                return evt;
             },
         }
-        break :blk n;
-    } else blk: {
-        std.log.warn("Listening for non-existant settings '{s}'", .{name});
-        break :blk null;
-    };
-
-    const entry = try self.events.getOrPut(App.static_alloc(), name);
-    if (entry.found_existing) return entry.value_ptr.*;
-
-    const evt = try App.ecs().register_event(null, Body);
-    entry.value_ptr.* = evt;
-
-    if (node) |n| {
-        switch (std.meta.activeTag(n)) {
-            .section => {},
-            inline else => |tag| {
-                if (Body == @FieldType(@FieldType(Node, @tagName(tag)), "value")) {
-                    try App.ecs().emit_event(Body, evt, @field(@field(n, @tagName(tag)), "value"));
-                }
-            },
-        }
+    } else {
+        return error.NoSuchSetting;
     }
-
-    return evt;
 }
 
 pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
@@ -273,10 +250,8 @@ fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
         .section => {},
         inline else => |tag| {
             const evt = self.events.get(name) orelse return;
-            const Body = @FieldType(Node, @tagName(tag));
-            const Value = @FieldType(Body, "value");
-            App.ecs().emit_event(Value, evt, @field(@field(node, @tagName(tag)), "value")) catch |err| {
-                std.log.warn("Settings.emit_on_changed: {s}: Ecs.emit_event: {}", .{ name, err });
+            App.event_manager().emit(evt, @field(@field(node, @tagName(tag)), "value")) catch |err| {
+                std.log.warn("Settings.emit_on_changed: {s}: couldn't emit event: {}", .{ name, err });
             };
         },
     }

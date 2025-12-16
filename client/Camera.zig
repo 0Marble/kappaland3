@@ -1,7 +1,6 @@
 const std = @import("std");
 const zm = @import("zm");
 const App = @import("App.zig");
-const Controller = @import("controller.zig").Controller(@This(), Controls);
 const Scancode = @import("Keys.zig").Scancode;
 const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
@@ -11,77 +10,72 @@ const Options = @import("ClientOptions");
 
 const MAX_REACH = 10;
 
-controller: Controller,
 frustum: Frustum,
-
 other_frustum: Frustum, // use to detatch occlusion from view for debug
 frustum_for_occlusion: *Frustum,
 
 const Camera = @This();
-const Controls = enum(u32) {
-    front,
-    back,
-    left,
-    right,
-    up,
-    down,
-    move,
-    interract,
-    detatch,
-};
 
 pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     self.* = .{
         .frustum = .init(fov, aspect),
         .other_frustum = undefined,
         .frustum_for_occlusion = undefined,
-        .controller = undefined,
     };
     self.frustum_for_occlusion = &self.frustum;
 
-    try self.controller.init(self);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_W), .front);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_A), .left);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_S), .back);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_D), .right);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_SPACE), .up);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LSHIFT), .down);
-    try self.controller.bind_keydown(.from_sdl(c.SDL_SCANCODE_LEFTBRACKET), .detatch);
+    try App.key_state().register_action(".main.keys.hit");
+    try App.key_state().bind_action(".main.keys.hit", .{ .button = .left });
+    try App.key_state().on_action(".main.keys.hit", interact, .{ self, Keys.MouseButton.left });
 
-    try self.controller.bind_command(.front, .{ .normal = Camera.move });
-    try self.controller.bind_command(.back, .{ .normal = Camera.move });
-    try self.controller.bind_command(.left, .{ .normal = Camera.move });
-    try self.controller.bind_command(.right, .{ .normal = Camera.move });
-    try self.controller.bind_command(.up, .{ .normal = Camera.move });
-    try self.controller.bind_command(.down, .{ .normal = Camera.move });
-    try self.controller.bind_command(.move, .{ .mouse_move = Camera.look_around });
-    try self.controller.bind_command(.interract, .{ .mouse_down = Camera.interract });
-    try self.controller.bind_command(.detatch, .{ .normal = Camera.detatch });
+    try App.key_state().register_action(".main.keys.place");
+    try App.key_state().bind_action(".main.keys.place", .{ .button = .right });
+    try App.key_state().on_action(".main.keys.place", interact, .{ self, Keys.MouseButton.right });
+
+    try App.key_state().register_action(".main.keys.look_around");
+    try App.key_state().bind_action(".main.keys.look_around", .{ .mouse_move = {} });
+    try App.key_state().on_action(".main.keys.look_around", look_around, .{self});
+
+    inline for (comptime std.meta.tags(Dir), .{ .W, .S, .D, .A, .SPACE, .LSHIFT }) |dir, key| {
+        const name = ".main.keys.walk." ++ @tagName(dir);
+        try App.key_state().register_action(name);
+        try App.key_state().bind_action(
+            name,
+            .{ .scancode = .from_sdl(@field(c, "SDL_SCANCODE_" ++ @tagName(key))) },
+        );
+        try App.key_state().on_action(name, move, .{ self, dir });
+    }
+
+    try App.key_state().register_action(".main.keys.detatch");
+    try App.key_state().bind_action(
+        ".main.keys.detatch",
+        .{ .scancode = .from_sdl(c.SDL_SCANCODE_LEFTBRACKET) },
+    );
+    try App.key_state().on_action(".main.keys.detatch", detatch, .{self});
 }
 
 pub fn deinit(self: *Camera) void {
-    self.controller.deinit();
+    _ = self;
 }
 
-pub fn interract(self: *Camera, _: Controls, btn: Keys.MouseDownEvent) void {
-    if (btn.button == .middle) return;
-    if (!App.key_state().is_mouse_just_down(btn.button)) return;
-
-    const ray = zm.Rayf.init(self.frustum.pos, self.screen_to_world_dir(btn.px, btn.py));
+fn interact(self: *Camera, button: Keys.MouseButton, _: []const u8) void {
+    const m = App.key_state().mouse_pos();
+    if (!App.key_state().is_mouse_just_down(button)) return;
+    const ray = zm.Rayf.init(self.frustum.pos, self.screen_to_world_dir(m.px, m.py));
     const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
 
-    if (btn.button == .left) {
+    if (button == .left) {
         App.game_state().world.set_block(raycast.hit_coords, .air) catch |err| {
-            std.log.warn( "{*}: Could not place block: {}", .{ self, err });
+            std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
-    } else if (btn.button == .right) {
+    } else if (button == .right) {
         App.game_state().world.set_block(raycast.prev_coords, .stone) catch |err| {
-            std.log.warn( "{*}: Could not place block: {}", .{ self, err });
+            std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     }
 }
 
-fn detatch(self: *Camera, _: Controls) void {
+fn detatch(self: *Camera, _: []const u8) void {
     if (!App.key_state().is_key_just_pressed(.from_sdl(c.SDL_SCANCODE_LEFTBRACKET))) return;
 
     if (self.frustum_for_occlusion == &self.frustum) {
@@ -95,7 +89,9 @@ fn detatch(self: *Camera, _: Controls) void {
     }
 }
 
-pub fn move(self: *Camera, cmd: Controls) void {
+const Dir = enum { front, back, right, left, up, down };
+
+fn move(self: *Camera, cmd: Dir, _: []const u8) void {
     const dir: @Vector(3, f32) = switch (cmd) {
         .front => .{
             @sin(-self.frustum.angles[1]),
@@ -119,10 +115,9 @@ pub fn move(self: *Camera, cmd: Controls) void {
         },
         .up => .{ 0, 1, 0 },
         .down => .{ 0, -1, 0 },
-        else => unreachable,
     };
 
-    const speed: f32 = if (App.key_state().is_key_down(.from_sdl(c.SDL_SCANCODE_LCTRL)))
+    const speed: f32 = if (App.key_state().is_key_pressed(.from_sdl(c.SDL_SCANCODE_LCTRL)))
         0.05
     else
         0.01;
@@ -130,8 +125,9 @@ pub fn move(self: *Camera, cmd: Controls) void {
     self.frustum.move(dir * @as(zm.Vec3f, @splat(amt)));
 }
 
-pub fn look_around(self: *Camera, _: Controls, m: Keys.MouseMoveEvent) void {
+fn look_around(self: *Camera, _: []const u8) void {
     if (App.key_state().is_mouse_down(.middle)) {
+        const m = App.key_state().mouse_pos();
         const amt = App.frametime() * 0.001;
         self.frustum.rotate(.{ m.dy * amt, m.dx * amt });
     }
