@@ -22,6 +22,7 @@ threads: []std.Thread,
 // use this inside threads, i.e. for `worklist` and `complete`
 gpa: Gpa,
 worklist: std.AutoArrayHashMapUnmanaged(Chunk.Coords, Work),
+high_priority_work: std.ArrayList(Chunk.Coords),
 worklist_size: usize,
 complete: std.ArrayList(*Command),
 thread_gpas: []Gpa,
@@ -49,6 +50,7 @@ pub fn init(thread_count: ?usize) !*ChunkManager {
         .mutex = .{},
         .condition = .{},
         .worklist = .empty,
+        .high_priority_work = .empty,
         .worklist_size = 0,
         .complete = .empty,
         .running = true,
@@ -117,6 +119,7 @@ pub fn deinit(self: *ChunkManager) void {
     self.chunk_pool.deinit();
     self.command_pool.deinit();
     self.worklist.deinit(self.gpa.allocator());
+    self.high_priority_work.deinit(self.gpa.allocator());
     self.complete.deinit(self.gpa.allocator());
     _ = self.gpa.deinit();
     Instance.ok = false;
@@ -181,7 +184,18 @@ pub fn set_block(
 
     self.mutex.lock();
     defer self.mutex.unlock();
-    if (try self.push_command(cmd)) try self.build_mesh(chunk_coords);
+    const entry = try self.worklist.getOrPutValue(self.gpa.allocator(), chunk_coords, .{});
+    const current_work = entry.value_ptr;
+
+    // if possible, place block instantly
+    if (current_work.lock == .open) {
+        current_work.lock = .write;
+        try cmd.apply();
+        try self.build_mesh(chunk_coords);
+        try self.high_priority_work.append(self.gpa.allocator(), chunk_coords);
+    } else if (try self.push_command(cmd)) {
+        try self.build_mesh(chunk_coords);
+    }
 }
 
 pub fn unload(self: *ChunkManager, coords: Chunk.Coords) !void {
@@ -298,6 +312,17 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
 
 // NOTE: runs in separate threads, but by the thread that has the mutex
 fn pop_next_command(self: *ChunkManager) ?*Command {
+    if (self.high_priority_work.pop()) |coord| {
+        const work = self.worklist.getPtr(coord).?;
+        const link = work.commands.last.?;
+        const cmd: *Command = @alignCast(@fieldParentPtr("link", link));
+        std.debug.assert(cmd.prepare_to_run());
+        work.commands.remove(link);
+        work.lock = .write;
+        self.worklist_size -= 1;
+        return cmd;
+    }
+
     for (self.worklist.values()) |*work| {
         if (work.lock != .open) continue;
         const link = work.commands.last orelse continue;
@@ -408,10 +433,16 @@ const Command = struct {
                     .{ instance(), self.idx, b[1], self.coords, b[0] },
                 );
 
+                const min: Chunk.Coords = @splat(0);
+                const max: Chunk.Coords = @splat(Chunk.CHUNK_SIZE - 1);
+                const on_border = @reduce(.Or, b[0] == min) or @reduce(.Or, b[0] == max);
+
                 chunk.ensure_neighbours();
-                for (chunk.neighbours2_cache) |n| {
-                    const other = n orelse continue;
-                    try instance().build_mesh(other.coords);
+                if (on_border) {
+                    for (chunk.neighbours2_cache) |n| {
+                        const other = n orelse continue;
+                        try instance().build_mesh(other.coords);
+                    }
                 }
             },
             .unload => {

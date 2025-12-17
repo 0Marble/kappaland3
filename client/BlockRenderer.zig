@@ -174,6 +174,7 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
             @sizeOf(Chunk.Face),
         ));
         try gl_call(gl.BindVertexArray(0));
+        self.had_realloc = false;
     }
 
     const draw_count = try self.compute_drawn_chunk_data();
