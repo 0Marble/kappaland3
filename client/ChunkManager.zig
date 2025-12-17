@@ -295,12 +295,12 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
 // NOTE: runs in separate threads, but by the thread that has the mutex
 fn pop_next_command(self: *ChunkManager) ?*Command {
     for (self.worklist.values()) |*work| {
-        if (work.lock) continue;
+        if (work.lock != .open) continue;
         const link = work.commands.last orelse continue;
         const cmd: *Command = @alignCast(@fieldParentPtr("link", link));
         if (!cmd.prepare_to_run()) continue;
         work.commands.remove(link);
-        work.lock = true;
+        work.lock = .write;
         self.worklist_size -= 1;
         return cmd;
     }
@@ -336,11 +336,11 @@ const Command = struct {
                         self.body = .noop;
                         return true;
                     };
-                    if (neighbour_work.lock) return false;
+                    if (neighbour_work.lock == .write) return false;
                 }
 
                 for (Chunk.neighbours2) |d| {
-                    instance().worklist.getPtr(d + self.coords).?.lock = true;
+                    instance().worklist.getPtr(d + self.coords).?.lock.rd_lock();
                 }
 
                 mesh.* = .{ chunk, null };
@@ -369,13 +369,13 @@ const Command = struct {
         switch (self.body) {
             .load => |ch| {
                 const lock = &instance().worklist.getPtr(self.coords).?.lock;
-                std.debug.assert(lock.*);
+                std.debug.assert(lock.* == .write);
 
                 if (try instance().chunks.fetchPut(App.gpa(), ch.coords, ch)) |old| {
                     instance().chunk_pool.destroy(old.value);
                 }
 
-                lock.* = false;
+                lock.* = .open;
                 std.log.debug("{*}: cmd[{d}]: loaded {}", .{ instance(), self.idx, ch.coords });
 
                 ch.ensure_neighbours();
@@ -394,8 +394,8 @@ const Command = struct {
                 };
 
                 const lock = &instance().worklist.getPtr(self.coords).?.lock;
-                std.debug.assert(lock.*);
-                lock.* = false;
+                std.debug.assert(lock.* == .write);
+                lock.* = .open;
 
                 chunk.set(b[0], b[1]);
 
@@ -420,8 +420,8 @@ const Command = struct {
                 };
                 std.log.debug("{*} cmd[{d}]: unloaded {}", .{ instance(), self.idx, self.coords });
                 const lock = &instance().worklist.getPtr(self.coords).?.lock;
-                std.debug.assert(lock.*);
-                lock.* = false;
+                std.debug.assert(lock.* == .write);
+                lock.* = .open;
 
                 const chunk = kv.value;
                 if (chunk.faces != null) try Game.instance().renderer.destroy_chunk_mesh(chunk);
@@ -434,10 +434,11 @@ const Command = struct {
                 instance().chunk_pool.destroy(chunk);
             },
             .mesh => |mesh| {
-                const lock = &instance().worklist.getPtr(self.coords).?.lock;
-                std.debug.assert(lock.*);
                 std.debug.assert(@reduce(.And, mesh[0].?.coords == self.coords));
-                lock.* = false;
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.* == .write);
+                lock.* = .open;
+
                 mesh[0].?.faces = mesh[1];
                 if (mesh[1]) |faces| {
                     std.log.debug(
@@ -454,14 +455,14 @@ const Command = struct {
 
                 for (Chunk.neighbours2) |d| {
                     const l = &instance().worklist.getPtr(self.coords + d).?.lock;
-                    std.debug.assert(l.*);
-                    l.* = false;
+                    std.debug.assert(l.* == .read);
+                    l.rd_unlock();
                 }
             },
             .noop => {
                 const lock = &instance().worklist.getPtr(self.coords).?.lock;
-                std.debug.assert(lock.*);
-                lock.* = false;
+                std.debug.assert(lock.* == .write);
+                lock.* = .open;
             },
         }
     }
@@ -476,6 +477,30 @@ const Command = struct {
 };
 
 const Work = struct {
-    lock: bool = false,
+    lock: Lock = .open,
     commands: std.DoublyLinkedList = .{},
+
+    const Lock = union(enum) {
+        open,
+        read: usize,
+        write,
+
+        fn rd_lock(self: *Lock) void {
+            switch (self.*) {
+                .open => self.* = .{ .read = 1 },
+                .read => |*x| x.* += 1,
+                .write => unreachable,
+            }
+        }
+
+        fn rd_unlock(self: *Lock) void {
+            switch (self.*) {
+                .read => |*x| {
+                    x.* -= 1;
+                    if (x.* == 0) self.* = .open;
+                },
+                else => unreachable,
+            }
+        }
+    };
 };
