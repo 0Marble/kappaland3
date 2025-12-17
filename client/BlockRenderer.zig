@@ -294,13 +294,13 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         bool,
         ".main.renderer.frustum_culling",
     ).?;
-    // const do_occlusion_culling = App.settings().get_value(
-    //     bool,
-    //     ".main.renderer.occlusion_culling",
-    // ).?;
+    const do_occlusion_culling = App.settings().get_value(
+        bool,
+        ".main.renderer.occlusion_culling",
+    ).?;
 
     const cam = &Game.instance().camera;
-    // const cam_chunk = cam.chunk_coords();
+    const cam_chunk = cam.chunk_coords();
     var meshes: std.ArrayList(MeshOrder) = .empty;
     self.triangle_cnt = 0;
 
@@ -310,10 +310,10 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         const rad = bound[3];
         if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
 
-        // if (do_occlusion_culling and
-        //     !@reduce(.And, mesh.chunk.coords == cam_chunk) and
-        //     mesh.is_occluded(self))
-        //     continue;
+        if (do_occlusion_culling and
+            !@reduce(.And, mesh.chunk.coords == cam_chunk) and
+            mesh.chunk.is_occluded)
+            continue;
 
         try meshes.append(App.frame_alloc(), .{
             .mesh = mesh,

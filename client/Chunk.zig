@@ -15,10 +15,12 @@ pub const Coords = @Vector(3, i32);
 coords: Coords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block.Id,
 faces: ?[]const Face,
+occlusion: OcclusionMask,
 
 cache_valid: bool,
 neighbours_cache: [6]?*Chunk,
 neighbours2_cache: [26]?*Chunk,
+is_occluded: bool,
 
 const Chunk = @This();
 
@@ -26,6 +28,7 @@ pub fn init(self: *Chunk, coords: Coords) void {
     self.coords = coords;
     self.cache_valid = false;
     self.faces = null;
+    self.occlusion = .{};
 }
 
 pub fn get(self: *Chunk, pos: Coords) Block.Id {
@@ -151,12 +154,6 @@ pub fn aabb(self: *Chunk) zm.AABBf {
     return .init(pos, pos + size);
 }
 
-pub fn get_occluder(self: *Chunk) ?zm.AABBf {
-    const all_full = std.mem.indexOfScalar(Coords, &self.blocks, .air) == null;
-    if (!all_full) return null;
-    return self.aabb();
-}
-
 pub fn bounding_sphere(self: *Chunk) zm.Vec4f {
     const size: zm.Vec3f = @splat(CHUNK_SIZE);
     const coords: zm.Vec3f = @floatFromInt(self.coords);
@@ -201,7 +198,7 @@ pub const neighbours2 = blk: {
 pub fn build_mesh(self: *Chunk, faces: *std.array_list.Managed(Face)) !void {
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ 0, 0, @intCast(i) };
-        _ = @intFromBool(try self.build_layer_mesh(.front, start, faces));
+        self.occlusion.front = try self.build_layer_mesh(.front, start, faces);
     }
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{
@@ -209,19 +206,19 @@ pub fn build_mesh(self: *Chunk, faces: *std.array_list.Managed(Face)) !void {
             0,
             @intCast(CHUNK_SIZE - 1 - i),
         };
-        _ = @intFromBool(try self.build_layer_mesh(.back, start, faces));
+        self.occlusion.back = try self.build_layer_mesh(.back, start, faces);
     }
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
-        _ = @intFromBool(try self.build_layer_mesh(.right, start, faces));
+        self.occlusion.right = try self.build_layer_mesh(.right, start, faces);
     }
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
-        _ = @intFromBool(try self.build_layer_mesh(.left, start, faces));
+        self.occlusion.left = try self.build_layer_mesh(.left, start, faces);
     }
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ 0, @intCast(i), 0 };
-        _ = @intFromBool(try self.build_layer_mesh(.top, start, faces));
+        self.occlusion.top = try self.build_layer_mesh(.top, start, faces);
     }
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{
@@ -229,7 +226,7 @@ pub fn build_mesh(self: *Chunk, faces: *std.array_list.Managed(Face)) !void {
             @intCast(CHUNK_SIZE - 1 - i),
             0,
         };
-        _ = @intFromBool(try self.build_layer_mesh(.bot, start, faces));
+        self.occlusion.bot = try self.build_layer_mesh(.bot, start, faces);
     }
 }
 
@@ -310,8 +307,48 @@ pub fn ensure_neighbours(self: *Chunk) void {
 }
 
 fn is_solid_maybe_neighbour(self: *Chunk, pos: Coords) bool {
-    return self.is_solid(pos);
+    if (self.get_safe(pos)) |_| return self.is_solid(pos);
+    const chunk = world_to_chunk(pos) + self.coords;
+    const block = world_to_block(pos);
+
+    std.debug.assert(self.cache_valid);
+    for (self.neighbours2_cache) |n| {
+        const other = n orelse continue;
+        if (@reduce(.And, other.coords == chunk)) return other.is_solid(block);
+    }
+    return false;
 }
+
+pub fn cache_occluded(self: *Chunk) void {
+    std.debug.assert(self.cache_valid);
+    for (self.neighbours_cache, std.meta.tags(Block.Face)) |o, dir| {
+        const other = o orelse {
+            self.is_occluded = false;
+            return;
+        };
+        const occluded = other.occludes(dir.flip());
+        if (!occluded) {
+            self.is_occluded = false;
+            return;
+        }
+    }
+    self.is_occluded = true;
+}
+
+fn occludes(self: *Chunk, dir: Block.Face) bool {
+    switch (dir) {
+        inline else => |tag| return @field(self.occlusion, @tagName(tag)) == true,
+    }
+}
+
+const OcclusionMask = packed struct {
+    front: bool = false,
+    back: bool = false,
+    left: bool = false,
+    right: bool = false,
+    top: bool = false,
+    bot: bool = false,
+};
 
 pub const Face = packed struct(u64) {
     // A:

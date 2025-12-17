@@ -223,7 +223,7 @@ fn push_command(self: *ChunkManager, cmd: *Command) !bool {
 }
 
 pub fn process(self: *ChunkManager) !void {
-    if (!self.mutex.tryLock()) return;
+    self.mutex.lock();
     defer {
         self.mutex.unlock();
         self.condition.broadcast();
@@ -443,20 +443,29 @@ const Command = struct {
                 std.debug.assert(lock.* == .write);
                 lock.* = .open;
 
-                const old_faces = mesh[0].?.faces;
-                mesh[0].?.faces = mesh[1];
+                const chunk = mesh[0].?;
+
+                const old_faces = chunk.faces;
+                chunk.faces = mesh[1];
                 if (mesh[1]) |faces| {
                     logger.debug(
                         "{*} cmd[{d}]: uploaded mesh for {}, size={d}",
                         .{ instance(), self.idx, self.coords, faces.len * @sizeOf(Chunk.Face) },
                     );
-                    try Game.instance().renderer.upload_chunk_mesh(mesh[0].?);
+                    try Game.instance().renderer.upload_chunk_mesh(chunk);
                     if (old_faces) |old| instance().gpa.allocator().free(old);
                 } else {
                     logger.warn(
                         "{*} cmd[{d}]: failed to build mesh for {}",
                         .{ instance(), self.idx, self.coords },
                     );
+                }
+
+                chunk.cache_occluded();
+                for (chunk.neighbours_cache) |n| {
+                    const other = n orelse continue;
+                    other.ensure_neighbours();
+                    other.cache_occluded();
                 }
 
                 for (Chunk.neighbours2) |d| {
