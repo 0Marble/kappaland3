@@ -57,7 +57,7 @@ pub fn init() !void {
     try init_memory();
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
-    app.frame_data = .{};
+    app.frame_data = .{ .start = std.time.timestamp() };
     try app.keys_state.init();
 
     try init_sdl();
@@ -196,11 +196,13 @@ fn on_imgui(self: *App) !void {
     var buf: std.ArrayList(u8) = .empty;
     const w = buf.writer(App.frame_alloc());
     try w.print(
+        \\runtime: {f}
         \\CPU Memory: 
         \\    main:  {f}
         \\    frame: {f}
         \\
     , .{
+        util.TimeFmt{ .seconds = std.time.timestamp() - self.frame_data.start },
         util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
     });
@@ -337,6 +339,7 @@ const FrameData = struct {
     frame_start_time: i64 = 0,
     frame_end_time: i64 = 0,
     this_frame_start: i64 = 0,
+    start: i64,
 
     fn on_frame_start(self: *FrameData) void {
         self.this_frame_start = std.time.milliTimestamp();
