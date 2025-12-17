@@ -41,6 +41,7 @@ pub const Layer = struct {
     on_update: *const fn (*anyopaque) UnhandledError!void,
     on_frame_end: *const fn (*anyopaque) UnhandledError!void,
     on_detatch: *const fn (*anyopaque) void,
+    on_resize: *const fn (*anyopaque, i32, i32) UnhandledError!void,
 };
 
 const App = @This();
@@ -260,9 +261,11 @@ fn handle_events() !bool {
             c.SDL_EVENT_QUIT => running = false,
             c.SDL_EVENT_WINDOW_RESIZED => {
                 gl.Viewport(0, 0, evt.window.data1, evt.window.data2);
-                // try App.renderer().resize_framebuffers(evt.window.data1, evt.window.data2);
-                // game_state().camera.frustum.update_aspect(@as(f32, @floatFromInt(evt.window.data1)) /
-                //     @as(f32, @floatFromInt(evt.window.data2)));
+                for (0..app.layers.items.len) |i| {
+                    const j = app.layers.items.len - 1 - i;
+                    const layer = app.layers.items[j];
+                    try layer.on_resize(layer.data, evt.window.data1, evt.window.data2);
+                }
             },
             c.SDL_EVENT_KEY_DOWN => {
                 try keys().emit_keydown(.from_sdl(evt.key.scancode));

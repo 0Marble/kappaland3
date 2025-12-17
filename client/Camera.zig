@@ -6,6 +6,7 @@ const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 pub const Frustum = @import("Frustum.zig");
 const Options = @import("ClientOptions");
+const Chunk = @import("Chunk.zig");
 
 const MAX_REACH = 10;
 
@@ -169,4 +170,10 @@ pub fn point_in_frustum(self: *Camera, point: zm.Vec3f) bool {
 
 pub fn sphere_in_frustum(self: *Camera, center: zm.Vec3f, radius: f32) bool {
     return self.frustum_for_occlusion.sphere_in_frustum(center, radius);
+}
+
+pub fn chunk_coords(self: *Camera) Chunk.Coords {
+    var cam_chunk: Chunk.Coords = @intFromFloat(self.frustum_for_occlusion.pos);
+    cam_chunk = @divFloor(cam_chunk, @as(Chunk.Coords, @splat(Chunk.CHUNK_SIZE)));
+    return cam_chunk;
 }

@@ -134,8 +134,8 @@ fn build_client(
     client.root_module.addImport("SettingsMenu", b.createModule(.{
         .root_source_file = b.path("assets/SettingsMenu.zon"),
     }));
-    client.root_module.addImport("Block", b.createModule(.{
-        .root_source_file = b.path("assets/Block.zon"),
+    client.root_module.addImport("BlockModel", b.createModule(.{
+        .root_source_file = b.path("assets/BlockModel.zon"),
     }));
     client.root_module.linkLibrary(imgui);
     b.installArtifact(client);

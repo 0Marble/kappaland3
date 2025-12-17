@@ -1,5 +1,6 @@
 pub const BlockRenderer = @import("BlockRenderer.zig");
 const App = @import("App.zig");
+const Game = @import("Game.zig");
 const gl = @import("gl");
 const std = @import("std");
 const Chunk = @import("Chunk.zig");
@@ -116,8 +117,12 @@ pub fn deinit(self: *Renderer) void {
     self.ssao_blur_pass.deinit();
 }
 
-pub fn request_draw_chunk(self: *Renderer, chunk: *Chunk) !void {
-    try self.block_renderer.request_draw_chunk(chunk);
+pub fn upload_chunk_mesh(self: *Renderer, chunk: *Chunk) !void {
+    try self.block_renderer.upload_chunk_mesh(chunk);
+}
+
+pub fn destroy_chunk_mesh(self: *Renderer, chunk: *Chunk) !void {
+    try self.block_renderer.destroy_chunk_mesh(chunk);
 }
 
 pub fn draw(self: *Renderer) (OOM || GlError)!void {
@@ -133,11 +138,12 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
 
     try self.block_renderer.draw();
 
+    const camera = &Game.instance().camera;
     if (enable_ssao) {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
         try gl_call(gl.Disable(gl.DEPTH_TEST));
         try self.ssao_pass.bind();
-        try self.ssao_pass.set_mat4("u_proj", App.game_state().camera.proj_mat());
+        try self.ssao_pass.set_mat4("u_proj", camera.proj_mat());
         try self.ssao_pass.set_vec2("u_noise_scale", .{
             @as(f32, @floatFromInt(self.cur_width)) / NOISE_SIZE,
             @as(f32, @floatFromInt(self.cur_height)) / NOISE_SIZE,
@@ -163,9 +169,9 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
     try self.lighting_pass.bind();
-    try self.lighting_pass.set_vec3("u_view_pos", App.game_state().camera.frustum.pos);
+    try self.lighting_pass.set_vec3("u_view_pos", camera.frustum.pos);
     const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
-    const light_dir = App.game_state().camera.view_mat().multiplyVec4(light_dir_world);
+    const light_dir = camera.view_mat().multiplyVec4(light_dir_world);
     try self.lighting_pass.set_vec3("u_light_dir", zm.vec.xyz(light_dir));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POSITION_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));

@@ -6,6 +6,7 @@ const Renderer = @import("Renderer.zig");
 pub const ChunkManager = @import("ChunkManager.zig");
 const Options = @import("ClientOptions");
 const Coords = @import("Chunk.zig").Coords;
+const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 
 const Game = @This();
 const WIDTH = Options.world_size;
@@ -27,6 +28,7 @@ pub fn layer() App.Layer {
         .on_update = @ptrCast(&on_update),
         .on_frame_end = @ptrCast(&on_frame_end),
         .on_detatch = @ptrCast(&on_detatch),
+        .on_resize = @ptrCast(&on_resize),
     };
 }
 
@@ -42,12 +44,13 @@ fn on_attatch(self: *Game) !void {
     try self.renderer.init();
     self.chunk_manager = try ChunkManager.init(null);
 
+    const size: Coords = .{ WIDTH, HEIGHT, WIDTH };
+    const two: Coords = @splat(2);
     for (0..WIDTH) |i| {
         for (0..HEIGHT) |j| {
             for (0..WIDTH) |k| {
                 var xyz: Coords = .{ @intCast(i), @intCast(j), @intCast(k) };
-                xyz -= .{ WIDTH / 2, HEIGHT - 1, WIDTH / 2 };
-
+                xyz -= size / two;
                 try self.chunk_manager.load(xyz);
             }
         }
@@ -57,11 +60,12 @@ fn on_attatch(self: *Game) !void {
 fn on_imgui(self: *Game) !void {
     const camera_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
-        "xyz: {:.3}, angles: {:.3}, view: {:.3}",
+        "xyz: {:.3}, angles: {:.3}, view: {:.3}\nchunk: {}",
         .{
             self.camera.frustum.pos,
             self.camera.frustum.angles,
             self.camera.frustum.view_dir(),
+            self.camera.chunk_coords(),
         },
         0,
     ));
@@ -71,14 +75,23 @@ fn on_imgui(self: *Game) !void {
 
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
+    try self.renderer.on_frame_start();
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {
     try self.chunk_manager.process();
+    try self.renderer.draw();
 }
 
 fn on_frame_end(self: *Game) App.UnhandledError!void {
     _ = self;
+}
+
+fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
+    try self.renderer.resize_framebuffers(w, h);
+    const width: f32 = @floatFromInt(w);
+    const height: f32 = @floatFromInt(h);
+    self.camera.frustum.update_aspect(width / height);
 }
 
 fn on_detatch(self: *Game) void {

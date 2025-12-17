@@ -4,16 +4,9 @@ const Game = @import("Game.zig");
 const Chunk = @import("Chunk.zig");
 const c = @import("c.zig").c;
 const MemoryUsage = @import("util.zig").MemoryUsage;
+const Block = @import("Block.zig");
 
-/// On the main thread, you may read from this at any time;
-/// Worker threads read from here, while having the mutex, inside `pop_next_command`;
-/// Worker threads may also write to individual chunk's `locked` field,
-/// inside `pop_next_command -> cmd.prepare_to_run` (they have mutex at the time);
-/// Writing (i.e. `put`/`remove`) happens on the main thread in `process -> cmd.apply`, and
-/// the main thread has the mutex at that time;
-///
-/// If there are issues with writing inside workers, we can use an atomic for `locked`?
-chunks: std.AutoHashMapUnmanaged(Chunk.Coords, *Chunk),
+chunks: std.AutoArrayHashMapUnmanaged(Chunk.Coords, *Chunk),
 
 chunk_pool: std.heap.MemoryPool(Chunk),
 command_pool: std.heap.MemoryPool(Command),
@@ -25,9 +18,13 @@ mutex: std.Thread.Mutex,
 condition: std.Thread.Condition,
 threads: []std.Thread,
 // use this inside threads, i.e. for `worklist` and `complete`
-gpa: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
-worklist: std.AutoArrayHashMapUnmanaged(Chunk.Coords, CommandQueue),
+gpa: Gpa,
+worklist: std.AutoArrayHashMapUnmanaged(Chunk.Coords, Work),
+worklist_size: usize,
 complete: std.ArrayList(*Command),
+thread_gpas: []Gpa,
+
+const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
 
 const ChunkManager = @This();
 const Instance = struct {
@@ -35,7 +32,7 @@ const Instance = struct {
     var ok: bool = false;
 };
 
-fn instance() *ChunkManager {
+pub fn instance() *ChunkManager {
     return &Instance.instance;
 }
 
@@ -50,20 +47,24 @@ pub fn init(thread_count: ?usize) !*ChunkManager {
         .mutex = .{},
         .condition = .{},
         .worklist = .empty,
+        .worklist_size = 0,
         .complete = .empty,
         .running = true,
         .threads = try App.gpa().alloc(std.Thread, thread_cnt),
+        .thread_gpas = try App.gpa().alloc(Gpa, thread_cnt),
         .cmd_counter = 0,
         .gpa = .init,
     };
     const self = &Instance.instance;
     errdefer {
         for (self.threads) |t| t.join();
+        App.gpa().free(self.thread_gpas);
         App.gpa().free(self.threads);
     }
 
-    for (self.threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, worker, .{self});
+    for (self.threads, self.thread_gpas) |*t, *g| {
+        g.* = .init;
+        t.* = try std.Thread.spawn(.{}, worker, .{ self, g.allocator() });
     }
 
     Instance.ok = true;
@@ -80,7 +81,7 @@ pub fn on_imgui(self: *ChunkManager) !void {
         \\    thread_gpa: {f}
     , .{
         self.chunks.count(),
-        self.worklist.count(),
+        self.worklist_size,
         self.complete.items.len,
         MemoryUsage.from_bytes(self.gpa.total_requested_bytes),
     }, 0);
@@ -96,6 +97,19 @@ pub fn deinit(self: *ChunkManager) void {
     self.condition.broadcast();
     for (self.threads) |t| t.join();
     App.gpa().free(self.threads);
+
+    for (self.thread_gpas) |*g| _ = g.deinit();
+    App.gpa().free(self.thread_gpas);
+
+    for (self.chunks.values()) |chunk| {
+        if (chunk.faces) |faces| self.gpa.allocator().free(faces);
+    }
+    for (self.complete.items) |cmd| {
+        switch (cmd.body) {
+            .mesh => |mesh| if (mesh[1]) |faces| self.gpa.allocator().free(faces),
+            else => {},
+        }
+    }
 
     self.chunks.deinit(App.gpa());
     self.chunk_pool.deinit();
@@ -120,15 +134,33 @@ pub fn load(self: *ChunkManager, coords: Chunk.Coords) !void {
         .idx = self.cmd_counter,
     };
 
-    try self.push_command(cmd);
     std.log.debug("{*}: cmd[{d}]:load({})", .{ self, cmd.idx, coords });
+
+    self.mutex.lock();
+    defer self.mutex.unlock();
+    if (try self.push_command(cmd)) try self.build_mesh(coords);
+}
+
+// already has the mutex, since its not called directly
+fn build_mesh(self: *ChunkManager, coords: Chunk.Coords) !void {
+    const cmd: *Command = try self.command_pool.create();
+    errdefer self.command_pool.destroy(cmd);
+    cmd.* = .{
+        .coords = coords,
+        .body = .{ .mesh = .{ null, null } },
+        .link = .{},
+        .idx = self.cmd_counter,
+    };
+    std.log.debug("{*}: cmd[{d}]:build_mesh({})", .{ self, cmd.idx, coords });
+
+    _ = try self.push_command(cmd);
 }
 
 pub fn set_block(
     self: *ChunkManager,
     chunk_coords: Chunk.Coords,
     block_coords: Chunk.Coords,
-    block_id: Chunk.BlockId,
+    block_id: Block.Id,
 ) !void {
     const cmd: *Command = try self.command_pool.create();
     errdefer self.command_pool.destroy(cmd);
@@ -138,11 +170,14 @@ pub fn set_block(
         .link = .{},
         .idx = self.cmd_counter,
     };
-    try self.push_command(cmd);
     std.log.debug(
         "{*}: cmd[{d}]:set_block({}@{}:{})",
         .{ self, cmd.idx, block_id, chunk_coords, block_coords },
     );
+
+    self.mutex.lock();
+    defer self.mutex.unlock();
+    if (try self.push_command(cmd)) try self.build_mesh(chunk_coords);
 }
 
 pub fn unload(self: *ChunkManager, coords: Chunk.Coords) !void {
@@ -154,60 +189,97 @@ pub fn unload(self: *ChunkManager, coords: Chunk.Coords) !void {
         .link = .{},
         .idx = self.cmd_counter,
     };
-    try self.push_command(cmd);
-    std.log.debug("{*}: cmd[{d}]:unload({})", .{ self, cmd.idx, coords });
-}
 
-fn push_command(self: *ChunkManager, cmd: *Command) !void {
-    self.cmd_counter +%= 1;
+    std.log.debug("{*}: cmd[{d}]:unload({})", .{ self, cmd.idx, coords });
+
     self.mutex.lock();
     defer self.mutex.unlock();
+    _ = try self.push_command(cmd);
+}
+
+// we have the mutex here
+fn push_command(self: *ChunkManager, cmd: *Command) !bool {
+    self.cmd_counter +%= 1;
     const entry = try self.worklist.getOrPutValue(self.gpa.allocator(), cmd.coords, .{});
-    const list = entry.value_ptr;
+
+    const list = &entry.value_ptr.commands;
+    var it = list.first;
+    while (it) |link| : (it = link.next) {
+        const other: *Command = @alignCast(@fieldParentPtr("link", link));
+        if (other.body == .load and cmd.body == .load) {
+            self.command_pool.destroy(cmd);
+            return false;
+        }
+    }
+
+    self.worklist_size += 1;
     list.prepend(&cmd.link);
     self.condition.signal();
+    return true;
 }
 
 pub fn process(self: *ChunkManager) !void {
     if (!self.mutex.tryLock()) return;
-    defer self.mutex.unlock();
-
-    var i: usize = 0;
-    while (i < self.complete.items.len) {
-        const cmd = self.complete.items[i];
-        if (self.chunks.get(cmd.coords)) |old| {
-            if (old.locked) {
-                i += 1;
-                continue;
-            }
-        }
-        _ = self.complete.swapRemove(i);
-        try cmd.apply();
-        self.command_pool.destroy(cmd);
+    defer {
+        self.mutex.unlock();
+        self.condition.broadcast();
     }
+
+    for (self.complete.items) |cmd| {
+        try cmd.apply();
+    }
+    self.complete.clearRetainingCapacity();
 }
 
 // NOTE: runs in separate threads!
-fn worker(self: *ChunkManager) void {
+fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
     self.mutex.lock();
     defer self.mutex.unlock(); // is locked inside the loop
+
     const tid = std.Thread.getCurrentId();
     std.log.info("[Thread {}] started", .{tid});
+
+    var faces = std.array_list.Managed(Chunk.Face).init(gpa);
+    defer faces.deinit();
 
     while (true) {
         // at this point mutex is locked
         while (self.pop_next_command()) |cmd| {
-            std.log.debug("[Thread {}] Picked up cmd[{d}]", .{ tid, cmd.idx });
+            std.log.debug(
+                "[Thread {}] Picked up cmd[{d}]: {}",
+                .{ tid, cmd.idx, std.meta.activeTag(cmd.body) },
+            );
             // relock here so that the other threads may get work
             // was locked at the start or on previous iter
             self.mutex.unlock();
-            cmd.run();
+
+            faces.clearRetainingCapacity();
+            cmd.run(&faces) catch |err| {
+                std.log.warn("{*}: cmd[{d}]: failed: {}", .{ self, cmd.idx, err });
+                cmd.body = .noop;
+            };
+
+            std.log.debug("[Thread {}] Completed cmd[{d}]", .{ tid, cmd.idx });
             self.mutex.lock();
+
+            switch (cmd.body) {
+                .mesh => |*mesh| {
+                    std.debug.assert(mesh[0] != null);
+                    mesh[1] = self.gpa.allocator().dupe(Chunk.Face, faces.items) catch |err| blk: {
+                        std.log.err(
+                            "{*}: cmd[{d}]: could not dupe chunk faces: {}",
+                            .{ self, cmd.idx, err },
+                        );
+                        break :blk null;
+                    };
+                },
+                else => {},
+            }
 
             self.complete.append(self.gpa.allocator(), cmd) catch |err| {
                 std.log.err(
-                    "[Thread {}] could not mark the command as completed! {}. Badness likely ensues",
-                    .{ tid, err },
+                    "[Thread {}] cmd[{d}]: could not mark the command as completed! {}",
+                    .{ tid, cmd.idx, err },
                 );
             };
         }
@@ -222,24 +294,18 @@ fn worker(self: *ChunkManager) void {
 
 // NOTE: runs in separate threads, but by the thread that has the mutex
 fn pop_next_command(self: *ChunkManager) ?*Command {
-    for (self.worklist.values()) |*list| {
-        const link: *std.DoublyLinkedList.Node = list.first.?;
+    for (self.worklist.values()) |*work| {
+        if (work.lock) continue;
+        const link = work.commands.last orelse continue;
         const cmd: *Command = @alignCast(@fieldParentPtr("link", link));
-        if (self.chunks.get(cmd.coords)) |cur| {
-            if (cur.locked) continue;
-        }
         if (!cmd.prepare_to_run()) continue;
-
-        list.remove(link);
-        if (list.first == null) {
-            _ = self.worklist.swapRemove(cmd.coords);
-        }
+        work.commands.remove(link);
+        work.lock = true;
+        self.worklist_size -= 1;
         return cmd;
     }
     return null;
 }
-
-const CommandQueue = std.DoublyLinkedList;
 
 const Command = struct {
     coords: Chunk.Coords,
@@ -249,33 +315,74 @@ const Command = struct {
 
     // NOTE: runs in separate threads, but by the thread that has the mutex
     pub fn prepare_to_run(self: *Command) bool {
-        if (instance().chunks.get(self.coords)) |old| {
-            old.locked = true;
-        }
+        switch (self.body) {
+            .mesh => |*mesh| {
+                std.debug.assert(mesh[0] == null);
+                const chunk = instance().chunks.get(self.coords) orelse {
+                    std.log.warn(
+                        "{*}: cmd[{d}]: requested meshing for inactive chunk {}, converting to noop",
+                        .{ instance(), self.idx, self.coords },
+                    );
+                    self.body = .noop;
+                    return true;
+                };
 
+                for (Chunk.neighbours2) |d| {
+                    const neighbour_work = instance().worklist.getPtr(d + self.coords) orelse {
+                        std.log.warn(
+                            "{*}: cmd[{d}]: no data for neighbour of {}, skipping",
+                            .{ instance(), self.idx, self.coords },
+                        );
+                        self.body = .noop;
+                        return true;
+                    };
+                    if (neighbour_work.lock) return false;
+                }
+
+                for (Chunk.neighbours2) |d| {
+                    instance().worklist.getPtr(d + self.coords).?.lock = true;
+                }
+
+                mesh.* = .{ chunk, null };
+                chunk.ensure_neighbours();
+            },
+            else => {},
+        }
         return true;
     }
 
     // NOTE: runs in separate threads!
-    pub fn run(self: *Command) void {
+    pub fn run(self: *Command, faces: *std.array_list.Managed(Chunk.Face)) !void {
         switch (self.body) {
             .load => |ch| ch.generate(),
             .unload => {},
             .set_block => {},
-            // TODO
-            .mesh => |_| {},
+            .mesh => |mesh| {
+                try mesh[0].?.build_mesh(faces);
+            },
+            .noop => {},
         }
     }
 
+    // runs inside main thread while it has the mutex
     pub fn apply(self: *Command) !void {
         switch (self.body) {
             .load => |ch| {
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.*);
+
                 if (try instance().chunks.fetchPut(App.gpa(), ch.coords, ch)) |old| {
-                    std.debug.assert(!old.value.locked);
                     instance().chunk_pool.destroy(old.value);
                 }
-                ch.locked = false;
+
+                lock.* = false;
                 std.log.debug("{*}: cmd[{d}]: loaded {}", .{ instance(), self.idx, ch.coords });
+
+                ch.ensure_neighbours();
+                for (ch.neighbours2_cache) |n| {
+                    const chunk = n orelse continue;
+                    chunk.cache_valid = false;
+                }
             },
             .set_block => |b| {
                 const chunk = instance().chunks.get(self.coords) orelse {
@@ -285,30 +392,90 @@ const Command = struct {
                     );
                     return;
                 };
+
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.*);
+                lock.* = false;
+
                 chunk.set(b[0], b[1]);
-                chunk.locked = false;
+
                 std.log.debug(
                     "{*}: cmd[{d}]: set block {}@{}:{}",
                     .{ instance(), self.idx, b[1], self.coords, b[0] },
                 );
+
+                chunk.ensure_neighbours();
+                for (chunk.neighbours2_cache) |n| {
+                    const other = n orelse continue;
+                    try instance().build_mesh(other.coords);
+                }
             },
             .unload => {
-                const chunk = instance().chunks.fetchRemove(self.coords) orelse {
-                    std.log.warn("{*}: cmd[{d}]: tried to unload an inactive chunk", .{ instance(), self.idx });
+                const kv = instance().chunks.fetchSwapRemove(self.coords) orelse {
+                    std.log.warn(
+                        "{*}: cmd[{d}]: tried to unload an inactive chunk {}",
+                        .{ instance(), self.idx, self.coords },
+                    );
                     return;
                 };
-                instance().chunk_pool.destroy(chunk.value);
                 std.log.debug("{*} cmd[{d}]: unloaded {}", .{ instance(), self.idx, self.coords });
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.*);
+                lock.* = false;
+
+                const chunk = kv.value;
+                if (chunk.faces != null) try Game.instance().renderer.destroy_chunk_mesh(chunk);
+
+                chunk.ensure_neighbours();
+                for (chunk.neighbours2_cache) |n| {
+                    const ch = n orelse continue;
+                    ch.cache_valid = false;
+                }
+                instance().chunk_pool.destroy(chunk);
             },
-            // TODO
-            .mesh => {},
+            .mesh => |mesh| {
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.*);
+                std.debug.assert(@reduce(.And, mesh[0].?.coords == self.coords));
+                lock.* = false;
+                mesh[0].?.faces = mesh[1];
+                if (mesh[1]) |faces| {
+                    std.log.debug(
+                        "{*} cmd[{d}]: uploaded mesh for {}, size={d}",
+                        .{ instance(), self.idx, self.coords, faces.len * @sizeOf(Chunk.Face) },
+                    );
+                    try Game.instance().renderer.upload_chunk_mesh(mesh[0].?);
+                } else {
+                    std.log.warn(
+                        "{*} cmd[{d}]: failed to build mesh for {}",
+                        .{ instance(), self.idx, self.coords },
+                    );
+                }
+
+                for (Chunk.neighbours2) |d| {
+                    const l = &instance().worklist.getPtr(self.coords + d).?.lock;
+                    std.debug.assert(l.*);
+                    l.* = false;
+                }
+            },
+            .noop => {
+                const lock = &instance().worklist.getPtr(self.coords).?.lock;
+                std.debug.assert(lock.*);
+                lock.* = false;
+            },
         }
     }
 
     const Body = union(enum) {
         load: *Chunk,
         unload: void,
-        set_block: struct { Chunk.Coords, Chunk.BlockId },
-        mesh: *Chunk,
+        set_block: struct { Chunk.Coords, Block.Id },
+        mesh: struct { ?*Chunk, ?[]const Chunk.Face },
+        noop: void,
     };
+};
+
+const Work = struct {
+    lock: bool = false,
+    commands: std.DoublyLinkedList = .{},
 };

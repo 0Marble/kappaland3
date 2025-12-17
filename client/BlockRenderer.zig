@@ -1,6 +1,6 @@
 const std = @import("std");
 const App = @import("App.zig");
-const World = @import("World.zig");
+const Game = @import("Game.zig");
 const Chunk = @import("Chunk.zig");
 const Options = @import("ClientOptions");
 const gl = @import("gl");
@@ -10,7 +10,7 @@ const Shader = @import("Shader.zig");
 const Renderer = @import("Renderer.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
-const BlockModel = @import("Block");
+const BlockModel = @import("BlockModel");
 const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
@@ -18,7 +18,7 @@ const GlError = util.GlError;
 const Self = @This();
 const BlockRenderer = @This();
 
-const CHUNK_SIZE = World.CHUNK_SIZE;
+const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 
 const DEFAULT_FACES_SIZE = 1024 * 1024 * 16;
 const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
@@ -29,6 +29,7 @@ block_vao: gl.uint,
 block_ibo: gl.uint,
 block_ubo: gl.uint,
 faces: GpuAlloc,
+had_realloc: bool,
 chunk_data_ssbo: gl.uint,
 indirect_buf: gl.uint,
 
@@ -36,25 +37,18 @@ drawn_chunks_cnt: usize,
 triangle_cnt: usize,
 cur_chunk_data_ssbo_size: usize,
 
-meshes: std.AutoArrayHashMapUnmanaged(World.ChunkCoords, *Mesh),
-free_meshes: std.ArrayList(*Mesh),
-
-finished_meshes: std.ArrayList(*Mesh),
-work_lock: std.Thread.Mutex,
-work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
+meshes: std.AutoArrayHashMapUnmanaged(*Chunk, *Mesh),
+mesh_pool: std.heap.MemoryPool(Mesh),
 
 pub fn init(self: *Self) !void {
     std.log.debug("{*} Initializing...", .{self});
 
+    self.had_realloc = false;
     self.drawn_chunks_cnt = 0;
     self.triangle_cnt = 0;
     self.meshes = .empty;
-    self.free_meshes = .empty;
+    self.mesh_pool = .init(App.gpa());
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
-
-    self.finished_meshes = .empty;
-    self.work_lock = .{};
-    self.work_alloc = .init;
 
     var sources: [2]Shader.Source = .{
         Shader.Source{
@@ -119,7 +113,7 @@ fn init_block_model(self: *Self) !void {
 }
 
 fn init_face_attribs(self: *Self) !void {
-    try gl_call(gl.BindVertexBuffer(FACE_DATA_BINDING, self.faces.buffer, 0, @sizeOf(Face)));
+    try gl_call(gl.BindVertexBuffer(FACE_DATA_BINDING, self.faces.buffer, 0, @sizeOf(Chunk.Face)));
 
     try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_A));
     try gl_call(gl.VertexAttribIFormat(FACE_DATA_LOCATION_A, 1, gl.UNSIGNED_INT, 0));
@@ -158,8 +152,8 @@ fn init_chunk_data(self: *Self) !void {
 pub fn deinit(self: *Self) void {
     self.block_pass.deinit();
     self.faces.deinit();
-    self.finished_meshes.deinit(self.work_alloc.allocator());
-    _ = self.work_alloc.deinit();
+    self.mesh_pool.deinit();
+    self.meshes.deinit(App.gpa());
 
     gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
     gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
@@ -169,9 +163,20 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn draw(self: *Self) (OOM || GlError)!void {
+    if (self.had_realloc) {
+        try gl_call(gl.BindVertexArray(self.block_vao));
+        try gl_call(gl.BindVertexBuffer(
+            FACE_DATA_BINDING,
+            self.faces.buffer,
+            0,
+            @sizeOf(Chunk.Face),
+        ));
+        try gl_call(gl.BindVertexArray(0));
+    }
+
     const draw_count = try self.compute_drawn_chunk_data();
 
-    const cam = &App.game_state().camera;
+    const cam = &Game.instance().camera;
 
     try self.block_pass.set_mat4("u_view", cam.view_mat());
     try self.block_pass.set_mat4("u_proj", cam.proj_mat());
@@ -193,91 +198,84 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(0));
 }
 
-fn process_work(self: *Self) !void {
-    const finished_meshes = blk: {
-        self.work_lock.lock();
-        defer self.work_lock.unlock();
+pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
+    const old_buf = self.faces.buffer;
 
-        const res = try App.frame_alloc().dupe(*Mesh, self.finished_meshes.items);
-        self.finished_meshes.clearRetainingCapacity();
-        break :blk res;
+    const mesh = if (self.meshes.get(chunk)) |mesh| blk: {
+        mesh.faces = chunk.faces.?;
+        const old_range = self.faces.get_range(mesh.handle).?;
+
+        try gl_call(gl.InvalidateBufferSubData(
+            self.faces.buffer,
+            old_range.offset,
+            old_range.size,
+        ));
+        mesh.handle = try self.faces.realloc(
+            mesh.handle,
+            mesh.faces.len * @sizeOf(Chunk.Face),
+            std.mem.Alignment.of(Chunk.Face),
+        );
+        break :blk mesh;
+    } else blk: {
+        const mesh: *Mesh = try self.mesh_pool.create();
+        mesh.faces = chunk.faces.?;
+        mesh.chunk = chunk;
+        mesh.handle = try self.faces.alloc(
+            mesh.faces.len * @sizeOf(Chunk.Face),
+            std.mem.Alignment.of(Chunk.Face),
+        );
+        try self.meshes.put(App.gpa(), chunk, mesh);
+        break :blk mesh;
     };
 
-    for (finished_meshes) |mesh| {
-        try self.upload_mesh(mesh);
-        const old = try self.meshes.fetchPut(App.static_alloc(), mesh.chunk.coords, mesh);
-        if (old) |kv| {
-            try self.free_meshes.append(App.static_alloc(), kv.value);
-        }
+    const range = self.faces.get_range(mesh.handle).?;
+    std.log.debug(
+        "{*}: chunk {}: mesh {}: offset={d}, size={d}",
+        .{ self, chunk.coords, mesh.handle, range.offset, range.size },
+    );
 
-        for (mesh.get_neighbours(self)) |o| {
-            const other = o orelse continue;
-            other.cache_valid = false;
-        }
-    }
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+    try gl_call(gl.BufferSubData(
+        gl.ARRAY_BUFFER,
+        range.offset,
+        range.size,
+        @ptrCast(mesh.faces),
+    ));
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 
-    if (finished_meshes.len != 0) {
-        try gl_call(gl.BindVertexArray(self.block_vao));
-        try gl_call(gl.BindVertexBuffer(
-            FACE_DATA_BINDING,
-            self.faces.buffer,
-            0,
-            @sizeOf(Face),
-        ));
-        try gl_call(gl.BindVertexArray(0));
-    }
+    self.had_realloc |= old_buf != self.faces.buffer;
+}
+
+pub fn destroy_chunk_mesh(self: *Self, chunk: *Chunk) !void {
+    _ = self;
+    _ = chunk;
 }
 
 fn on_imgui(self: *Self) !void {
     const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
+        \\Meshes: 
+        \\    total:     {d}
+        \\    drawn:     {d}
+        \\    triangles: {d}
         \\GPU Memory:
         \\    faces:      {f}
         \\    chunk_ssbo: {f}
     ,
         .{
+            self.meshes.count(),
+            self.drawn_chunks_cnt,
+            self.triangle_cnt,
             util.MemoryUsage.from_bytes(self.faces.size),
             util.MemoryUsage.from_bytes(self.cur_chunk_data_ssbo_size),
         },
         0,
     ));
     c.igText("%s", gpu_mem_faces);
-    c.igText("Chunks Drawn: %zu", self.drawn_chunks_cnt);
-    c.igText("Triangles: %zu", self.triangle_cnt);
 }
 
 pub fn on_frame_start(self: *Self) !void {
     try App.gui().add_to_frame(Self, "Debug", self, on_imgui, @src());
-    try self.process_work();
-}
-
-pub fn request_draw_chunk(self: *Self, chunk: *Chunk) !void {
-    const mesh = if (self.free_meshes.pop()) |mesh| blk: {
-        mesh.chunk = chunk;
-        break :blk mesh;
-    } else try Mesh.init(chunk);
-
-    try App.pool().spawn(build_mesh_task, .{ self, mesh });
-}
-
-fn build_mesh_task(self: *Self, mesh: *Mesh) void {
-    mesh.build_mesh() catch |err| {
-        std.log.warn(
-            "{*}: could not build chunk {} mesh: {}",
-            .{ self, mesh.chunk.coords, err },
-        );
-        return;
-    };
-
-    self.work_lock.lock();
-    defer self.work_lock.unlock();
-
-    self.finished_meshes.append(self.work_alloc.allocator(), mesh) catch |err| {
-        std.log.warn(
-            "{*}: could not append chunk {} to finished_meshes: {}",
-            .{ self, mesh.chunk.coords, err },
-        );
-    };
 }
 
 const MeshOrder = struct {
@@ -294,15 +292,13 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         bool,
         ".main.renderer.frustum_culling",
     ).?;
-    const do_occlusion_culling = App.settings().get_value(
-        bool,
-        ".main.renderer.occlusion_culling",
-    ).?;
+    // const do_occlusion_culling = App.settings().get_value(
+    //     bool,
+    //     ".main.renderer.occlusion_culling",
+    // ).?;
 
-    const cam = &App.game_state().camera;
-    const cam_chunk = World.world_to_chunk(World.to_world_coord(
-        cam.frustum_for_occlusion.pos,
-    ));
+    const cam = &Game.instance().camera;
+    // const cam_chunk = cam.chunk_coords();
     var meshes: std.ArrayList(MeshOrder) = .empty;
     self.triangle_cnt = 0;
 
@@ -312,10 +308,10 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         const rad = bound[3];
         if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
 
-        if (do_occlusion_culling and
-            !@reduce(.And, mesh.chunk.coords == cam_chunk) and
-            mesh.is_occluded(self))
-            continue;
+        // if (do_occlusion_culling and
+        //     !@reduce(.And, mesh.chunk.coords == cam_chunk) and
+        //     mesh.is_occluded(self))
+        //     continue;
 
         try meshes.append(App.frame_alloc(), .{
             .mesh = mesh,
@@ -335,8 +331,8 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
 
         indirect[i] = Indirect{
             .count = 6,
-            .instance_count = @intCast(mesh.mesh.faces.items.len),
-            .base_instance = @intCast(@divExact(range.offset, @sizeOf(Face))),
+            .instance_count = @intCast(mesh.mesh.faces.len),
+            .base_instance = @intCast(@divExact(range.offset, @sizeOf(Chunk.Face))),
             .base_vertex = 0,
             .first_index = 0,
         };
@@ -345,7 +341,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
             .y = mesh.mesh.chunk.coords[1],
             .z = mesh.mesh.chunk.coords[2],
         };
-        self.triangle_cnt += mesh.mesh.faces.items.len * 2;
+        self.triangle_cnt += mesh.mesh.faces.len * 2;
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
@@ -392,38 +388,6 @@ const ChunkData = extern struct {
     padding: u32 = 0xbeefcafe,
 };
 
-const Face = packed struct(u64) {
-    // A:
-    x: u4,
-    y: u4,
-    z: u4,
-    normal: u3,
-    _unused1: u1 = 0,
-    ao: u4,
-    _unused2: u12 = 0xeba,
-    // B:
-    _unused3: u32 = 0xdeadbeef,
-
-    fn define() [:0]const u8 {
-        return 
-        \\struct Face {
-        \\  uvec3 pos;
-        \\  uint n;
-        \\  uint ao;
-        \\};
-        \\
-        \\Face unpack(){
-        \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
-        \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
-        \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
-        \\  uint n = (vert_face_a >> uint(12)) & uint(0x0F);
-        \\  uint ao = (vert_face_a >> uint(16)) & uint(0x0F);
-        \\  return Face(uvec3(x, y, z), n, ao);
-        \\}
-        ;
-    }
-};
-
 const Indirect = extern struct {
     count: u32,
     instance_count: u32,
@@ -434,199 +398,9 @@ const Indirect = extern struct {
 
 const Mesh = struct {
     chunk: *Chunk,
-    faces: std.ArrayList(Face),
+    faces: []const Chunk.Face,
     handle: GpuAlloc.Handle,
-    occlusion: OcclusionMask,
-    cache_valid: bool,
-    cached_neighbours: [6]?*Mesh,
-
-    fn init(chunk: *Chunk) !*Mesh {
-        const self = try App.static_alloc().create(Mesh);
-        self.chunk = chunk;
-        self.handle = .invalid;
-        self.faces = .empty;
-        self.cache_valid = false;
-        return self;
-    }
-
-    fn build_mesh(self: *Mesh) !void {
-        self.cache_valid = false;
-        self.faces.clearRetainingCapacity();
-        self.occlusion = .{};
-
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ 0, 0, @intCast(i) };
-            self.occlusion.front = @intFromBool(try self.build_layer_mesh(.front, start));
-        }
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{
-                CHUNK_SIZE - 1,
-                0,
-                @intCast(CHUNK_SIZE - 1 - i),
-            };
-            self.occlusion.back = @intFromBool(try self.build_layer_mesh(.back, start));
-        }
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
-            self.occlusion.right = @intFromBool(try self.build_layer_mesh(.right, start));
-        }
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
-            self.occlusion.left = @intFromBool(try self.build_layer_mesh(.left, start));
-        }
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{ 0, @intCast(i), 0 };
-            self.occlusion.top = @intFromBool(try self.build_layer_mesh(.top, start));
-        }
-        for (0..CHUNK_SIZE) |i| {
-            const start: World.BlockCoords = .{
-                CHUNK_SIZE - 1,
-                @intCast(CHUNK_SIZE - 1 - i),
-                0,
-            };
-            self.occlusion.bot = @intFromBool(try self.build_layer_mesh(.bot, start));
-        }
-    }
-
-    const ao_mask: [BLOCK_FACE_CNT][4]u4 = .{
-        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // front
-        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // back
-        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // right
-        .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // left
-        .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // top
-        .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // bot
-    };
-
-    fn build_layer_mesh(
-        self: *Mesh,
-        normal: World.BlockFace,
-        start: World.BlockCoords,
-    ) !bool {
-        const right = -normal.left_dir();
-        const left = -right;
-        const up = normal.up_dir();
-        const down = -up;
-        const front = normal.front_dir();
-
-        var is_full_layer = true;
-
-        for (0..World.CHUNK_SIZE) |i| {
-            for (0..World.CHUNK_SIZE) |j| {
-                const u: i32 = @intCast(i);
-                const v: i32 = @intCast(j);
-
-                const pos = start +
-                    @as(World.BlockCoords, @splat(u)) * right +
-                    @as(World.BlockCoords, @splat(v)) * up;
-
-                const block = self.chunk.get(pos);
-                if (block == .air or self.chunk.is_solid(pos + front)) {
-                    is_full_layer = false;
-                    continue;
-                }
-                if (self.is_solid_relative(pos + front)) {
-                    continue;
-                }
-
-                var ao: u4 = 0;
-                const ao_idx: usize = @intFromEnum(normal);
-                if (self.is_solid_relative(pos + front + left)) ao |= ao_mask[ao_idx][0];
-                if (self.is_solid_relative(pos + front + right)) ao |= ao_mask[ao_idx][1];
-                if (self.is_solid_relative(pos + front + up)) ao |= ao_mask[ao_idx][2];
-                if (self.is_solid_relative(pos + front + down)) ao |= ao_mask[ao_idx][3];
-
-                const face = Face{
-                    .x = @intCast(pos[0]),
-                    .y = @intCast(pos[1]),
-                    .z = @intCast(pos[2]),
-                    .normal = @intFromEnum(normal),
-                    .ao = ao,
-                };
-
-                try self.faces.append(App.static_alloc(), face);
-            }
-        }
-
-        return is_full_layer;
-    }
-
-    fn is_solid_relative(self: *Mesh, pos: World.BlockCoords) bool {
-        if (self.chunk.get_safe(pos)) |b| {
-            return b != .air;
-        }
-        const size: World.WorldCoords = @splat(CHUNK_SIZE);
-        const glob = self.chunk.coords * size + pos;
-        const block = App.game_state().world.get_block(glob);
-        return block != null and block != .air;
-    }
-
-    fn occludes(self: *Mesh, dir: World.BlockFace) bool {
-        switch (dir) {
-            inline else => |tag| return @field(self.occlusion, @tagName(tag)) == 1,
-        }
-    }
-
-    fn is_occluded(self: *Mesh, renderer: *BlockRenderer) bool {
-        for (self.get_neighbours(renderer), World.BlockFace.list) |o, dir| {
-            const other = o orelse return false;
-            const occluded = other.occludes(dir.flip());
-            if (!occluded) return false;
-        }
-        return true;
-    }
-
-    fn get_neighbours(self: *Mesh, renderer: *BlockRenderer) []?*Mesh {
-        if (!self.cache_valid) {
-            for (&self.cached_neighbours, Chunk.neighbours) |*other, d| {
-                other.* = renderer.meshes.get(self.chunk.coords + d);
-            }
-            self.cache_valid = true;
-        }
-        return &self.cached_neighbours;
-    }
-
-    const OcclusionMask = packed struct {
-        front: u1 = 0,
-        back: u1 = 0,
-        left: u1 = 0,
-        right: u1 = 0,
-        top: u1 = 0,
-        bot: u1 = 0,
-    };
 };
-
-fn upload_mesh(self: *BlockRenderer, mesh: *Mesh) !void {
-    if (mesh.handle == .invalid) {
-        mesh.handle = try self.faces.alloc(
-            mesh.faces.items.len * @sizeOf(Face),
-            std.mem.Alignment.of(Face),
-        );
-    } else {
-        const old_range = self.faces.get_range(mesh.handle).?;
-
-        try gl_call(gl.InvalidateBufferSubData(
-            self.faces.buffer,
-            old_range.offset,
-            old_range.size,
-        ));
-        mesh.handle = try self.faces.realloc(
-            mesh.handle,
-            mesh.faces.items.len * @sizeOf(Face),
-            std.mem.Alignment.of(Face),
-        );
-    }
-
-    const range = self.faces.get_range(mesh.handle).?;
-
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
-    try gl_call(gl.BufferSubData(
-        gl.ARRAY_BUFFER,
-        range.offset,
-        range.size,
-        @ptrCast(mesh.faces.items),
-    ));
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
-}
 
 const block_verts = blk: {
     var res = std.mem.zeroes([BLOCK_VERT_CNT * 4]f32);
@@ -681,7 +455,7 @@ const block_vert =
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
-++ Face.define() ++
+++ Chunk.Face.define() ++
     \\
     \\layout (std430, binding = CHUNK_DATA_BINDING) buffer ChunkData{
     \\  ivec4 chunk_coords[];
