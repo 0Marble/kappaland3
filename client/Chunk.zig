@@ -344,3 +344,15 @@ pub const Face = packed struct(u64) {
         ;
     }
 };
+
+pub fn to_world_coord(pos: zm.Vec3f) Coords {
+    return @intFromFloat(@floor(pos));
+}
+
+pub fn world_to_chunk(w: Coords) Coords {
+    return @divFloor(w, @as(Coords, @splat(CHUNK_SIZE)));
+}
+
+pub fn world_to_block(w: Coords) Coords {
+    return @mod(w, @as(Coords, @splat(CHUNK_SIZE)));
+}

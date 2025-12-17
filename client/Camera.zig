@@ -7,6 +7,8 @@ const Keys = @import("Keys.zig");
 pub const Frustum = @import("Frustum.zig");
 const Options = @import("ClientOptions");
 const Chunk = @import("Chunk.zig");
+const Raycast = @import("Raycast.zig");
+const Game = @import("Game.zig");
 
 const MAX_REACH = 10;
 
@@ -62,20 +64,18 @@ pub fn deinit(self: *Camera) void {
 fn interact(self: *Camera, button: Keys.MouseButton, _: []const u8) void {
     const m = App.keys().mouse_pos();
     if (!App.keys().is_mouse_just_down(button)) return;
-    _ = m;
-    _ = self;
-    // const ray = zm.Rayf.init(self.frustum.pos, self.screen_to_world_dir(m.px, m.py));
-    // const raycast = App.game_state().world.raycast(ray, MAX_REACH) orelse return;
-    //
-    // if (button == .left) {
-    //     App.game_state().world.set_block(raycast.hit_coords, .air) catch |err| {
-    //         std.log.warn("{*}: Could not place block: {}", .{ self, err });
-    //     };
-    // } else if (button == .right) {
-    //     App.game_state().world.set_block(raycast.prev_coords, .stone) catch |err| {
-    //         std.log.warn("{*}: Could not place block: {}", .{ self, err });
-    //     };
-    // }
+    const ray = zm.Rayf.init(self.frustum.pos, self.screen_to_world_dir(m.px, m.py));
+    const raycast = Raycast.raycast(ray, MAX_REACH) orelse return;
+
+    if (button == .left) {
+        Game.instance().chunk_manager.set_block(raycast.hit_coords, .air) catch |err| {
+            std.log.warn("{*}: Could not place block: {}", .{ self, err });
+        };
+    } else if (button == .right) {
+        Game.instance().chunk_manager.set_block(raycast.prev_coords, .stone) catch |err| {
+            std.log.warn("{*}: Could not place block: {}", .{ self, err });
+        };
+    }
 }
 
 fn detatch(self: *Camera, _: []const u8) void {

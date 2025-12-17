@@ -5,8 +5,10 @@ const c = @import("c.zig").c;
 const Renderer = @import("Renderer.zig");
 pub const ChunkManager = @import("ChunkManager.zig");
 const Options = @import("ClientOptions");
+const Chunk = @import("Chunk.zig");
 const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
+const Block = @import("Block.zig");
 
 const Game = @This();
 const WIDTH = Options.world_size;
@@ -99,4 +101,9 @@ fn on_detatch(self: *Game) void {
     self.camera.deinit();
     self.renderer.deinit();
     self.chunk_manager.deinit();
+}
+
+pub fn get_block(self: *Game, coords: Coords) ?Block.Id {
+    const chunk = self.chunk_manager.chunks.get(Chunk.world_to_chunk(coords)) orelse return null;
+    return chunk.get(Chunk.world_to_block(coords));
 }

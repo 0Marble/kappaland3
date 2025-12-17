@@ -160,12 +160,14 @@ fn build_mesh(self: *ChunkManager, coords: Chunk.Coords) !void {
 
 pub fn set_block(
     self: *ChunkManager,
-    chunk_coords: Chunk.Coords,
-    block_coords: Chunk.Coords,
+    world_coords: Chunk.Coords,
     block_id: Block.Id,
 ) !void {
     const cmd: *Command = try self.command_pool.create();
     errdefer self.command_pool.destroy(cmd);
+    const chunk_coords = Chunk.world_to_chunk(world_coords);
+    const block_coords = Chunk.world_to_block(world_coords);
+
     cmd.* = .{
         .coords = chunk_coords,
         .body = .{ .set_block = .{ block_coords, block_id } },
@@ -441,6 +443,7 @@ const Command = struct {
                 std.debug.assert(lock.* == .write);
                 lock.* = .open;
 
+                const old_faces = mesh[0].?.faces;
                 mesh[0].?.faces = mesh[1];
                 if (mesh[1]) |faces| {
                     logger.debug(
@@ -448,6 +451,7 @@ const Command = struct {
                         .{ instance(), self.idx, self.coords, faces.len * @sizeOf(Chunk.Face) },
                     );
                     try Game.instance().renderer.upload_chunk_mesh(mesh[0].?);
+                    if (old_faces) |old| instance().gpa.allocator().free(old);
                 } else {
                     logger.warn(
                         "{*} cmd[{d}]: failed to build mesh for {}",
