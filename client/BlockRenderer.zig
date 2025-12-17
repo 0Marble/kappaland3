@@ -15,6 +15,8 @@ const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
 
+const logger = std.log.scoped(.block_renderer);
+
 const Self = @This();
 const BlockRenderer = @This();
 
@@ -41,7 +43,7 @@ meshes: std.AutoArrayHashMapUnmanaged(*Chunk, *Mesh),
 mesh_pool: std.heap.MemoryPool(Mesh),
 
 pub fn init(self: *Self) !void {
-    std.log.debug("{*} Initializing...", .{self});
+    logger.debug("{*} Initializing...", .{self});
 
     self.had_realloc = false;
     self.drawn_chunks_cnt = 0;
@@ -63,7 +65,7 @@ pub fn init(self: *Self) !void {
         },
     };
     self.block_pass = try .init(&sources);
-    std.log.debug("{*} Initialized block pass", .{self});
+    logger.debug("{*} Initialized block pass", .{self});
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
@@ -75,11 +77,11 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.BindVertexArray(self.block_vao));
 
     try self.init_block_model();
-    std.log.debug("{*} Initialized block model", .{self});
+    logger.debug("{*} Initialized block model", .{self});
     try self.init_face_attribs();
-    std.log.debug("{*} Initialized face data buffers", .{self});
+    logger.debug("{*} Initialized face data buffers", .{self});
     try self.init_chunk_data();
-    std.log.debug("{*} Initialized chunk data buffers", .{self});
+    logger.debug("{*} Initialized chunk data buffers", .{self});
 
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
@@ -90,7 +92,7 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao");
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor");
 
-    std.log.debug("{*} Finished initializing...", .{self});
+    logger.debug("{*} Finished initializing...", .{self});
 }
 
 fn init_block_model(self: *Self) !void {
@@ -229,7 +231,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     };
 
     const range = self.faces.get_range(mesh.handle).?;
-    std.log.debug(
+    logger.debug(
         "{*}: chunk {}: mesh {}: offset={d}, size={d}",
         .{ self, chunk.coords, mesh.handle, range.offset, range.size },
     );

@@ -371,3 +371,25 @@ const FrameData = struct {
         self.cur_frame += 1;
     }
 };
+
+pub fn log_fn(
+    comptime level: std.log.Level,
+    comptime scope: @Type(.enum_literal),
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    switch (scope) {
+        .chunk_manager, .block_renderer => {
+            if (@intFromEnum(level) > @intFromEnum(std.log.Level.info)) {
+                return;
+            }
+        },
+        else => {},
+    }
+
+    const prefix = "[" ++ @tagName(scope) ++ "] [" ++ @tagName(level) ++ "]: ";
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
+    nosuspend stderr.print(prefix ++ fmt ++ "\n", args) catch return;
+}
