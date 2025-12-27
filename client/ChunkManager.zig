@@ -32,6 +32,7 @@ queue_size: usize,
 subtasks: std.ArrayList(SubTask),
 
 meshes_to_apply: std.ArrayList(ChunkMesh),
+chunks_to_mesh: std.AutoArrayHashMapUnmanaged(Chunk.Coords, void),
 
 const ChunkManager = @This();
 const Instance = struct {
@@ -63,6 +64,7 @@ pub fn init(options: Options) !*ChunkManager {
         .cmd_queue = .{},
         .queue_size = 0,
         .subtasks = .empty,
+        .chunks_to_mesh = .empty,
     };
     self.shared_temp_arena = .init(self.shared_gpa.allocator());
 
@@ -85,6 +87,7 @@ pub fn deinit(self: *ChunkManager) void {
     App.gpa().free(self.threads);
     App.gpa().free(self.gpas);
 
+    self.chunks_to_mesh.deinit(App.gpa());
     self.chunks.deinit(App.gpa());
     self.subtasks.deinit(App.gpa());
     self.meshes_to_apply.deinit(self.shared_gpa.allocator());
@@ -103,12 +106,13 @@ fn on_imgui_impl(self: *ChunkManager) !void {
         App.frame_alloc(),
         \\Chunks:
         \\    active: {d}
-        \\    work:   {d}:{d}
+        \\    work:   {d}:{d}:{d}
     ,
         .{
             self.chunks.count(),
             self.queue_size,
             self.subtasks.items.len,
+            self.meshes_to_apply.items.len,
         },
         0,
     );
@@ -117,32 +121,44 @@ fn on_imgui_impl(self: *ChunkManager) !void {
 
 pub fn process(self: *ChunkManager) !void {
     self.mutex.lock();
-    defer self.mutex.unlock();
+    defer {
+        self.mutex.unlock();
+        self.cond.broadcast();
+    }
     try self.process_impl();
+
+    for (self.meshes_to_apply.items) |mesh| {
+        try Game.instance().renderer.upload_chunk_mesh(mesh);
+    }
+
+    self.meshes_to_apply.clearRetainingCapacity();
+    _ = self.shared_temp_arena.reset(.retain_capacity);
 }
 
 fn process_impl(self: *ChunkManager) !void {
-    const cur = Command.from_link(self.cmd_queue.first orelse return);
+    const cur = if (self.cmd_queue.first) |link|
+        Command.from_link(link)
+    else blk: {
+        const cmd: *Command = try self.cmd_pool.create();
+        cmd.* = .{ .link = .{}, .body = .mesh_chunks, .started = false };
+        self.cmd_queue.prepend(&cmd.link);
+        self.queue_size += 1;
+        break :blk cmd;
+    };
+
     switch (cur.body) {
         .set_block => |x| {
             const chunk_coords = Chunk.world_to_chunk(x[0]);
-            _ = self.cmd_queue.pop();
+            _ = self.cmd_queue.popFirst();
             defer self.cmd_pool.destroy(cur);
-
             const chunk = self.get_chunk(chunk_coords) orelse return;
-
             chunk.set(Chunk.world_to_block(x[0]), x[1]);
+            self.queue_size -= 1;
 
-            const min = @max(Chunk.Coords{ -1, -1, -1 } + chunk_coords, self.current_min);
-            const max = @min(Chunk.Coords{ 1, 1, 1 } + chunk_coords, self.current_max);
-            const cmd: *Command = try self.cmd_pool.create();
-            cmd.* = .{
-                .body = .{ .mesh_region = .{ min, max } },
-                .link = .{},
-                .started = false,
-            };
-            self.cmd_queue.prepend(&cmd.link);
-            try self.process_impl();
+            try self.chunks_to_mesh.put(App.gpa(), chunk.coords, {});
+            for (Chunk.neighbours2) |d| {
+                try self.chunks_to_mesh.put(App.gpa(), d + chunk.coords, {});
+            }
         },
 
         .load_region => |x| {
@@ -151,59 +167,62 @@ fn process_impl(self: *ChunkManager) !void {
                 cur.started = true;
 
                 const size: @Vector(3, usize) = @intCast(x[1] - x[0]);
+                var to_remove = std.ArrayList(Chunk.Coords).empty;
+                defer to_remove.deinit(App.frame_alloc());
+                for (self.chunks.keys()) |coords| {
+                    if (@reduce(.And, coords >= x[0]) and @reduce(.And, coords <= x[1])) continue;
+                    try to_remove.append(App.frame_alloc(), coords);
+                    try Game.instance().renderer.destroy_chunk_mesh(coords);
+                }
+                for (to_remove.items) |coords| _ = self.chunks.swapRemove(coords);
+
                 for (0..size[0] + 1) |i| {
                     for (0..size[1] + 1) |j| {
                         for (0..size[2] + 1) |k| {
                             const coords = x[0] +
                                 @as(Chunk.Coords, @intCast(@Vector(3, usize){ i, j, k }));
-                            try self.subtasks.append(App.gpa(), .{ .coords = coords });
+                            const entry = try self.chunks.getOrPut(App.gpa(), coords);
+                            if (entry.found_existing) continue;
+
+                            const chunk = try self.chunk_pool.create();
+                            chunk.init(coords);
+                            entry.value_ptr.* = chunk;
+                            try self.subtasks.append(
+                                App.gpa(),
+                                .{ .coords = coords, .kind = .load_region },
+                            );
+                            try self.chunks_to_mesh.put(App.gpa(), chunk.coords, {});
                         }
                     }
                 }
 
                 self.current_min = x[0];
                 self.current_max = x[1];
-                self.cond.signal();
             }
 
             if (self.subtasks.items.len == 0) {
                 _ = self.cmd_queue.popFirst();
                 self.cmd_pool.destroy(cur);
-
-                const cmd: *Command = try self.cmd_pool.create();
-                cmd.* = .{
-                    .body = .{ .mesh_region = x },
-                    .link = .{},
-                    .started = false,
-                };
-                self.cmd_queue.prepend(&cmd.link);
+                self.queue_size -= 1;
             }
         },
 
-        .mesh_region => |x| {
+        .mesh_chunks => {
             if (!cur.started) {
                 std.debug.assert(self.subtasks.items.len == 0);
                 cur.started = true;
+                for (self.chunks_to_mesh.keys()) |coords| {
+                    if (@reduce(.Or, coords < self.current_min) or
+                        @reduce(.Or, coords > self.current_max)) continue;
+                    if (!self.chunks.contains(coords)) continue;
 
-                const size: @Vector(3, usize) = @intCast(x[1] - x[0]);
-                for (0..size[0] + 1) |i| {
-                    for (0..size[1] + 1) |j| {
-                        for (0..size[2] + 1) |k| {
-                            const coords = x[0] +
-                                @as(Chunk.Coords, @intCast(@Vector(3, usize){ i, j, k }));
-                            try self.subtasks.append(App.gpa(), .{ .coords = coords });
-                        }
-                    }
+                    try self.subtasks.append(
+                        App.gpa(),
+                        .{ .coords = coords, .kind = .mesh_chunks },
+                    );
                 }
-                self.cond.signal();
+                self.chunks_to_mesh.clearRetainingCapacity();
             }
-
-            for (self.meshes_to_apply.items) |mesh| {
-                try Game.instance().renderer.upload_chunk_mesh(mesh);
-            }
-
-            self.meshes_to_apply.clearRetainingCapacity();
-            _ = self.shared_temp_arena.reset(.retain_capacity);
 
             if (self.subtasks.items.len == 0) {
                 _ = self.cmd_queue.popFirst();
@@ -219,24 +238,12 @@ pub fn get_chunk(self: *ChunkManager, coords: Chunk.Coords) ?*Chunk {
 }
 
 pub fn load_region(self: *ChunkManager, min: Chunk.Coords, max: Chunk.Coords) !void {
+    if (@reduce(.And, min == self.current_min) and @reduce(.And, max == self.current_max)) {
+        return;
+    }
+
     self.mutex.lock();
     defer self.mutex.unlock();
-
-    const size: @Vector(3, usize) = @intCast(max - min);
-    for (0..size[0] + 1) |i| {
-        for (0..size[1] + 1) |j| {
-            for (0..size[2] + 1) |k| {
-                const coords = min +
-                    @as(Chunk.Coords, @intCast(@Vector(3, usize){ i, j, k }));
-                const entry = try self.chunks.getOrPut(App.gpa(), coords);
-                if (entry.found_existing) continue;
-
-                const chunk: *Chunk = try self.chunk_pool.create();
-                chunk.init(coords);
-                entry.value_ptr.* = chunk;
-            }
-        }
-    }
 
     const cmd: *Command = try self.cmd_pool.create();
     cmd.* = .{
@@ -273,7 +280,7 @@ const Command = struct {
 
     const Body = union(enum) {
         load_region: struct { Chunk.Coords, Chunk.Coords },
-        mesh_region: struct { Chunk.Coords, Chunk.Coords },
+        mesh_chunks: void,
         set_block: struct { Chunk.Coords, Block.Id },
     };
 
@@ -293,48 +300,50 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
     defer scratch.deinit();
 
     while (true) {
-        if (self.cmd_queue.first) |link| {
-            const cmd: *Command = Command.from_link(link);
-            while (self.subtasks.pop()) |task| {
-                self.mutex.unlock();
-                defer self.mutex.lock();
+        while (self.subtasks.pop()) |task| {
+            std.log.info(
+                "{*}: [Thread {d}]: picked up task {s}@{}",
+                .{ self, tid, @tagName(task.kind), task.coords },
+            );
 
-                switch (cmd.body) {
-                    .set_block => unreachable,
-                    .load_region => {
-                        const chunk = self.get_chunk(task.coords).?;
-                        chunk.generate();
-                    },
-                    .mesh_region => {
-                        _ = scratch.reset(.retain_capacity);
-                        const chunk = self.get_chunk(task.coords).?;
-                        const mesh = ChunkMesh.build(chunk, scratch.allocator()) catch |err| {
-                            std.log.err(
-                                "{*}: [Thread {d}]: could not build mesh {}: {}",
-                                .{ self, tid, task.coords, err },
-                            );
-                            continue;
-                        };
+            self.mutex.unlock();
+            defer self.mutex.lock();
 
-                        self.mutex.lock();
-                        defer self.mutex.unlock();
+            switch (task.kind) {
+                .set_block => unreachable,
+                .load_region => {
+                    const chunk = self.get_chunk(task.coords).?;
+                    chunk.generate();
+                },
+                .mesh_chunks => {
+                    _ = scratch.reset(.retain_capacity);
+                    const chunk = self.get_chunk(task.coords).?;
+                    const mesh = ChunkMesh.build(chunk, scratch.allocator()) catch |err| {
+                        std.log.err(
+                            "{*}: [Thread {d}]: could not build mesh {}: {}",
+                            .{ self, tid, task.coords, err },
+                        );
+                        continue;
+                    };
 
-                        const duped = mesh.dupe(self.shared_temp_arena.allocator()) catch |err| {
-                            std.log.err(
-                                "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
-                                .{ self, tid, task.coords, err },
-                            );
-                            continue;
-                        };
-                        self.meshes_to_apply.append(self.shared_gpa.allocator(), duped) catch |err| {
-                            std.log.err(
-                                "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
-                                .{ self, tid, task.coords, err },
-                            );
-                            continue;
-                        };
-                    },
-                }
+                    self.mutex.lock();
+                    defer self.mutex.unlock();
+
+                    const duped = mesh.dupe(self.shared_temp_arena.allocator()) catch |err| {
+                        std.log.err(
+                            "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
+                            .{ self, tid, task.coords, err },
+                        );
+                        continue;
+                    };
+                    self.meshes_to_apply.append(self.shared_gpa.allocator(), duped) catch |err| {
+                        std.log.err(
+                            "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
+                            .{ self, tid, task.coords, err },
+                        );
+                        continue;
+                    };
+                },
             }
         }
 
@@ -348,4 +357,5 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
 
 const SubTask = struct {
     coords: Chunk.Coords,
+    kind: std.meta.Tag(Command.Body),
 };

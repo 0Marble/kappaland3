@@ -257,9 +257,10 @@ pub fn upload_chunk_mesh(self: *Self, mesh_obj: ChunkMesh) !void {
     self.had_realloc |= old_buf != self.faces.buffer;
 }
 
-pub fn destroy_chunk_mesh(self: *Self, chunk: *Chunk) !void {
-    _ = self;
-    _ = chunk;
+pub fn destroy_chunk_mesh(self: *Self, coords: Chunk.Coords) !void {
+    const mesh = self.meshes.fetchSwapRemove(coords) orelse return;
+    defer self.mesh_pool.destroy(mesh.value);
+    self.faces.free(mesh.value.handle);
 }
 
 fn on_imgui(self: *Self) !void {

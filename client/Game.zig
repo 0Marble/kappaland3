@@ -48,8 +48,6 @@ fn on_attatch(self: *Game) !void {
     };
     try self.renderer.init();
     self.chunk_manager = try ChunkManager.init(.{});
-
-    try self.chunk_manager.load_region(LOAD_MIN, LOAD_MAX);
 }
 
 fn on_imgui(self: *Game) !void {
@@ -74,6 +72,9 @@ fn on_frame_start(self: *Game) App.UnhandledError!void {
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {
+    const cam_chunk = self.camera.chunk_coords();
+    try self.chunk_manager.load_region(cam_chunk + LOAD_MIN, cam_chunk + LOAD_MAX);
+
     try self.chunk_manager.process();
     try self.renderer.draw();
 }

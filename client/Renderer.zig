@@ -123,8 +123,7 @@ pub fn upload_chunk_mesh(self: *Renderer, mesh: ChunkMesh) !void {
 }
 
 pub fn destroy_chunk_mesh(self: *Renderer, coords: Chunk.Coords) !void {
-    _ = self; // autofix
-    _ = coords; // autofix
+    try self.block_renderer.destroy_chunk_mesh(coords);
 }
 
 pub fn draw(self: *Renderer) (OOM || GlError)!void {
