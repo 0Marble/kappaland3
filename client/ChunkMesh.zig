@@ -1,0 +1,206 @@
+const Chunk = @import("Chunk.zig");
+const std = @import("std");
+const CHUNK_SIZE = Chunk.CHUNK_SIZE;
+const Coords = Chunk.Coords;
+const Block = @import("Block.zig");
+const Game = @import("Game.zig");
+
+chunk: *Chunk,
+faces: std.ArrayList(Face),
+
+neighbour_cache: [26]?*Chunk,
+is_occluded: bool,
+
+const Mesh = @This();
+const OOM = std.mem.Allocator.Error;
+
+pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
+    var self = Mesh{
+        .chunk = chunk,
+        .faces = .empty,
+        .neighbour_cache = @splat(null),
+        .is_occluded = true,
+    };
+
+    for (Chunk.neighbours2, &self.neighbour_cache) |d, *n| {
+        n.* = Game.instance().chunk_manager.get_chunk(d + chunk.coords);
+    }
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{ 0, 0, @intCast(i) };
+        try self.build_layer_mesh(.front, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{
+            CHUNK_SIZE - 1,
+            0,
+            @intCast(CHUNK_SIZE - 1 - i),
+        };
+        try self.build_layer_mesh(.back, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
+        try self.build_layer_mesh(.right, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
+        try self.build_layer_mesh(.left, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{ 0, @intCast(i), 0 };
+        try self.build_layer_mesh(.top, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, 0 });
+
+    for (0..CHUNK_SIZE) |i| {
+        const start: Coords = .{
+            CHUNK_SIZE - 1,
+            @intCast(CHUNK_SIZE - 1 - i),
+            0,
+        };
+        try self.build_layer_mesh(.bot, start, gpa);
+    }
+    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, 0 });
+
+    return self;
+}
+
+pub fn dupe(self: *const Mesh, gpa: std.mem.Allocator) OOM!Mesh {
+    var new_mesh = self.*;
+    new_mesh.faces = try self.faces.clone(gpa);
+    return new_mesh;
+}
+
+pub const Face = packed struct(u64) {
+    // A:
+    x: u4,
+    y: u4,
+    z: u4,
+    normal: u3,
+    _unused1: u1 = 0,
+    ao: u4,
+    _unused2: u12 = 0xeba,
+    // B:
+    _unused3: u32 = 0xdeadbeef,
+
+    pub fn define() [:0]const u8 {
+        return 
+        \\struct Face {
+        \\  uvec3 pos;
+        \\  uint n;
+        \\  uint ao;
+        \\};
+        \\
+        \\Face unpack(){
+        \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
+        \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
+        \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
+        \\  uint n = (vert_face_a >> uint(12)) & uint(0x0F);
+        \\  uint ao = (vert_face_a >> uint(16)) & uint(0x0F);
+        \\  return Face(uvec3(x, y, z), n, ao);
+        \\}
+        ;
+    }
+};
+
+fn next_layer_solid(self: *Mesh, normal: Block.Face, start: Coords) bool {
+    const right = -normal.left_dir();
+    const up = normal.up_dir();
+    const front = normal.front_dir();
+
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |j| {
+            const u: i32 = @intCast(i);
+            const v: i32 = @intCast(j);
+
+            const pos = start +
+                @as(Coords, @splat(u)) * right +
+                @as(Coords, @splat(v)) * up;
+
+            if (!self.is_solid_neighbour(pos + front)) return false;
+        }
+    }
+
+    return true;
+}
+
+const ao_mask: [6][4]u4 = .{
+    .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // front
+    .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // back
+    .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // right
+    .{ 0b1000, 0b0100, 0b0001, 0b0010 }, // left
+    .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // top
+    .{ 0b1000, 0b0100, 0b0010, 0b0001 }, // bot
+};
+
+fn build_layer_mesh(
+    self: *Mesh,
+    normal: Block.Face,
+    start: Coords,
+    gpa: std.mem.Allocator,
+) !void {
+    const right = -normal.left_dir();
+    const left = -right;
+    const up = normal.up_dir();
+    const down = -up;
+    const front = normal.front_dir();
+
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |j| {
+            const u: i32 = @intCast(i);
+            const v: i32 = @intCast(j);
+
+            const pos = start +
+                @as(Coords, @splat(u)) * right +
+                @as(Coords, @splat(v)) * up;
+
+            if (!self.is_solid(pos) or self.is_solid_neighbour(pos + front)) {
+                continue;
+            }
+
+            var ao: u4 = 0;
+            const ao_idx: usize = @intFromEnum(normal);
+            if (self.is_solid_neighbour(pos + front + left)) ao |= ao_mask[ao_idx][0];
+            if (self.is_solid_neighbour(pos + front + right)) ao |= ao_mask[ao_idx][1];
+            if (self.is_solid_neighbour(pos + front + up)) ao |= ao_mask[ao_idx][2];
+            if (self.is_solid_neighbour(pos + front + down)) ao |= ao_mask[ao_idx][3];
+
+            const face = Face{
+                .x = @intCast(pos[0]),
+                .y = @intCast(pos[1]),
+                .z = @intCast(pos[2]),
+                .normal = @intFromEnum(normal),
+                .ao = ao,
+            };
+
+            try self.faces.append(gpa, face);
+        }
+    }
+}
+
+inline fn is_solid(self: *Mesh, pos: Coords) bool {
+    return self.chunk.is_solid(pos);
+}
+
+fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
+    const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
+    const chunk = Chunk.world_to_chunk(world);
+    const block = Chunk.world_to_block(world);
+
+    if (@reduce(.And, chunk == self.chunk.coords)) return self.is_solid(block);
+
+    for (self.neighbour_cache) |n| {
+        const other = n orelse continue;
+        if (@reduce(.Or, other.coords != chunk)) continue;
+        return other.is_solid(block);
+    }
+    return false;
+}

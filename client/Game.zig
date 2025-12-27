@@ -38,25 +38,18 @@ pub fn instance() *Game {
     return &Instance.instance;
 }
 
+const LOAD_MIN = -Chunk.Coords{ WIDTH / 2, HEIGHT - 1, WIDTH / 2 };
+const LOAD_MAX = Chunk.Coords{ WIDTH / 2, 0, WIDTH / 2 };
+
 fn on_attatch(self: *Game) !void {
     std.log.info("{*}: Attatched", .{self});
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
     try self.renderer.init();
-    self.chunk_manager = try ChunkManager.init(null);
+    self.chunk_manager = try ChunkManager.init(.{});
 
-    const size: Coords = .{ WIDTH, HEIGHT, WIDTH };
-    const two: Coords = @splat(2);
-    for (0..WIDTH) |i| {
-        for (0..HEIGHT) |j| {
-            for (0..WIDTH) |k| {
-                var xyz: Coords = .{ @intCast(i), @intCast(j), @intCast(k) };
-                xyz -= size / two;
-                try self.chunk_manager.load(xyz);
-            }
-        }
-    }
+    try self.chunk_manager.load_region(LOAD_MIN, LOAD_MAX);
 }
 
 fn on_imgui(self: *Game) !void {
@@ -72,11 +65,11 @@ fn on_imgui(self: *Game) !void {
         0,
     ));
     c.igText("%s", camera_str);
-    try self.chunk_manager.on_imgui();
 }
 
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
+    try self.chunk_manager.on_imgui();
     try self.renderer.on_frame_start();
 }
 
@@ -104,6 +97,6 @@ fn on_detatch(self: *Game) void {
 }
 
 pub fn get_block(self: *Game, coords: Coords) ?Block.Id {
-    const chunk = self.chunk_manager.chunks.get(Chunk.world_to_chunk(coords)) orelse return null;
+    const chunk = self.chunk_manager.get_chunk(Chunk.world_to_chunk(coords)) orelse return null;
     return chunk.get(Chunk.world_to_block(coords));
 }

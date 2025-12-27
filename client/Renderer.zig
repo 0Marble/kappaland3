@@ -4,6 +4,7 @@ const Game = @import("Game.zig");
 const gl = @import("gl");
 const std = @import("std");
 const Chunk = @import("Chunk.zig");
+const ChunkMesh = @import("ChunkMesh.zig");
 const World = @import("World.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
@@ -117,12 +118,13 @@ pub fn deinit(self: *Renderer) void {
     self.ssao_blur_pass.deinit();
 }
 
-pub fn upload_chunk_mesh(self: *Renderer, chunk: *Chunk) !void {
-    try self.block_renderer.upload_chunk_mesh(chunk);
+pub fn upload_chunk_mesh(self: *Renderer, mesh: ChunkMesh) !void {
+    try self.block_renderer.upload_chunk_mesh(mesh);
 }
 
-pub fn destroy_chunk_mesh(self: *Renderer, chunk: *Chunk) !void {
-    try self.block_renderer.destroy_chunk_mesh(chunk);
+pub fn destroy_chunk_mesh(self: *Renderer, coords: Chunk.Coords) !void {
+    _ = self; // autofix
+    _ = coords; // autofix
 }
 
 pub fn draw(self: *Renderer) (OOM || GlError)!void {
