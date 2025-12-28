@@ -489,7 +489,7 @@ const block_vert =
     \\
     \\uniform mat4 u_view;
     \\uniform mat4 u_proj;
-    \\    
+    \\
     \\vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
     \\
     \\out vec3 frag_norm;
@@ -522,10 +522,17 @@ const block_frag =
     std.fmt.comptimePrint("\n#define BASE_TEX_ATTACHMENT {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
     std.fmt.comptimePrint("\n#define POSITION_TEX_ATTACHMENT {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
     std.fmt.comptimePrint("\n#define NORMAL_TEX_ATTACHMENT {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
-    \\#define AO_LEFT 3
-    \\#define AO_RIGHT 2
-    \\#define AO_TOP 1
-    \\#define AO_BOT 0
+    \\
+    \\#define AO_LEFT 8
+    \\#define AO_RIGHT 4
+    \\#define AO_TOP 2
+    \\#define AO_BOT 1
+    \\#define AO_TL 16
+    \\#define AO_TR 32
+    \\#define AO_BL 64
+    \\#define AO_BR 128
+    \\#define HAS_AO(dirs) ((frag_ao & uint(dirs)) == uint(dirs) ? 1 : 0)
+    \\#define AO_CORNER(v) (1.0 - clamp(length(frag_uv - v), 0, 1))
     \\
     \\layout (location=BASE_TEX_ATTACHMENT) out vec4 out_color;
     \\layout (location=POSITION_TEX_ATTACHMENT) out vec4 out_pos;
@@ -537,18 +544,34 @@ const block_frag =
     \\in flat uint frag_ao;
     \\in vec2 frag_uv;
     \\
-    \\uniform float u_ao_factor = 0.7;
     \\uniform bool u_enable_face_ao = true;
+    \\uniform float u_ao_factor = 0.7;
     \\
-    \\float get_ao(vec2 uv, uint mask) {
-    \\  float l = ((mask >> AO_LEFT) & 1) * (1 - uv.x) * (1 - u_ao_factor);
-    \\  float r = ((mask >> AO_RIGHT) & 1) * uv.x * (1 - u_ao_factor);
-    \\  float t = ((mask >> AO_TOP) & 1) * (1 - uv.y) * (1 - u_ao_factor);
-    \\  float b = ((mask >> AO_BOT) & 1) * uv.y * (1 - u_ao_factor);
-    \\  return 1 - (l + r + t + b) / 4;
+    \\float get_ao() {
+    \\  uint has_l = HAS_AO(AO_LEFT);
+    \\  uint has_t = HAS_AO(AO_TOP);
+    \\  uint has_r = HAS_AO(AO_RIGHT);
+    \\  uint has_b = HAS_AO(AO_BOT);
+    \\  uint has_tl = HAS_AO(AO_TL) * (1 - has_t) * (1 - has_l);
+    \\  uint has_tr = HAS_AO(AO_TR) * (1 - has_t) * (1 - has_r);
+    \\  uint has_bl = HAS_AO(AO_BL) * (1 - has_b) * (1 - has_l);
+    \\  uint has_br = HAS_AO(AO_BR) * (1 - has_b) * (1 - has_r);
+    \\
+    \\  float tl = float(has_tl) * AO_CORNER(vec2(0, 1));
+    \\  float tr = float(has_tr) * AO_CORNER(vec2(1, 1));
+    \\  float bl = float(has_bl) * AO_CORNER(vec2(0, 0));
+    \\  float br = float(has_br) * AO_CORNER(vec2(1, 0));
+    \\  float t = float(has_t) * frag_uv.y;
+    \\  float b = float(has_b) * (1 - frag_uv.y);
+    \\  float l = float(has_l) * (1 - frag_uv.x);
+    \\  float r = float(has_r) * frag_uv.x;
+    \\  
+    \\  float ao = (tl + tr + bl + br + t + b + l + r) / 4.0;
+    \\  return ao;
     \\}
+    \\
     \\void main() {
-    \\  float ao = (u_enable_face_ao ? get_ao(frag_uv, frag_ao) : 1.0);
+    \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
     \\  out_color = vec4(frag_color * ao, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);

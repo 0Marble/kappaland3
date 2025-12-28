@@ -72,9 +72,6 @@ fn init_settings(self: *Renderer) !void {
     try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur");
     try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius");
     try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".bias", f32, "u_bias");
-    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".range_max", f32, "u_range_max");
-    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".range_min", f32, "u_range_min");
-    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".use_range", bool, "u_use_range");
 
     try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".enable",
@@ -210,6 +207,8 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, null));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE));
+    try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE));
     try gl_call(gl.FramebufferTexture2D(
         gl.FRAMEBUFFER,
         gl.COLOR_ATTACHMENT0 + POSITION_TEX_ATTACHMENT,
@@ -591,18 +590,14 @@ const ssao_frag =
     \\uniform vec3 u_ssao_samples[SAMPLES_COUNT];
     \\uniform float u_radius = 1.0 / 8.0;
     \\uniform float u_bias = 0.1;
-    \\uniform float u_range_min = 5.0;
-    \\uniform float u_range_max = 30.0;
     \\uniform vec2 u_noise_scale;
     \\uniform mat4 u_proj;
-    \\uniform bool u_use_range = true;
     \\
     \\void main() {
     \\  out_ao = 0;
     \\  vec3 frag_pos = texture(u_pos_tex, frag_uv).xyz;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float frag_depth = -frag_pos.z;
-    \\  if (u_use_range && (frag_depth < u_range_min || frag_depth > u_range_max)) return;
     \\  vec3 random_vec = texture(u_noise_tex, frag_uv * u_noise_scale).xyz;
     \\
     \\  vec3 tangent = normalize(random_vec - frag_norm * dot(random_vec, frag_norm));
@@ -617,7 +612,7 @@ const ssao_frag =
     \\    float t = smoothstep(0.0, 1.0, u_radius / abs(sample_depth - frag_depth));
     \\    out_ao += (sample_depth + u_bias < frag_depth ? 1 : 0) * t;
     \\  }
-    \\  out_ao = (out_ao / SAMPLES_COUNT) * (u_use_range ? smoothstep(u_range_min, u_range_max, frag_depth) : 1); 
+    \\  out_ao = out_ao / SAMPLES_COUNT;
     \\}
 ;
 
