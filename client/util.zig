@@ -180,3 +180,8 @@ pub fn Array2DFormat(comptime Elem: type) type {
         }
     };
 }
+
+pub inline fn cond_capture(cond: bool, captrure: anytype) @TypeOf(captrure) {
+    if (cond) return captrure;
+    return null;
+}

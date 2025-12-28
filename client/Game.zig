@@ -51,7 +51,9 @@ fn on_attatch(self: *Game) !void {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
     try self.renderer.init();
-    self.chunk_manager = try ChunkManager.init(.{});
+    self.chunk_manager = try ChunkManager.init(.{
+        .thread_cnt = 4,
+    });
 }
 
 fn on_imgui(self: *Game) !void {

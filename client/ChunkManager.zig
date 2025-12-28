@@ -7,6 +7,7 @@ const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const MemoryUsage = @import("util.zig").MemoryUsage;
 const Block = @import("Block.zig");
+const cond_capture = @import("util.zig").cond_capture;
 
 const logger = std.log.scoped(.chunk_manager);
 
@@ -108,6 +109,7 @@ fn on_imgui_impl(self: *ChunkManager) !void {
         \\    active: {d}
         \\    work:   {d}:{d}
         \\    meshes: {d}:{d}
+        \\    shared_mem: {f}
     ,
         .{
             self.chunks.count(),
@@ -115,10 +117,21 @@ fn on_imgui_impl(self: *ChunkManager) !void {
             self.subtasks.items.len,
             self.chunks_to_mesh.count(),
             self.meshes_to_apply.items.len,
+            MemoryUsage.from_bytes(self.shared_gpa.total_requested_bytes),
         },
         0,
     );
     c.igText("%s", @as(c_str, @ptrCast(str)));
+
+    for (self.gpas, 0..) |*g, i| {
+        const mem_str = try std.fmt.allocPrintSentinel(
+            App.frame_alloc(),
+            "    thread {d}: {f}",
+            .{ i + 1, MemoryUsage.from_bytes(g.total_requested_bytes) },
+            0,
+        );
+        c.igText("%s", @as(c_str, @ptrCast(mem_str)));
+    }
 }
 
 pub fn process(self: *ChunkManager) !void {
@@ -250,12 +263,24 @@ pub fn load_region(self: *ChunkManager, min: Chunk.Coords, max: Chunk.Coords) !v
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    const cmd: *Command = try self.cmd_pool.create();
-    cmd.* = .{
+    const cmd = try self.cmd_pool.create();
+    cmd.* = Command{
         .started = false,
         .link = .{},
         .body = .{ .load_region = .{ min, max } },
     };
+
+    if (cond_capture(
+        self.cmd_queue.first != self.cmd_queue.last,
+        self.cmd_queue.last,
+    )) |last_link| {
+        const cur_last = Command.from_link(last_link);
+        if (cur_last.body == .load_region) {
+            _ = self.cmd_queue.pop();
+            self.queue_size -= 1;
+        }
+    }
+
     self.cmd_queue.append(&cmd.link);
     self.queue_size += 1;
 }
