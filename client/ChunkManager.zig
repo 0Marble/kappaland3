@@ -31,6 +31,9 @@ cmd_pool: std.heap.MemoryPool(Command),
 cmd_queue: std.DoublyLinkedList,
 queue_size: usize,
 subtasks: std.ArrayList(SubTask),
+// the difference from subtasks.items.len is that this is updated after a task is completed
+// while len is updated when the task gets picked up
+subtasks_left: usize,
 
 meshes_to_apply: std.ArrayList(ChunkMesh),
 chunks_to_mesh: std.AutoArrayHashMapUnmanaged(Chunk.Coords, void),
@@ -65,6 +68,7 @@ pub fn init(options: Options) !*ChunkManager {
         .cmd_queue = .{},
         .queue_size = 0,
         .subtasks = .empty,
+        .subtasks_left = 0,
         .chunks_to_mesh = .empty,
     };
     self.shared_temp_arena = .init(self.shared_gpa.allocator());
@@ -106,13 +110,15 @@ fn on_imgui_impl(self: *ChunkManager) !void {
     const str = try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
         \\Chunks:
-        \\    active: {d}
+        \\    active: {d} {}...{}
         \\    work:   {d}:{d}
         \\    meshes: {d}:{d}
         \\    shared_mem: {f}
     ,
         .{
             self.chunks.count(),
+            self.current_min,
+            self.current_max,
             self.queue_size,
             self.subtasks.items.len,
             self.chunks_to_mesh.count(),
@@ -190,6 +196,8 @@ fn process_impl(self: *ChunkManager) !void {
         .load_region => |x| {
             if (!cur.started) {
                 std.debug.assert(self.subtasks.items.len == 0);
+                std.debug.assert(self.subtasks_left == 0);
+
                 cur.started = true;
 
                 const size: @Vector(3, usize) = @intCast(x[1] - x[0]);
@@ -225,11 +233,12 @@ fn process_impl(self: *ChunkManager) !void {
                     }
                 }
 
+                self.subtasks_left = self.subtasks.items.len;
                 self.current_min = x[0];
                 self.current_max = x[1];
             }
 
-            if (self.subtasks.items.len == 0) {
+            if (self.subtasks_left == 0) {
                 _ = self.cmd_queue.popFirst();
                 self.cmd_pool.destroy(cur);
                 self.queue_size -= 1;
@@ -239,6 +248,8 @@ fn process_impl(self: *ChunkManager) !void {
         .mesh_chunks => {
             if (!cur.started) {
                 std.debug.assert(self.subtasks.items.len == 0);
+                std.debug.assert(self.subtasks_left == 0);
+
                 cur.started = true;
                 for (self.chunks_to_mesh.keys()) |coords| {
                     if (@reduce(.Or, coords < self.current_min) or
@@ -250,10 +261,11 @@ fn process_impl(self: *ChunkManager) !void {
                         .{ .coords = coords, .kind = .mesh_chunks },
                     );
                 }
+                self.subtasks_left = self.subtasks.items.len;
                 self.chunks_to_mesh.clearRetainingCapacity();
             }
 
-            if (self.subtasks.items.len == 0) {
+            if (self.subtasks_left == 0) {
                 _ = self.cmd_queue.popFirst();
                 self.cmd_pool.destroy(cur);
                 self.queue_size -= 1;
@@ -348,7 +360,10 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
             );
 
             self.mutex.unlock();
-            defer self.mutex.lock();
+            defer {
+                self.mutex.lock();
+                self.subtasks_left -= 1;
+            }
 
             switch (task.kind) {
                 .set_block => unreachable,
