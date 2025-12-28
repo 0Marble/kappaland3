@@ -170,9 +170,20 @@ fn process_impl(self: *ChunkManager) !void {
             chunk.set(Chunk.world_to_block(x[0]), x[1]);
             self.queue_size -= 1;
 
-            try self.chunks_to_mesh.put(App.gpa(), chunk.coords, {});
-            for (Chunk.neighbours2) |d| {
-                try self.chunks_to_mesh.put(App.gpa(), d + chunk.coords, {});
+            try self.chunks_to_mesh.put(App.gpa(), chunk_coords, {});
+            for (std.enums.values(Block.Face)) |dir| {
+                const front = dir.front_dir();
+                inline for (.{
+                    front + dir.left_dir(),
+                    front - dir.left_dir(),
+                    front + dir.up_dir(),
+                    front - dir.up_dir(),
+                }) |d| {
+                    const other_chunk = Chunk.world_to_chunk(d + x[0]);
+                    if (@reduce(.Or, other_chunk != chunk_coords)) {
+                        try self.chunks_to_mesh.put(App.gpa(), other_chunk, {});
+                    }
+                }
             }
         },
 
@@ -321,7 +332,7 @@ const Command = struct {
 
 fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
     const tid = std.Thread.getCurrentId();
-    std.log.info("{*}: [Thread {d}] started", .{ self, tid });
+    logger.info("{*}: [Thread {d}] started", .{ self, tid });
 
     self.mutex.lock();
     defer self.mutex.unlock();
@@ -331,7 +342,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
 
     while (true) {
         while (self.subtasks.pop()) |task| {
-            std.log.debug(
+            logger.debug(
                 "{*}: [Thread {d}]: picked up task {s}@{}",
                 .{ self, tid, @tagName(task.kind), task.coords },
             );
@@ -349,7 +360,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
                     _ = scratch.reset(.retain_capacity);
                     const chunk = self.get_chunk(task.coords).?;
                     const mesh = ChunkMesh.build(chunk, scratch.allocator()) catch |err| {
-                        std.log.err(
+                        logger.err(
                             "{*}: [Thread {d}]: could not build mesh {}: {}",
                             .{ self, tid, task.coords, err },
                         );
@@ -360,14 +371,14 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
                     defer self.mutex.unlock();
 
                     const duped = mesh.dupe(self.shared_temp_arena.allocator()) catch |err| {
-                        std.log.err(
+                        logger.err(
                             "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
                             .{ self, tid, task.coords, err },
                         );
                         continue;
                     };
                     self.meshes_to_apply.append(self.shared_gpa.allocator(), duped) catch |err| {
-                        std.log.err(
+                        logger.err(
                             "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
                             .{ self, tid, task.coords, err },
                         );
@@ -382,7 +393,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
         } else break;
     }
 
-    std.log.info("{*}: [Thread {d}] joined", .{ self, tid });
+    logger.info("{*}: [Thread {d}] joined", .{ self, tid });
 }
 
 const SubTask = struct {
