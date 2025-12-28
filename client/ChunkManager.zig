@@ -106,12 +106,14 @@ fn on_imgui_impl(self: *ChunkManager) !void {
         App.frame_alloc(),
         \\Chunks:
         \\    active: {d}
-        \\    work:   {d}:{d}:{d}
+        \\    work:   {d}:{d}
+        \\    meshes: {d}:{d}
     ,
         .{
             self.chunks.count(),
             self.queue_size,
             self.subtasks.items.len,
+            self.chunks_to_mesh.count(),
             self.meshes_to_apply.items.len,
         },
         0,
@@ -174,7 +176,10 @@ fn process_impl(self: *ChunkManager) !void {
                     try to_remove.append(App.frame_alloc(), coords);
                     try Game.instance().renderer.destroy_chunk_mesh(coords);
                 }
-                for (to_remove.items) |coords| _ = self.chunks.swapRemove(coords);
+                for (to_remove.items) |coords| {
+                    const old = self.chunks.fetchSwapRemove(coords).?;
+                    self.chunk_pool.destroy(old.value);
+                }
 
                 for (0..size[0] + 1) |i| {
                     for (0..size[1] + 1) |j| {
@@ -301,7 +306,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
 
     while (true) {
         while (self.subtasks.pop()) |task| {
-            std.log.info(
+            std.log.debug(
                 "{*}: [Thread {d}]: picked up task {s}@{}",
                 .{ self, tid, @tagName(task.kind), task.coords },
             );

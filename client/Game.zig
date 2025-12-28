@@ -38,8 +38,12 @@ pub fn instance() *Game {
     return &Instance.instance;
 }
 
-const LOAD_MIN = -Chunk.Coords{ WIDTH / 2, HEIGHT - 1, WIDTH / 2 };
-const LOAD_MAX = Chunk.Coords{ WIDTH / 2, 0, WIDTH / 2 };
+const LOAD_MIN = -Chunk.Coords{ WIDTH / 2, HEIGHT / 2, WIDTH / 2 };
+const LOAD_MAX = Chunk.Coords{ WIDTH / 2, HEIGHT / 2, WIDTH / 2 };
+pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
+    const cam_chunk = self.camera.chunk_coords();
+    return .{ cam_chunk + LOAD_MIN, cam_chunk + LOAD_MAX };
+}
 
 fn on_attatch(self: *Game) !void {
     std.log.info("{*}: Attatched", .{self});
@@ -67,13 +71,14 @@ fn on_imgui(self: *Game) !void {
 
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
+
     try self.chunk_manager.on_imgui();
     try self.renderer.on_frame_start();
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {
-    const cam_chunk = self.camera.chunk_coords();
-    try self.chunk_manager.load_region(cam_chunk + LOAD_MIN, cam_chunk + LOAD_MAX);
+    const min, const max = self.get_load_range();
+    try self.chunk_manager.load_region(min, max);
 
     try self.chunk_manager.process();
     try self.renderer.draw();

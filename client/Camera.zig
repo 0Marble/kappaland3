@@ -121,9 +121,9 @@ fn move(self: *Camera, cmd: Dir, _: []const u8) void {
     };
 
     const speed: f32 = if (App.keys().is_key_pressed(.from_sdl(c.SDL_SCANCODE_LCTRL)))
-        0.05
+        App.settings().get_value(f32, ".main.controls.sprint_speed").?
     else
-        0.01;
+        App.settings().get_value(f32, ".main.controls.move_speed").?;
     const amt = App.frametime() * speed;
     self.frustum.move(dir * @as(zm.Vec3f, @splat(amt)));
 }

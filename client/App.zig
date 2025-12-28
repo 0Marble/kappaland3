@@ -378,6 +378,9 @@ pub fn log_fn(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
+    const builtin = @import("builtin");
+    if (builtin.mode != .Debug and @intFromEnum(level) > @intFromEnum(std.log.Level.warn)) return;
+
     switch (scope) {
         .chunk_manager, .block_renderer => {
             if (@intFromEnum(level) > @intFromEnum(std.log.Level.info)) {
