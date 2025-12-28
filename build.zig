@@ -125,6 +125,7 @@ fn build_client(
         }),
     });
     client.root_module.linkSystemLibrary("SDL3", .{});
+    client.root_module.linkSystemLibrary("SDL3_image", .{});
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
     client.root_module.addImport("libmine", libmine);

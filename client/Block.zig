@@ -1,12 +1,29 @@
 const std = @import("std");
 const Coords = @import("Chunk.zig").Coords;
 const Model = @import("BlockModel");
+const App = @import("App.zig");
 
 pub const Id = enum(u16) {
     air = 0,
     stone,
     dirt,
     grass,
+
+    pub fn get_texture(self: Id, face: Face) usize {
+        const atlas = App.atlas("blocks");
+        switch (self) {
+            .stone => return atlas.get_idx(".blocks.stone"),
+            .dirt => return atlas.get_idx(".blocks.dirt"),
+            .grass => if (face == .bot) {
+                return atlas.get_idx(".blocks.dirt");
+            } else if (face == .top) {
+                return atlas.get_idx(".blocks.grass_top");
+            } else {
+                return atlas.get_idx(".blocks.grass_side");
+            },
+            else => return atlas.get_idx(".blocks.invalid"),
+        }
+    }
 };
 
 pub const Face = enum {

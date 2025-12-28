@@ -26,6 +26,7 @@ const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 const DEFAULT_FACES_SIZE = 1024 * 1024 * 16;
 const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
 const DEFAULT_INDIRECT_SIZE = 1024 * @sizeOf(Indirect);
+const BLOCK_ATLAS_TEX = 0;
 
 block_pass: Shader,
 block_vao: gl.uint,
@@ -66,6 +67,7 @@ pub fn init(self: *Self) !void {
         },
     };
     self.block_pass = try .init(&sources);
+    try self.block_pass.set_int("u_atlas", BLOCK_ATLAS_TEX);
     logger.debug("{*} Initialized block pass", .{self});
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
@@ -193,6 +195,8 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
 
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
+    try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BLOCK_ATLAS_TEX));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.atlas("blocks").handle));
 
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,
@@ -202,6 +206,7 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
         0,
     ));
 
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, 0));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
     try gl_call(gl.BindVertexArray(0));
@@ -494,8 +499,8 @@ const block_vert =
     \\
     \\out vec3 frag_norm;
     \\out uint frag_ao;
+    \\out uint frag_tex;
     \\out vec2 frag_uv;
-    \\out vec3 frag_color;
     \\out vec3 frag_pos;
     \\
     \\void main() {
@@ -511,7 +516,7 @@ const block_vert =
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
     \\  frag_ao = face.ao;
     \\  frag_uv = uvs[p];
-    \\  frag_color = face.pos / 16.0;
+    \\  frag_tex = face.texture;
     \\  frag_pos = view_pos.xyz;
     \\}
 ;
@@ -538,7 +543,7 @@ const block_frag =
     \\layout (location=POSITION_TEX_ATTACHMENT) out vec4 out_pos;
     \\layout (location=NORMAL_TEX_ATTACHMENT) out vec4 out_norm;
     \\
-    \\in vec3 frag_color;
+    \\in flat uint frag_tex;
     \\in vec3 frag_norm;
     \\in vec3 frag_pos;
     \\in flat uint frag_ao;
@@ -546,6 +551,7 @@ const block_frag =
     \\
     \\uniform bool u_enable_face_ao = true;
     \\uniform float u_ao_factor = 0.7;
+    \\uniform sampler2DArray u_atlas;
     \\
     \\float get_ao() {
     \\  uint has_l = HAS_AO(AO_LEFT);
@@ -567,12 +573,13 @@ const block_frag =
     \\  float r = float(has_r) * frag_uv.x;
     \\  
     \\  float ao = (tl + tr + bl + br + t + b + l + r) / 4.0;
-    \\  return ao;
+    \\  return smoothstep(0, 1, ao);
     \\}
     \\
     \\void main() {
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
-    \\  out_color = vec4(frag_color * ao, 1);
+    \\  vec3 rgb = texture(u_atlas, vec3(vec2(frag_uv.x, 1 - frag_uv.y), float(frag_tex))).rgb;
+    \\  out_color = vec4(rgb * ao, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\}

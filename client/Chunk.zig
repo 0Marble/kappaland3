@@ -128,11 +128,11 @@ fn generate_wavy(self: *Chunk) void {
                     CHUNK_SIZE +
                     @as(i32, @intCast(j)));
 
-                if (y < top) {
-                    self.set(pos, .stone);
-                } else {
-                    self.set(pos, .air);
-                }
+                var block: Block.Id = .air;
+                if (y < top) block = .grass;
+                if (y + 1 < top) block = .dirt;
+                if (y + 3 < top) block = .stone;
+                self.set(pos, block);
             }
         }
     }

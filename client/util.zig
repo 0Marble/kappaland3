@@ -185,3 +185,83 @@ pub inline fn cond_capture(cond: bool, captrure: anytype) @TypeOf(captrure) {
     if (cond) return captrure;
     return null;
 }
+
+pub fn file_sdl_iostream(file: *std.fs.File) !*c.SDL_IOStream {
+    const Interface = struct {
+        fn size(f: *std.fs.File) callconv(.c) i64 {
+            if (f.stat()) |ok| return @intCast(ok.size) else |err| {
+                std.log.err("{*}: could not stat file: {}", .{ f, err });
+                return -1;
+            }
+        }
+
+        fn seek(f: *std.fs.File, offset: i64, whence: c.SDL_IOWhence) callconv(.c) i64 {
+            _ = switch (whence) {
+                c.SDL_IO_SEEK_SET => f.seekTo(@intCast(offset)),
+                c.SDL_IO_SEEK_CUR => f.seekBy(@intCast(offset)),
+                c.SDL_IO_SEEK_END => f.seekFromEnd(@intCast(offset)),
+                else => {
+                    std.debug.panic("{*}: invalid whence: {d}", .{ f, whence });
+                },
+            } catch |err| {
+                std.log.err("{*}: could not seek: {}", .{ f, err });
+                return -1;
+            };
+
+            const cur_offset = f.getPos() catch |err| {
+                std.log.err("{*}: could not getPos: {}", .{ f, err });
+                return -1;
+            };
+            return @intCast(cur_offset);
+        }
+
+        fn read(f: *std.fs.File, ptr: [*]u8, len: usize, status: *c.SDL_IOStatus) callconv(.c) usize {
+            var buf: []u8 = undefined;
+            buf.ptr = ptr;
+            buf.len = len;
+            const read_amt = f.read(buf) catch |err| {
+                std.log.err("{*}: could not read: {}", .{ f, err });
+                status.* = c.SDL_IO_STATUS_ERROR;
+                return 0;
+            };
+            return read_amt;
+        }
+
+        fn write(f: *std.fs.File, ptr: [*]const u8, len: usize, status: *c.SDL_IOStatus) callconv(.c) usize {
+            var buf: []const u8 = undefined;
+            buf.ptr = ptr;
+            buf.len = len;
+            return f.write(buf) catch |err| {
+                std.log.err("{*}: could not write: {}", .{ f, err });
+                status.* = c.SDL_IO_STATUS_ERROR;
+                return 0;
+            };
+        }
+
+        fn flush(f: *std.fs.File, status: *c.SDL_IOStatus) callconv(.c) bool {
+            f.sync() catch |err| {
+                std.log.err("{*}: could not flush: {}", .{ f, err });
+                status.* = c.SDL_IO_STATUS_ERROR;
+                return false;
+            };
+            return true;
+        }
+
+        fn close(f: *std.fs.File) callconv(.c) bool {
+            f.close();
+            return true;
+        }
+    };
+
+    var iface = c.SDL_IOStreamInterface{
+        .version = @sizeOf(c.SDL_IOStreamInterface),
+        .size = @ptrCast(&Interface.size),
+        .seek = @ptrCast(&Interface.seek),
+        .read = @ptrCast(&Interface.read),
+        .write = @ptrCast(&Interface.write),
+        .flush = @ptrCast(&Interface.flush),
+    };
+
+    const res = try sdl_call(c.SDL_OpenIO(@ptrCast(&iface), @ptrCast(file)));
+    return res;
+}

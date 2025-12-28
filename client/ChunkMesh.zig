@@ -58,7 +58,7 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         const start: Coords = .{ 0, @intCast(i), CHUNK_SIZE - 1 };
         try self.build_layer_mesh(.top, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, 0 });
+    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{
@@ -89,7 +89,8 @@ pub const Face = packed struct(u64) {
     ao: u8,
     _unused2: u8 = 0xeb,
     // B:
-    _unused3: u32 = 0xdeadbeef,
+    texture: u16,
+    _unused3: u16 = 0xdead,
 
     pub fn define() [:0]const u8 {
         return 
@@ -97,6 +98,7 @@ pub const Face = packed struct(u64) {
         \\  uvec3 pos;
         \\  uint n;
         \\  uint ao;
+        \\  uint texture;
         \\};
         \\
         \\Face unpack(){
@@ -105,7 +107,8 @@ pub const Face = packed struct(u64) {
         \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
         \\  uint n = (vert_face_a >> uint(12)) & uint(0x0F);
         \\  uint ao = (vert_face_a >> uint(16)) & uint(0xFF);
-        \\  return Face(uvec3(x, y, z), n, ao);
+        \\  uint texture = (vert_face_b >> uint(0)) & uint(0xFFFF);
+        \\  return Face(uvec3(x, y, z), n, ao, texture);
         \\}
         ;
     }
@@ -196,12 +199,14 @@ fn build_layer_mesh(
             if (self.is_solid_neighbour(pos + front + left + down)) ao |= ao_mask[ao_idx][6];
             if (self.is_solid_neighbour(pos + front + right + down)) ao |= ao_mask[ao_idx][7];
 
+            const block = self.chunk.get(pos);
             const face = Face{
                 .x = @intCast(pos[0]),
                 .y = @intCast(pos[1]),
                 .z = @intCast(pos[2]),
                 .normal = @intFromEnum(normal),
                 .ao = ao,
+                .texture = @intCast(block.get_texture(normal)),
             };
 
             try self.faces.append(gpa, face);

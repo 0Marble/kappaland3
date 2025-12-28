@@ -11,6 +11,7 @@ const Options = @import("ClientOptions");
 pub const DebugUi = @import("DebugUi.zig");
 pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
+pub const TextureAtlas = @import("TextureAtlas.zig");
 
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
@@ -25,6 +26,7 @@ debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
+blocks_atlas: *TextureAtlas,
 
 layers: std.ArrayList(Layer),
 
@@ -63,6 +65,8 @@ pub fn init() !void {
     try init_sdl();
     try init_gl();
     app.debug_ui = try .init(&app);
+
+    app.blocks_atlas = try .init("textures/blocks", "blocks");
 
     app.layers = .empty;
     try push_layer(Game.layer());
@@ -161,6 +165,7 @@ pub fn deinit() void {
     app.settings_store.deinit();
     app.events.deinit();
     app.keys_state.deinit();
+    app.blocks_atlas.deinit();
 
     for (0..app.layers.items.len) |i| {
         const j = app.layers.items.len - 1 - i;
@@ -330,6 +335,10 @@ pub fn keys() *Keys {
 
 pub fn gui() *DebugUi {
     return &app.debug_ui;
+}
+
+pub fn atlas(comptime name: []const u8) *TextureAtlas {
+    return @field(app, name ++ "_atlas");
 }
 
 const FrameData = struct {
