@@ -161,17 +161,17 @@ fn gl_debug_callback(
 }
 
 pub fn deinit() void {
-    app.debug_ui.deinit();
-    app.settings_store.deinit();
-    app.events.deinit();
-    app.keys_state.deinit();
-    app.blocks_atlas.deinit();
-
     for (0..app.layers.items.len) |i| {
         const j = app.layers.items.len - 1 - i;
         const layer = app.layers.items[j];
         layer.on_detatch(layer.data);
     }
+
+    app.debug_ui.deinit();
+    app.settings_store.deinit();
+    app.events.deinit();
+    app.keys_state.deinit();
+    app.blocks_atlas.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);

@@ -358,6 +358,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
                 "{*}: [Thread {d}]: picked up task {s}@{}",
                 .{ self, tid, @tagName(task.kind), task.coords },
             );
+            if (!self.is_running) break;
 
             self.mutex.unlock();
             defer {
