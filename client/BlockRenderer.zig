@@ -12,6 +12,7 @@ const Renderer = @import("Renderer.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
 const BlockModel = @import("BlockModel");
+const Block = @import("Block.zig");
 const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
@@ -214,49 +215,56 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
 
 pub fn upload_chunk_mesh(self: *Self, mesh_obj: ChunkMesh) !void {
     const old_buf = self.faces.buffer;
-    const new_size = mesh_obj.faces.items.len * @sizeOf(ChunkMesh.Face);
 
     const mesh = if (self.meshes.get(mesh_obj.chunk.coords)) |mesh| blk: {
-        const old_range = self.faces.get_range(mesh.handle).?;
+        for (&mesh.handles, mesh_obj.faces) |*handle, faces| {
+            const old_range = self.faces.get_range(handle.*).?;
+            const new_size = faces.items.len * @sizeOf(ChunkMesh.Face);
 
-        try gl_call(gl.InvalidateBufferSubData(
-            self.faces.buffer,
-            old_range.offset,
-            old_range.size,
-        ));
-        mesh.handle = try self.faces.realloc(
-            mesh.handle,
-            new_size,
-            std.mem.Alignment.of(ChunkMesh.Face),
-        );
+            try gl_call(gl.InvalidateBufferSubData(
+                self.faces.buffer,
+                old_range.offset,
+                old_range.size,
+            ));
+            handle.* = try self.faces.realloc(
+                handle.*,
+                new_size,
+                std.mem.Alignment.of(ChunkMesh.Face),
+            );
+        }
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
-        mesh.handle = try self.faces.alloc(
-            new_size,
-            std.mem.Alignment.of(ChunkMesh.Face),
-        );
+        for (&mesh.handles, mesh_obj.faces) |*handle, faces| {
+            const new_size = faces.items.len * @sizeOf(ChunkMesh.Face);
+            handle.* = try self.faces.alloc(
+                new_size,
+                std.mem.Alignment.of(ChunkMesh.Face),
+            );
+        }
         try self.meshes.put(App.gpa(), mesh_obj.chunk.coords, mesh);
         break :blk mesh;
     };
 
     mesh.is_occluded = mesh_obj.is_occluded;
-    mesh.face_count = mesh_obj.faces.items.len;
     mesh.coords = mesh_obj.chunk.coords;
+    for (&mesh.face_counts, mesh_obj.faces, mesh.handles, 0..) |*cnt, faces, handle, i| {
+        cnt.* = faces.items.len;
 
-    const range = self.faces.get_range(mesh.handle).?;
-    logger.debug(
-        "{*}: chunk {}: mesh {}: offset={d}, size={d}",
-        .{ self, mesh.coords, mesh.handle, range.offset, range.size },
-    );
+        const range = self.faces.get_range(handle).?;
+        logger.debug(
+            "{*}: chunk {}: mesh[{d}] {}: offset={d}, size={d}",
+            .{ self, mesh.coords, i, handle, range.offset, range.size },
+        );
 
-    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
-    try gl_call(gl.BufferSubData(
-        gl.ARRAY_BUFFER,
-        range.offset,
-        range.size,
-        @ptrCast(mesh_obj.faces.items),
-    ));
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(faces.items),
+        ));
+    }
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 
     self.had_realloc |= old_buf != self.faces.buffer;
@@ -264,8 +272,11 @@ pub fn upload_chunk_mesh(self: *Self, mesh_obj: ChunkMesh) !void {
 
 pub fn destroy_chunk_mesh(self: *Self, coords: Chunk.Coords) !void {
     const mesh = self.meshes.fetchSwapRemove(coords) orelse return;
-    defer self.mesh_pool.destroy(mesh.value);
-    self.faces.free(mesh.value.handle);
+    for (mesh.value.handles) |handle| {
+        self.faces.free(handle);
+    }
+
+    self.mesh_pool.destroy(mesh.value);
 }
 
 fn on_imgui(self: *Self) !void {
@@ -337,28 +348,32 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     }
     std.mem.sort(MeshOrder, meshes.items, {}, MeshOrder.less_than);
 
-    const indirect = try App.frame_alloc().alloc(Indirect, meshes.items.len);
-    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len);
+    const indirect = try App.frame_alloc().alloc(Indirect, meshes.items.len * BLOCK_FACE_CNT);
+    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len * BLOCK_FACE_CNT);
 
     @memset(indirect, std.mem.zeroes(Indirect));
     @memset(chunk_data, std.mem.zeroes(ChunkData));
 
     for (meshes.items, 0..) |mesh, i| {
-        const range = self.faces.get_range(mesh.mesh.handle).?;
+        for (std.enums.values(Block.Face)) |normal| {
+            const j: u32 = @intFromEnum(normal);
+            const range = self.faces.get_range(mesh.mesh.handles[j]).?;
 
-        indirect[i] = Indirect{
-            .count = 6,
-            .instance_count = @intCast(mesh.mesh.face_count),
-            .base_instance = @intCast(@divExact(range.offset, @sizeOf(ChunkMesh.Face))),
-            .base_vertex = 0,
-            .first_index = 0,
-        };
-        chunk_data[i] = ChunkData{
-            .x = mesh.mesh.coords[0],
-            .y = mesh.mesh.coords[1],
-            .z = mesh.mesh.coords[2],
-        };
-        self.triangle_cnt += mesh.mesh.face_count * 2;
+            indirect[i * BLOCK_FACE_CNT + j] = Indirect{
+                .count = 6,
+                .instance_count = @intCast(mesh.mesh.face_counts[j]),
+                .base_instance = @intCast(@divExact(range.offset, @sizeOf(ChunkMesh.Face))),
+                .base_vertex = 0,
+                .first_index = 0,
+            };
+            chunk_data[i * BLOCK_FACE_CNT + j] = ChunkData{
+                .x = mesh.mesh.coords[0],
+                .y = mesh.mesh.coords[1],
+                .z = mesh.mesh.coords[2],
+                .normal = j,
+            };
+            self.triangle_cnt += mesh.mesh.face_counts[j] * 2;
+        }
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
@@ -395,14 +410,14 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     self.drawn_chunks_cnt = meshes.items.len;
-    return meshes.items.len;
+    return indirect.len;
 }
 
 const ChunkData = extern struct {
     x: i32,
     y: i32,
     z: i32,
-    padding: u32 = 0xbeefcafe,
+    normal: u32,
 };
 
 const Indirect = extern struct {
@@ -414,8 +429,8 @@ const Indirect = extern struct {
 };
 
 const Mesh = struct {
-    handle: GpuAlloc.Handle,
-    face_count: usize,
+    handles: [BLOCK_FACE_CNT]GpuAlloc.Handle,
+    face_counts: [BLOCK_FACE_CNT]usize,
     coords: Chunk.Coords,
     is_occluded: bool,
 
@@ -484,8 +499,15 @@ const block_vert =
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
 ++ ChunkMesh.Face.define() ++
     \\
+    \\struct Chunk {
+    \\  int x;
+    \\  int y;
+    \\  int z;
+    \\  uint normal;
+    \\};
+    \\
     \\layout (std430, binding = CHUNK_DATA_BINDING) buffer ChunkData{
-    \\  ivec4 chunk_coords[];
+    \\  Chunk chunks[];
     \\};
     \\layout (std140, binding = BLOCK_MODEL_BINDING) uniform BlockModel {
     \\  vec3 normals[BLOCK_FACE_CNT];
@@ -505,12 +527,13 @@ const block_vert =
     \\
     \\void main() {
     \\  Face face = unpack();
+    \\  Chunk chunk = chunks[gl_DrawID];
     \\
     \\  uint p = gl_VertexID;
-    \\  vec3 normal = normals[face.n];
-    \\  vec3 vert = verts[face.n * N_STRIDE + p * P_STRIDE] + face.pos;
-    \\  vec3 chunk = vec3(chunk_coords[gl_DrawID].xyz);
-    \\  vec4 view_pos = u_view * vec4(vert + chunk * 16, 1);
+    \\  vec3 normal = normals[chunk.normal];
+    \\  vec3 vert = verts[chunk.normal * N_STRIDE + p * P_STRIDE] + face.pos;
+    \\  vec3 chunk_coords = vec3(chunk.x, chunk.y, chunk.z);
+    \\  vec4 view_pos = u_view * vec4(vert + chunk_coords * 16, 1);
     \\  gl_Position = u_proj * view_pos;
     \\
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;

@@ -6,7 +6,7 @@ const Block = @import("Block.zig");
 const Game = @import("Game.zig");
 
 chunk: *Chunk,
-faces: std.ArrayList(Face),
+faces: [std.enums.values(Block.Face).len]std.ArrayList(Face),
 
 neighbour_cache: [26]?*Chunk,
 is_occluded: bool,
@@ -17,7 +17,7 @@ const OOM = std.mem.Allocator.Error;
 pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
     var self = Mesh{
         .chunk = chunk,
-        .faces = .empty,
+        .faces = @splat(.empty),
         .neighbour_cache = @splat(null),
         .is_occluded = true,
     };
@@ -75,7 +75,9 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
 
 pub fn dupe(self: *const Mesh, gpa: std.mem.Allocator) OOM!Mesh {
     var new_mesh = self.*;
-    new_mesh.faces = try self.faces.clone(gpa);
+    for (&new_mesh.faces, self.faces) |*new, old| {
+        new.* = try old.clone(gpa);
+    }
     return new_mesh;
 }
 
@@ -84,10 +86,8 @@ pub const Face = packed struct(u64) {
     x: u4,
     y: u4,
     z: u4,
-    normal: u3,
-    _unused1: u1 = 0,
     ao: u8,
-    _unused2: u8 = 0xeb,
+    _unused2: u12 = 0xeb,
     // B:
     texture: u16,
     _unused3: u16 = 0xdead,
@@ -96,7 +96,6 @@ pub const Face = packed struct(u64) {
         return 
         \\struct Face {
         \\  uvec3 pos;
-        \\  uint n;
         \\  uint ao;
         \\  uint texture;
         \\};
@@ -105,10 +104,9 @@ pub const Face = packed struct(u64) {
         \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
         \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
         \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
-        \\  uint n = (vert_face_a >> uint(12)) & uint(0x0F);
-        \\  uint ao = (vert_face_a >> uint(16)) & uint(0xFF);
+        \\  uint ao = (vert_face_a >> uint(12)) & uint(0xFF);
         \\  uint texture = (vert_face_b >> uint(0)) & uint(0xFFFF);
-        \\  return Face(uvec3(x, y, z), n, ao, texture);
+        \\  return Face(uvec3(x, y, z), ao, texture);
         \\}
         ;
     }
@@ -204,12 +202,11 @@ fn build_layer_mesh(
                 .x = @intCast(pos[0]),
                 .y = @intCast(pos[1]),
                 .z = @intCast(pos[2]),
-                .normal = @intFromEnum(normal),
                 .ao = ao,
                 .texture = @intCast(block.get_texture(normal)),
             };
 
-            try self.faces.append(gpa, face);
+            try self.faces[@intFromEnum(normal)].append(gpa, face);
         }
     }
 }

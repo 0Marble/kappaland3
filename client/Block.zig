@@ -26,7 +26,7 @@ pub const Id = enum(u16) {
     }
 };
 
-pub const Face = enum {
+pub const Face = enum(u3) {
     front,
     back,
     right,
