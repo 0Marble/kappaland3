@@ -222,13 +222,14 @@ fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
     const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
     const chunk = Chunk.world_to_chunk(world);
     const block = Chunk.world_to_block(world);
-
     if (@reduce(.And, chunk == self.chunk.coords)) return self.is_solid(block);
 
-    for (self.neighbour_cache) |n| {
-        const other = n orelse continue;
-        if (@reduce(.Or, other.coords != chunk)) continue;
-        return other.is_solid(block);
-    }
+    const d = chunk - self.chunk.coords;
+    const i: usize = @intCast(d[0] + 1);
+    const j: usize = @intCast(d[1] + 1);
+    const k: usize = @intCast(d[2] + 1);
+    const idx = Chunk.neighbours2_idx[i][j][k];
+    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
+    if (self.neighbour_cache[idx]) |other| return other.is_solid(block);
     return false;
 }

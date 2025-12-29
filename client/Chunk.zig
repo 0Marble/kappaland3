@@ -158,28 +158,37 @@ pub const neighbours: [6]Coords = .{
     .{ 0, -1, 0 },
 };
 
-pub const neighbours2 = blk: {
-    var res = std.mem.zeroes([26]Coords);
-    const zero: Coords = @splat(0);
+const Neighbours = struct {
+    n: [26]Coords = std.mem.zeroes([26]Coords),
+    idx: [3][3][3]usize = std.mem.zeroes([3][3][3]usize),
 
-    var l: usize = 0;
-    for (0..3) |i| {
-        for (0..3) |j| {
-            for (0..3) |k| {
-                const pos: Coords = .{
-                    @as(i32, @intCast(i)) - 1,
-                    @as(i32, @intCast(j)) - 1,
-                    @as(i32, @intCast(k)) - 1,
-                };
-                if (@reduce(.And, pos == zero)) continue;
-                res[l] = pos;
-                l += 1;
+    const instance: Neighbours = blk: {
+        var self = Neighbours{};
+        const zero: Coords = @splat(0);
+
+        var l: usize = 0;
+        for (0..3) |i| {
+            for (0..3) |j| {
+                for (0..3) |k| {
+                    const pos: Coords = .{
+                        @as(i32, @intCast(i)) - 1,
+                        @as(i32, @intCast(j)) - 1,
+                        @as(i32, @intCast(k)) - 1,
+                    };
+                    if (@reduce(.And, pos == zero)) continue;
+                    self.n[l] = pos;
+                    self.idx[i][j][k] = l;
+                    l += 1;
+                }
             }
         }
-    }
 
-    break :blk res;
+        break :blk self;
+    };
 };
+
+pub const neighbours2 = Neighbours.instance.n;
+pub const neighbours2_idx = Neighbours.instance.idx;
 
 pub fn to_world_coord(pos: zm.Vec3f) Coords {
     return @intFromFloat(@floor(pos));
