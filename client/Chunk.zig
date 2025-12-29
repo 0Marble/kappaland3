@@ -110,6 +110,17 @@ fn generate_balls(self: *Chunk) void {
     }
 }
 
+fn generate_checkers(self: *Chunk) void {
+    @memset(&self.blocks, .air);
+    if (self.coords[1] > 0) return;
+
+    if (@mod(@reduce(.Add, self.coords), 2) == 0) {
+        @memset(&self.blocks, .grass);
+    } else {
+        @memset(&self.blocks, .stone);
+    }
+}
+
 fn generate_wavy(self: *Chunk) void {
     const scale = std.math.pi / 16.0;
     for (0..CHUNK_SIZE) |i| {

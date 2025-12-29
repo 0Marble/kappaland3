@@ -175,22 +175,6 @@ fn process_impl(self: *ChunkManager) !void {
             const chunk = self.get_chunk(chunk_coords) orelse return;
             chunk.set(Chunk.world_to_block(x[0]), x[1]);
             self.queue_size -= 1;
-
-            try self.chunks_to_mesh.put(App.gpa(), chunk_coords, {});
-            for (std.enums.values(Block.Face)) |dir| {
-                const front = dir.front_dir();
-                inline for (.{
-                    front + dir.left_dir(),
-                    front - dir.left_dir(),
-                    front + dir.up_dir(),
-                    front - dir.up_dir(),
-                }) |d| {
-                    const other_chunk = Chunk.world_to_chunk(d + x[0]);
-                    if (@reduce(.Or, other_chunk != chunk_coords)) {
-                        try self.chunks_to_mesh.put(App.gpa(), other_chunk, {});
-                    }
-                }
-            }
         },
 
         .load_region => |x| {
@@ -312,6 +296,38 @@ pub fn set_block(self: *ChunkManager, coords: Chunk.Coords, block: Block.Id) !vo
     self.mutex.lock();
     defer self.mutex.unlock();
 
+    const chunk_coords = Chunk.world_to_chunk(coords);
+    var remeshed_chunks: [27]Chunk.Coords = @splat(@splat(0));
+    var i: usize = 1;
+    remeshed_chunks[0] = chunk_coords;
+
+    for (Chunk.neighbours2) |d| {
+        const other_chunk = Chunk.world_to_chunk(d + coords);
+        const is_new = loop: for (0..i) |j| {
+            if (@reduce(.And, remeshed_chunks[j] == other_chunk)) break :loop false;
+        } else true;
+        if (is_new) {
+            remeshed_chunks[i] = other_chunk;
+            i += 1;
+        }
+    }
+
+    const immediate = loop: for (0..i) |j| {
+        if (self.get_chunk(remeshed_chunks[j]) == null) break :loop false;
+    } else true;
+
+    if (immediate) {
+        const chunk = self.get_chunk(chunk_coords).?;
+        chunk.set(Chunk.world_to_block(coords), block);
+
+        for (0..i) |j| {
+            const chunk_to_mesh = self.get_chunk(remeshed_chunks[j]).?;
+            const mesh = try ChunkMesh.build(chunk_to_mesh, self.shared_temp_arena.allocator());
+            try self.meshes_to_apply.append(self.shared_gpa.allocator(), mesh);
+        }
+        return;
+    }
+
     const cmd: *Command = try self.cmd_pool.create();
     cmd.* = .{
         .started = false,
@@ -320,6 +336,10 @@ pub fn set_block(self: *ChunkManager, coords: Chunk.Coords, block: Block.Id) !vo
     };
     self.cmd_queue.append(&cmd.link);
     self.queue_size += 1;
+
+    for (0..i) |j| {
+        try self.chunks_to_mesh.put(App.gpa(), remeshed_chunks[j], {});
+    }
 }
 
 pub fn instance() *ChunkManager {
