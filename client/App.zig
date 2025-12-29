@@ -391,7 +391,7 @@ pub fn log_fn(
     if (builtin.mode != .Debug and @intFromEnum(level) > @intFromEnum(std.log.Level.warn)) return;
 
     switch (scope) {
-        .chunk_manager, .block_renderer => {
+        .chunk_manager, .block_renderer, .gpu_alloc => {
             if (@intFromEnum(level) > @intFromEnum(std.log.Level.info)) {
                 return;
             }

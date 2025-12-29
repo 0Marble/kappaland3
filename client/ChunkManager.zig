@@ -190,11 +190,11 @@ fn process_impl(self: *ChunkManager) !void {
                 for (self.chunks.keys()) |coords| {
                     if (@reduce(.And, coords >= x[0]) and @reduce(.And, coords <= x[1])) continue;
                     try to_remove.append(App.frame_alloc(), coords);
-                    try Game.instance().renderer.destroy_chunk_mesh(coords);
                 }
                 for (to_remove.items) |coords| {
                     const old = self.chunks.fetchSwapRemove(coords).?;
                     self.chunk_pool.destroy(old.value);
+                    try Game.instance().renderer.destroy_chunk_mesh(coords);
                 }
 
                 for (0..size[0] + 1) |i| {
