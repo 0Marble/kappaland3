@@ -213,6 +213,9 @@ fn process_impl(self: *ChunkManager) !void {
                                 .{ .coords = coords, .kind = .load_region },
                             );
                             try self.chunks_to_mesh.put(App.gpa(), chunk.coords, {});
+                            for (Chunk.neighbours2) |d| {
+                                try self.chunks_to_mesh.put(App.gpa(), chunk.coords + d, {});
+                            }
                         }
                     }
                 }
