@@ -468,7 +468,51 @@ const block_normals = blk: {
     break :blk res;
 };
 
-const block_model = block_normals ++ block_verts;
+// convert from normal-local coordinates (normal is +z)
+// to model coordinates
+// column major as per glsl spec
+const block_mats = blk: {
+    const n = 12;
+    var res = std.mem.zeroes([BLOCK_FACE_CNT * n]f32);
+    for (std.enums.values(Block.Face), 0..) |dir, i| {
+        const right: zm.Vec3f = @floatFromInt(-dir.left_dir());
+        const up: zm.Vec3f = @floatFromInt(dir.up_dir());
+        const front: zm.Vec3f = @floatFromInt(dir.front_dir());
+        const mat = [n]f32{
+            right[0], right[1], right[2], 0,
+            up[0],    up[1],    up[2],    0,
+            front[0], front[1], front[2], 0,
+        };
+        @memcpy(res[n * i .. n * (i + 1)], &mat);
+    }
+
+    break :blk res;
+};
+
+test "transforms" {
+    inline for (comptime std.enums.values(Block.Face)) |dir| {
+        errdefer {
+            std.log.err("failed at {}", .{dir});
+        }
+        const idx: usize = @intFromEnum(dir);
+
+        const data = block_mats[9 * idx .. 9 * (idx + 1)];
+        var vec: @Vector(9, f32) = @splat(0);
+        inline for (data, 0..) |x, i| vec[i] = x;
+        var mat: zm.Mat3f = .{ .data = vec };
+        mat = mat.transpose();
+
+        const front: zm.Vec3f = @floatFromInt(dir.front_dir());
+        const right: zm.Vec3f = @floatFromInt(-dir.left_dir());
+        const up: zm.Vec3f = @floatFromInt(dir.up_dir());
+
+        try std.testing.expectEqual(front, mat.multiplyVec3(.{ 0, 0, 1 }));
+        try std.testing.expectEqual(right, mat.multiplyVec3(.{ 1, 0, 0 }));
+        try std.testing.expectEqual(up, mat.multiplyVec3(.{ 0, 1, 0 }));
+    }
+}
+
+const block_model = block_normals ++ block_verts ++ block_mats;
 
 const block_inds: [BlockModel.indices.len]u8 = BlockModel.indices;
 
@@ -486,14 +530,14 @@ const block_vert =
     \\#version 460 core
     \\
 ++
-    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_A {d}\n", .{FACE_DATA_LOCATION_A}) ++
-    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_B {d}\n", .{FACE_DATA_LOCATION_B}) ++
-    std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}\n", .{CHUNK_DATA_BINDING}) ++
-    std.fmt.comptimePrint("\n#define BLOCK_MODEL_BINDING {d}\n", .{BLOCK_MODEL_BINDING}) ++
-    std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}\n", .{BLOCK_FACE_CNT}) ++
-    std.fmt.comptimePrint("\n#define BLOCK_VERT_CNT {d}\n", .{BLOCK_VERT_CNT}) ++
-    std.fmt.comptimePrint("\n#define N_STRIDE {d}\n", .{N_STRIDE}) ++
-    std.fmt.comptimePrint("\n#define P_STRIDE {d}\n", .{P_STRIDE}) ++
+    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_A {d}", .{FACE_DATA_LOCATION_A}) ++
+    std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_B {d}", .{FACE_DATA_LOCATION_B}) ++
+    std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}", .{CHUNK_DATA_BINDING}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_MODEL_BINDING {d}", .{BLOCK_MODEL_BINDING}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}", .{BLOCK_FACE_CNT}) ++
+    std.fmt.comptimePrint("\n#define BLOCK_VERT_CNT {d}", .{BLOCK_VERT_CNT}) ++
+    std.fmt.comptimePrint("\n#define N_STRIDE {d}", .{N_STRIDE}) ++
+    std.fmt.comptimePrint("\n#define P_STRIDE {d}", .{P_STRIDE}) ++
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
@@ -512,6 +556,7 @@ const block_vert =
     \\layout (std140, binding = BLOCK_MODEL_BINDING) uniform BlockModel {
     \\  vec3 normals[BLOCK_FACE_CNT];
     \\  vec3 verts[BLOCK_VERT_CNT];
+    \\  mat3 norm_to_world[BLOCK_FACE_CNT]; 
     \\};
     \\
     \\uniform mat4 u_view;
@@ -524,6 +569,7 @@ const block_vert =
     \\out uint frag_tex;
     \\out vec2 frag_uv;
     \\out vec3 frag_pos;
+    \\out vec3 frag_color;
     \\
     \\void main() {
     \\  Face face = unpack();
@@ -531,16 +577,19 @@ const block_vert =
     \\
     \\  uint p = gl_VertexID;
     \\  vec3 normal = normals[chunk.normal];
-    \\  vec3 vert = verts[chunk.normal * N_STRIDE + p * P_STRIDE] + face.pos;
+    \\  vec3 scale = abs(norm_to_world[chunk.normal] * vec3(face.size, 1));
+    \\  vec3 offset = abs(norm_to_world[chunk.normal] * face.offset);
+    \\  vec3 vert = verts[chunk.normal * N_STRIDE + p * P_STRIDE] * scale + face.pos + offset;
     \\  vec3 chunk_coords = vec3(chunk.x, chunk.y, chunk.z);
     \\  vec4 view_pos = u_view * vec4(vert + chunk_coords * 16, 1);
     \\  gl_Position = u_proj * view_pos;
     \\
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
     \\  frag_ao = face.ao;
-    \\  frag_uv = uvs[p];
+    \\  frag_uv = uvs[p] * face.size + face.offset.xy;
     \\  frag_tex = face.texture;
     \\  frag_pos = view_pos.xyz;
+    \\  frag_color = vec3(1);
     \\}
 ;
 
@@ -571,6 +620,7 @@ const block_frag =
     \\in vec3 frag_pos;
     \\in flat uint frag_ao;
     \\in vec2 frag_uv;
+    \\in vec3 frag_color;
     \\
     \\uniform bool u_enable_face_ao = true;
     \\uniform float u_ao_factor = 0.7;
@@ -602,7 +652,7 @@ const block_frag =
     \\void main() {
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
     \\  vec3 rgb = texture(u_atlas, vec3(vec2(frag_uv.x, 1 - frag_uv.y), float(frag_tex))).rgb;
-    \\  out_color = vec4(rgb * ao, 1);
+    \\  out_color = vec4(rgb * ao * frag_color, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\}

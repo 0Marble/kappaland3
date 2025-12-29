@@ -26,11 +26,18 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         n.* = Game.instance().chunk_manager.get_chunk(d + chunk.coords);
     }
 
+    self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
+    self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
+    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, 0 });
+    if (self.is_occluded) return self;
+
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ 0, 0, @intCast(i) };
         try self.build_layer_mesh(.front, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{
@@ -40,25 +47,21 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         };
         try self.build_layer_mesh(.back, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
         try self.build_layer_mesh(.right, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
         try self.build_layer_mesh(.left, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{ 0, @intCast(i), CHUNK_SIZE - 1 };
         try self.build_layer_mesh(.top, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
 
     for (0..CHUNK_SIZE) |i| {
         const start: Coords = .{
@@ -68,7 +71,6 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         };
         try self.build_layer_mesh(.bot, start, gpa);
     }
-    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, 0 });
 
     return self;
 }
@@ -87,7 +89,12 @@ pub const Face = packed struct(u64) {
     y: u4,
     z: u4,
     ao: u8,
-    _unused2: u12 = 0xeb,
+    u_offset: u2 = 0,
+    v_offset: u2 = 0,
+    w_offset: u2 = 0,
+    u_size: u2 = 3,
+    v_size: u2 = 3,
+    _unused2: u2 = 2,
     // B:
     texture: u16,
     _unused3: u16 = 0xdead,
@@ -96,6 +103,8 @@ pub const Face = packed struct(u64) {
         return 
         \\struct Face {
         \\  uvec3 pos;
+        \\  vec3 offset;
+        \\  vec2 size;
         \\  uint ao;
         \\  uint texture;
         \\};
@@ -105,8 +114,16 @@ pub const Face = packed struct(u64) {
         \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
         \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
         \\  uint ao = (vert_face_a >> uint(12)) & uint(0xFF);
-        \\  uint texture = (vert_face_b >> uint(0)) & uint(0xFFFF);
-        \\  return Face(uvec3(x, y, z), ao, texture);
+        \\  uint u = (vert_face_a >> uint(20)) & uint(0x3);
+        \\  uint v = (vert_face_a >> uint(22)) & uint(0x3);
+        \\  uint w = (vert_face_a >> uint(24)) & uint(0x3);
+        \\  uint s = (vert_face_a >> uint(26)) & uint(0x3);
+        \\  uint t = (vert_face_a >> uint(28)) & uint(0x3);
+        \\
+        \\  uint tex = (vert_face_b >> uint(0)) & uint(0xFFFF);
+        \\  vec3 offset = vec3(u, v, w) / 4.0;
+        \\  vec2 size = vec2(s + 1, t + 1) / 4.0;
+        \\  return Face(uvec3(x, y, z), offset, size, ao, tex);
         \\}
         ;
     }

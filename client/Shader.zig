@@ -46,7 +46,11 @@ pub const Source = struct {
         errdefer {
             std.log.err("Failed to compile shader:", .{});
             for (self.sources) |s| {
-                std.log.err("{s}", .{s});
+                var lines = std.mem.splitScalar(u8, s, '\n');
+                var i: usize = 1;
+                while (lines.next()) |line| : (i += 1) {
+                    std.log.err("{d} | {s}", .{ i, line });
+                }
             }
         }
 
