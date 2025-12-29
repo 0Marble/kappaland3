@@ -8,11 +8,12 @@ pub const Id = enum(u16) {
     stone,
     dirt,
     grass,
+    stone_slab_bot,
 
     pub fn get_texture(self: Id, face: Face) usize {
         const atlas = App.atlas("blocks");
         switch (self) {
-            .stone => return atlas.get_idx(".blocks.stone"),
+            .stone, .stone_slab_bot => return atlas.get_idx(".blocks.stone"),
             .dirt => return atlas.get_idx(".blocks.dirt"),
             .grass => if (face == .bot) {
                 return atlas.get_idx(".blocks.dirt");

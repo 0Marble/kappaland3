@@ -198,7 +198,8 @@ fn build_layer_mesh(
                 @as(Coords, @splat(u)) * right +
                 @as(Coords, @splat(v)) * up;
 
-            if (!self.is_solid(pos) or self.is_solid_neighbour(pos + front)) {
+            const block = self.chunk.get(pos);
+            if (block == .air or self.is_solid_neighbour(pos + front)) {
                 continue;
             }
 
@@ -214,14 +215,19 @@ fn build_layer_mesh(
             if (self.is_solid_neighbour(pos + front + left + down)) ao |= ao_mask[ao_idx][6];
             if (self.is_solid_neighbour(pos + front + right + down)) ao |= ao_mask[ao_idx][7];
 
-            const block = self.chunk.get(pos);
-            const face = Face{
+            var face = Face{
                 .x = @intCast(pos[0]),
                 .y = @intCast(pos[1]),
                 .z = @intCast(pos[2]),
                 .ao = ao,
                 .texture = @intCast(block.get_texture(normal)),
             };
+            if (normal != .top and normal != .bot and block == .stone_slab_bot) {
+                face.v_size = 1;
+            }
+            if (normal == .top and block == .stone_slab_bot) {
+                face.w_offset = 2;
+            }
 
             try self.faces[@intFromEnum(normal)].append(gpa, face);
         }

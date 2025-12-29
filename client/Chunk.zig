@@ -28,7 +28,7 @@ pub fn get(self: *Chunk, pos: Coords) Block.Id {
 
 pub fn is_solid(self: *Chunk, pos: Coords) bool {
     const b = self.get_safe(pos);
-    if (b == null or b == .air) return false;
+    if (b == null or b == .air or b == .stone_slab_bot) return false;
     return true;
 }
 
