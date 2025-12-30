@@ -1,30 +1,68 @@
 # Critical
 
 - Work on the server (possibly wait till 0.16 with the new async IO?)
-- Lights support - we can either have the lighting be calculated on the cpu or on the gpu, I would prefer the cpu since the gpu is already quite strained, but I am also often wrong about gpu performance
-    1. Just stick a u32 RGBA onto vertex attributes - 2x the memory...
-    2. Pack vertex attribs xxxxyyyy|zzzz?nnn|tttttttt|wwhhllll with 4 bits of light level - no colored lights, more difficult to support u16-based texture indices in the future
-    3. Calculate everything in the fragment shader - have a buffer with concated per-chunk light block data, and another one with chunk light-buf offsets. If we have enough gpu it is the easiest approach
-    4. Deferred shading - have a completely different shader pass that computes "light meshes", i.e. draws just the light-enduced color of the block faces. We render it to a gpu texture, and then use later for final calculations
+- Lighting support 
+- Transparency support
+- Generic model rendering - for enemies/players/blocks with crazy models.
+- Better defintion of a block: we want all block info (solid? model? texture? AO interaction?) to be easily accessible and configurable in a single place. Also referring to blocks by generically named id's is stupid.
 
 # Non-critical
 
+- Possible use for face bits: decals. 
+    We have 4+4 unused bits, maybe we can put multiple decals into these bits. 
+    (decal as in a second texture to put on top of the base texture)
+    1. Grass changes color with season, while the underlying dirt does not (2 bits?)
+    2. Block breaking cracks (3 bits?)
+    3. Highlight block we are looking at (1 bit)
+    4. Maybe footprints or something? Or some ambient cracks?
+    
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
-- ECS nursery - systems during execution may spawn or register ecs thins which has a potential to invalidate all pointers. Make it so commands are recorded and only after `evaluate()` are executed.
-- How does transparensy, non-block models, textures work?
 
 # Debt
 
-- visual: only using SSAO far away is a hack, can we improve it?
 - fps: what is the state of the game on iGPU?
 - build: we depend on system install of SDL3.
 - culling: when frustum culling, I just take the maximum of FOV's, but that doesnt actually produce a circle that covers the whole screen (the old circle at corners vs circle at side middles thing)
-- threading: chunk meshe faces are allocated on threadlocal static arenas, what if after unloading the mesh another thread picks it up? Since I only do `clearRetainingCapacity`.
 - renderer: there is a maximum allocation size on the gpu, (around 4gigs or `-Dworld_size=128` on flat world).
-- threading: I think it is possible to get rid of the RwLock at `World.get_block` if we store neighbour chunks?
-- renderer: after the threadpool introduction, gpu memory usage suddenly became very high (64mb => 256 mb on balls). Why?
 
 # Done
+
+- 29.12.2025 (not really, havent updated this doc in a while):
+    1. After a number of iterations, introduced a new chunk manager: it generates/meshes/handles `set_block` all in multiple (configurable count) threads.
+    Initially I struggled a lot with synchronization: meshing requires read access to neighbouring chunk, but there are also caches involved, to avoid hashmap access on every emited face.
+    The main cause for complexity is that I had an event queue per chunk, so I had to ensure everything worked regardless of the state of the neighbouring chunk.
+    Now, the strategy is much simpler: I have a single event queue for the whole world, and the chunk manager switches between different phases defined by these events.
+    That means the state of each individual chunk is much easier to track.
+    2. Ambient occlusion improvements. 
+    AO has bothered me for a while: SSAO was mid on its own (apparently it looks mid in every single other game I tried lol), and per-face AO was ugly. 
+    After realizing SSAO will not get much better, I have switched my attention to face AO, and finally made it handle corners.
+    This caused a dramatic improvement to the visuals!
+    3. Textures. 
+    I finally decided to add textures to the game. 
+    The main reason is that I realized a lot of graphical issues were exacerbated by blocks having flat color as their texture. 
+    This emphasized many negative aspects of my graphics system: noisy AO, aliasing, etc. 
+    I sat down and made a simple TextureAtlas class with some basic textures and it actually made a big improvement to how the game looks and feels.
+    4. Custom models. 
+    I have spent quite some time thinking about how should I handle custom models.
+    The problem of just having a generic instaced model renderer for anything that is not a full block is obvious: quite a bit of things are not full blocks (slabs, stairs, ...).
+    Plus there is no real way to use face AO for generic models.
+    After staring at the way I pack information for Face data in BlockRenderer, I saw that there are a lot of free bits that I can take advantage of. 
+    I can encode a simple blocky (as in made of rects and only has 90 degree edges) model in these bits.
+    Basically imagine we have a face and a normal, they form a 3D coordinate system uvw (w is normal).
+    If we wanted a slab for example, I could say it is just a face with half the hight (v=0.5) of a normal face for the sides, and a full face but offset by -0.5 into the block (w=-0.5) for the top side.
+    For a stair we can use a combination of uv-scale and uvw-offset.
+    At that point, the layout was: xxxxyyyy|zzzznnn?|aaaaaaaa|???????? for the first 32bits (the second 32 bit section was for textures (16bit) + future use for colors).
+    After thinking about it, I realized I can move the normal into ChunkData, since it is mostly repeated.
+    I also realized there is some invalid/visually identical cases for AO bits, and I was able to compress it down to just 47 cases => 6 bits.
+    So I have 14 bits free.
+    The first idea was to encode offset and scale directly into the leftower bits.
+    The problem is that 14 bits was enough only for resolution of 1/4 meters (2 bits per component => 10bits)
+    I could do 1/8th for uv scale and offset and 1/4 for w for the whole 14 bits.
+    Removing invalid cases did not help to reduce the memory usage.
+    Another option was to use some bits as an index to a models buffer on the GPU, where I can put whatever model I want. 
+    I did not know which way would be better, but now I am convinced a separate models buffer is much more powerful.
+        - I have much more control over the number of bits used, I can twaek it depending on how many models I want to support.
+        - Most of the models that are accessible using the direct encoding idea are useless, I can do a lot more by storing only interesting models in a separate buffer.
 
 - 14.12.2025:
     1. Using a thread pool for building chunks, speeds up the process massively, plus it is a first experiment with multithreading in the app. I had to change how the allocators work.
