@@ -32,6 +32,8 @@ pub const Id = enum(u16) {
     }
 };
 
+pub const indices: []const u8 = &.{ 0, 1, 2, 0, 2, 3 };
+
 pub const Face = enum(u3) {
     front,
     back,

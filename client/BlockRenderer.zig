@@ -11,7 +11,6 @@ const Shader = @import("Shader.zig");
 const Renderer = @import("Renderer.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
-const BlockModel = @import("BlockModel");
 const Block = @import("Block.zig");
 const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
@@ -110,8 +109,8 @@ fn init_models(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_ibo));
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
-        @intCast(block_inds.len * @sizeOf(u8)),
-        @ptrCast(&block_inds),
+        @intCast(Block.indices.len * @sizeOf(u8)),
+        @ptrCast(&Block.indices),
         gl.STATIC_DRAW,
     ));
 
@@ -499,11 +498,16 @@ const bot_slab_top_model: FaceModel = .{
     .w_offset = 8,
 };
 
-const models = [_]FaceModel{ block_model, bot_slab_side_model, bot_slab_top_model };
+const models = [_]FaceModel{
+    block_model,
+    bot_slab_side_model,
+    bot_slab_top_model,
+};
 
 const normals = blk: {
     var res = std.mem.zeroes([BLOCK_FACE_CNT * 4]f32);
-    for (BlockModel.normals, 0..) |normal, n| {
+    for (std.enums.values(Block.Face), 0..) |face, n| {
+        const normal: zm.Vec3f = @floatFromInt(face.front_dir());
         res[4 * n + 0] = normal[0];
         res[4 * n + 1] = normal[1];
         res[4 * n + 2] = normal[2];
@@ -555,18 +559,13 @@ test "transforms" {
     }
 }
 
-const block_inds: [BlockModel.indices.len]u8 = BlockModel.indices;
-
 const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;
 const CHUNK_DATA_BINDING = 1;
 const NORMAL_BINDING = 2;
 const MODEL_BINDING = 3;
-const BLOCK_FACE_CNT = BlockModel.normals.len;
-const BLOCK_VERT_CNT = BLOCK_FACE_CNT * BlockModel.faces[0].len;
-const P_STRIDE = 1;
-const N_STRIDE = BlockModel.faces[0].len;
+const BLOCK_FACE_CNT = std.enums.values(Block.Face).len;
 
 const block_vert =
     \\#version 460 core
@@ -578,9 +577,6 @@ const block_vert =
     std.fmt.comptimePrint("\n#define NORMAL_BINDING {d}", .{NORMAL_BINDING}) ++
     std.fmt.comptimePrint("\n#define MODEL_BINDING {d}", .{MODEL_BINDING}) ++
     std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}", .{BLOCK_FACE_CNT}) ++
-    std.fmt.comptimePrint("\n#define BLOCK_VERT_CNT {d}", .{BLOCK_VERT_CNT}) ++
-    std.fmt.comptimePrint("\n#define N_STRIDE {d}", .{N_STRIDE}) ++
-    std.fmt.comptimePrint("\n#define P_STRIDE {d}", .{P_STRIDE}) ++
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
