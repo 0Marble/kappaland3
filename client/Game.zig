@@ -10,6 +10,8 @@ const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 const Block = @import("Block.zig");
 
+const logger = std.log.scoped(.game);
+
 const Game = @This();
 const WIDTH = Options.world_size;
 const HEIGHT = Options.world_height;
@@ -46,14 +48,17 @@ pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
 }
 
 fn on_attatch(self: *Game) !void {
-    std.log.info("{*}: Attatched", .{self});
+    logger.info("{*}: initializing camera", .{self});
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
+    logger.info("{*}: initializing renderer", .{self});
     try self.renderer.init();
+    logger.info("{*}: initializing ChunkManager", .{self});
     self.chunk_manager = try ChunkManager.init(.{
         .thread_cnt = 4,
     });
+    logger.info("{*}: Attatched", .{self});
 }
 
 fn on_imgui(self: *Game) !void {
@@ -98,10 +103,10 @@ fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
 }
 
 fn on_detatch(self: *Game) void {
-    std.log.info("{*}: Detatched", .{self});
     self.camera.deinit();
     self.renderer.deinit();
     self.chunk_manager.deinit();
+    logger.info("{*}: Detatched", .{self});
 }
 
 pub fn get_block(self: *Game, coords: Coords) ?Block.Id {

@@ -15,18 +15,18 @@ pub const Id = enum(u16) {
     pub fn get_texture(self: Id, face: Face) usize {
         const atlas = App.atlas("blocks");
         switch (self) {
-            .stone => return atlas.get_idx(".blocks.stone"),
-            .planks, .planks_slab => return atlas.get_idx(".blocks.planks"),
-            .dirt => return atlas.get_idx(".blocks.dirt"),
+            .stone => return atlas.get_idx(".blocks.main.stone"),
+            .planks, .planks_slab => return atlas.get_idx(".blocks.main.planks"),
+            .dirt => return atlas.get_idx(".blocks.main.dirt"),
             .grass => if (face == .bot) {
-                return atlas.get_idx(".blocks.dirt");
+                return atlas.get_idx(".blocks.main.dirt");
             } else if (face == .top) {
-                return atlas.get_idx(".blocks.grass_top");
+                return atlas.get_idx(".blocks.main.grass_top");
             } else {
-                return atlas.get_idx(".blocks.grass_side");
+                return atlas.get_idx(".blocks.main.grass_side");
             },
             else => switch (face) {
-                inline else => |tag| return atlas.get_idx(".blocks.debug_" ++ @tagName(tag)),
+                inline else => |tag| return atlas.get_idx(".blocks.main.debug_" ++ @tagName(tag)),
             },
         }
     }

@@ -13,6 +13,8 @@ pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
 pub const TextureAtlas = @import("TextureAtlas.zig");
 
+const logger = std.log.scoped(.app);
+
 win: *c.SDL_Window,
 gl_ctx: c.SDL_GLContext,
 gl_procs: gl.ProcTable,
@@ -26,7 +28,7 @@ debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
-blocks_atlas: *TextureAtlas,
+blocks_atlas: TextureAtlas,
 
 layers: std.ArrayList(Layer),
 
@@ -51,7 +53,7 @@ var app: App = undefined;
 var main_alloc: Gpa = .init;
 
 pub fn init() !void {
-    std.log.info("Initialization...", .{});
+    logger.info("Initialization...", .{});
 
     @memset(std.mem.asBytes(&app), 0xbc);
     app.random = .init(69);
@@ -71,7 +73,7 @@ pub fn init() !void {
     app.layers = .empty;
     try push_layer(Game.layer());
 
-    std.log.info("Started the client", .{});
+    logger.info("Started the client", .{});
 }
 
 pub fn push_layer(layer: Layer) UnhandledError!void {
@@ -79,7 +81,7 @@ pub fn push_layer(layer: Layer) UnhandledError!void {
     layer.on_attatch(layer.data) catch |err| switch (err) {
         error.OutOfMemory, error.GlError => return @errorCast(err),
         else => {
-            std.log.err("Could not attatch layer! {}", .{err});
+            logger.err("Could not attatch layer! {}", .{err});
             _ = app.layers.pop();
         },
     };
@@ -91,9 +93,9 @@ fn init_memory() !void {
 }
 
 fn init_sdl() !void {
-    std.log.info("Initialization: SDL...", .{});
+    logger.info("Initialization: SDL...", .{});
     try sdl_call(c.SDL_Init(c.SDL_INIT_VIDEO));
-    std.log.info("Initialized SDL", .{});
+    logger.info("Initialized SDL", .{});
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, gl.info.version_major));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, gl.info.version_minor));
     try sdl_call(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
@@ -102,7 +104,7 @@ fn init_sdl() !void {
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
             if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
-    std.log.info("Set OpenGL attributes", .{});
+    logger.info("Set OpenGL attributes", .{});
 
     app.win = try sdl_call(c.SDL_CreateWindow(
         "Client",
@@ -110,12 +112,12 @@ fn init_sdl() !void {
         480,
         c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_OPENGL,
     ));
-    std.log.info("Created SDL Window", .{});
-    std.log.info("Initialized SDL", .{});
+    logger.info("Created SDL Window", .{});
+    logger.info("Initialized SDL", .{});
 }
 
 fn init_gl() !void {
-    std.log.info("Initialization: OpenGL...", .{});
+    logger.info("Initialization: OpenGL...", .{});
     app.gl_ctx = try sdl_call(c.SDL_GL_CreateContext(app.win));
     try sdl_call(c.SDL_GL_MakeCurrent(app.win, app.gl_ctx));
     try sdl_call(app.gl_procs.init(&c.SDL_GL_GetProcAddress));
@@ -130,16 +132,16 @@ fn init_gl() !void {
         var flags: u32 = 0;
         try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
         if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {
-            std.log.warn("Could not enable OpenGL debug output!", .{});
+            logger.warn("Could not enable OpenGL debug output!", .{});
         } else {
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
             try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
-            std.log.info("Enabled OpenGL debug output", .{});
+            logger.info("Enabled OpenGL debug output", .{});
         }
     }
 
-    std.log.info("Initialized OpenGL", .{});
+    logger.info("Initialized OpenGL", .{});
 }
 
 fn gl_debug_callback(
@@ -155,12 +157,14 @@ fn gl_debug_callback(
     msg_slice.ptr = msg;
     msg_slice.len = @intCast(size);
 
-    std.log.warn("--------", .{});
-    std.log.warn("{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
-    std.log.warn("--------", .{});
+    logger.warn("--------", .{});
+    logger.warn("{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
+    logger.warn("--------", .{});
 }
 
 pub fn deinit() void {
+    logger.info("Good bye!", .{});
+
     for (0..app.layers.items.len) |i| {
         const j = app.layers.items.len - 1 - i;
         const layer = app.layers.items[j];
@@ -243,7 +247,7 @@ pub fn run() UnhandledError!void {
         app.debug_ui.draw();
 
         if (!c.SDL_GL_SwapWindow(@ptrCast(app.win))) {
-            std.log.warn("Could not swap window: {s}", .{c.SDL_GetError()});
+            logger.warn("Could not swap window: {s}", .{c.SDL_GetError()});
         }
 
         for (0..app.layers.items.len) |i| {
@@ -338,7 +342,7 @@ pub fn gui() *DebugUi {
 }
 
 pub fn atlas(comptime name: []const u8) *TextureAtlas {
-    return @field(app, name ++ "_atlas");
+    return &@field(app, name ++ "_atlas");
 }
 
 const FrameData = struct {
@@ -363,11 +367,11 @@ const FrameData = struct {
                 .{fps},
                 0,
             ) catch |err| blk: {
-                std.log.warn("Could not allocate a string for FPS measurement: {}", .{err});
+                logger.warn("Could not allocate a string for FPS measurement: {}", .{err});
                 break :blk "FPS: ???";
             };
             sdl_call(c.SDL_SetWindowTitle(app.win, @ptrCast(str))) catch |err| {
-                std.log.warn("Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
+                logger.warn("Could not rename window: {}, fallback: fps={d:4.2}", .{ err, fps });
             };
             self.last_fps_measurement_time = self.this_frame_start;
             self.last_fps_measurement_frame = self.cur_frame;

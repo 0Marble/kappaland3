@@ -110,7 +110,7 @@ fn init_models(self: *Self) !void {
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
         @intCast(Block.indices.len * @sizeOf(u8)),
-        @ptrCast(&Block.indices),
+        @ptrCast(Block.indices),
         gl.STATIC_DRAW,
     ));
 

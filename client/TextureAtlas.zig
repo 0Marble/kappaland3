@@ -13,7 +13,8 @@ img_width: usize,
 img_height: usize,
 
 const TextureAtlas = @This();
-pub fn init(textures_dir: []const u8, atlas_name: []const u8) !*TextureAtlas {
+pub fn init(textures_dir: []const u8, atlas_name: []const u8) !TextureAtlas {
+    logger.info("scanning {s}", .{textures_dir});
     var builder = try Builder.init(atlas_name);
     defer builder.deinit();
     var dir = try std.fs.cwd().openDir(textures_dir, .{ .iterate = true });
@@ -22,12 +23,16 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !*TextureAtlas {
 
     const w, const h = builder.get_size(0);
     const cnt = builder.images.count();
-    const self = try App.gpa().create(TextureAtlas);
-    self.* = TextureAtlas{ .handle = 0, .images = .empty, .img_height = h, .img_width = w };
+    var self = TextureAtlas{
+        .handle = 0,
+        .images = .empty,
+        .img_height = h,
+        .img_width = w,
+    };
 
     logger.info(
-        "{*}: building atlas {s}, size: {d}x{d}x{d}",
-        .{ self, atlas_name, w, h, cnt },
+        "building atlas {s}, size: {d}x{d}x{d}",
+        .{ atlas_name, w, h, cnt },
     );
     try gl_call(gl.GenTextures(1, @ptrCast(&self.handle)));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, self.handle));
@@ -53,8 +58,8 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !*TextureAtlas {
             c.SDL_PIXELFORMAT_RGBA32 => .{ gl.RGBA, gl.UNSIGNED_BYTE },
             else => {
                 logger.warn(
-                    "{*}: {s}: unsupported pixel format: {d}",
-                    .{ self, name, surface.format },
+                    "{s}: unsupported pixel format: {d}",
+                    .{ name, surface.format },
                 );
                 continue;
             },
@@ -77,7 +82,7 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !*TextureAtlas {
         try util.sdl_call(c.SDL_LockSurface(surface));
 
         try self.images.put(App.gpa(), name, idx);
-        logger.info("{*}: registered texture {s}@{d}", .{ self, name, idx });
+        logger.info("registered texture {s}@{d}", .{ name, idx });
     }
 
     return self;
@@ -86,7 +91,6 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !*TextureAtlas {
 pub fn deinit(self: *TextureAtlas) void {
     gl.DeleteTextures(1, @ptrCast(&self.handle));
     self.images.deinit(App.gpa());
-    App.gpa().destroy(self);
 }
 
 pub fn get_idx(self: *TextureAtlas, name: []const u8) usize {
