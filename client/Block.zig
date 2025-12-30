@@ -8,12 +8,15 @@ pub const Id = enum(u16) {
     stone,
     dirt,
     grass,
-    stone_slab_bot,
+    planks,
+    planks_slab,
+    debug,
 
     pub fn get_texture(self: Id, face: Face) usize {
         const atlas = App.atlas("blocks");
         switch (self) {
-            .stone, .stone_slab_bot => return atlas.get_idx(".blocks.stone"),
+            .stone => return atlas.get_idx(".blocks.stone"),
+            .planks, .planks_slab => return atlas.get_idx(".blocks.planks"),
             .dirt => return atlas.get_idx(".blocks.dirt"),
             .grass => if (face == .bot) {
                 return atlas.get_idx(".blocks.dirt");
@@ -22,7 +25,9 @@ pub const Id = enum(u16) {
             } else {
                 return atlas.get_idx(".blocks.grass_side");
             },
-            else => return atlas.get_idx(".blocks.invalid"),
+            else => switch (face) {
+                inline else => |tag| return atlas.get_idx(".blocks.debug_" ++ @tagName(tag)),
+            },
         }
     }
 };
@@ -75,7 +80,7 @@ pub const Face = enum(u3) {
             .right => .{ 0, 1, 0 },
             .left => .{ 0, 1, 0 },
             .top => .{ 0, 0, -1 },
-            .bot => .{ 0, 0, 1 },
+            .bot => .{ 0, 0, -1 },
         };
     }
 };

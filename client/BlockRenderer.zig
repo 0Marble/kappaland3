@@ -32,7 +32,8 @@ const BLOCK_ATLAS_TEX = 0;
 block_pass: Shader,
 block_vao: gl.uint,
 block_ibo: gl.uint,
-block_ubo: gl.uint,
+model_ssbo: gl.uint,
+normal_ubo: gl.uint,
 faces: GpuAlloc,
 had_realloc: bool,
 chunk_data_ssbo: gl.uint,
@@ -73,14 +74,15 @@ pub fn init(self: *Self) !void {
 
     try gl_call(gl.GenVertexArrays(1, @ptrCast(&self.block_vao)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ibo)));
-    try gl_call(gl.GenBuffers(1, @ptrCast(&self.block_ubo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.normal_ubo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.model_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
     self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
 
     try gl_call(gl.BindVertexArray(self.block_vao));
 
-    try self.init_block_model();
+    try self.init_models();
     logger.debug("{*} Initialized block model", .{self});
     try self.init_face_attribs();
     logger.debug("{*} Initialized face data buffers", .{self});
@@ -96,10 +98,15 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao");
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor");
 
+    inline for (ChunkMesh.Ao.idx_to_ao, 0..) |ao, i| {
+        const uni: [:0]const u8 = std.fmt.comptimePrint("u_idx_to_ao[{}]", .{i});
+        try self.block_pass.set_uint(uni, @intCast(ao));
+    }
+
     logger.debug("{*} Finished initializing...", .{self});
 }
 
-fn init_block_model(self: *Self) !void {
+fn init_models(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_ibo));
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
@@ -108,14 +115,28 @@ fn init_block_model(self: *Self) !void {
         gl.STATIC_DRAW,
     ));
 
-    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.block_ubo));
+    const normals_data = normals ++ normal_mats;
+    try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, self.normal_ubo));
     try gl_call(gl.BufferData(
         gl.UNIFORM_BUFFER,
-        @intCast(block_model.len * @sizeOf(f32)),
-        @ptrCast(&block_model),
+        @intCast(normals_data.len * @sizeOf(f32)),
+        @ptrCast(&normals_data),
         gl.STATIC_DRAW,
     ));
-    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, BLOCK_MODEL_BINDING, self.block_ubo));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, NORMAL_BINDING, self.normal_ubo));
+
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(models.len * @sizeOf(FaceModel)),
+        @ptrCast(&models),
+        gl.STATIC_DRAW,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        MODEL_BINDING,
+        self.model_ssbo,
+    ));
 }
 
 fn init_face_attribs(self: *Self) !void {
@@ -168,7 +189,8 @@ pub fn deinit(self: *Self) void {
 
     gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
     gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
-    gl.DeleteBuffers(1, @ptrCast(&self.block_ubo));
+    gl.DeleteBuffers(1, @ptrCast(&self.normal_ubo));
+    gl.DeleteBuffers(1, @ptrCast(&self.model_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_data_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
 }
@@ -444,21 +466,42 @@ const Mesh = struct {
     }
 };
 
-const block_verts = blk: {
-    var res = std.mem.zeroes([BLOCK_VERT_CNT * 4]f32);
-
-    for (BlockModel.faces, 0..) |face, n| {
-        for (face, 0..) |v, p| {
-            res[4 * (n * N_STRIDE + p * P_STRIDE) + 0] = v[0];
-            res[4 * (n * N_STRIDE + p * P_STRIDE) + 1] = v[1];
-            res[4 * (n * N_STRIDE + p * P_STRIDE) + 2] = v[2];
-        }
-    }
-
-    break :blk res;
+const FaceModel = packed struct(u32) {
+    u_scale: u4,
+    v_scale: u4,
+    u_offset: u4,
+    v_offset: u4,
+    w_offset: u4,
+    _unused: u12 = 0xeba,
 };
 
-const block_normals = blk: {
+const block_model: FaceModel = .{
+    .u_scale = 15,
+    .v_scale = 15,
+    .u_offset = 0,
+    .v_offset = 0,
+    .w_offset = 0,
+};
+
+const bot_slab_side_model: FaceModel = .{
+    .u_scale = 15,
+    .v_scale = 7,
+    .u_offset = 0,
+    .v_offset = 0,
+    .w_offset = 0,
+};
+
+const bot_slab_top_model: FaceModel = .{
+    .u_scale = 15,
+    .v_scale = 15,
+    .u_offset = 0,
+    .v_offset = 0,
+    .w_offset = 8,
+};
+
+const models = [_]FaceModel{ block_model, bot_slab_side_model, bot_slab_top_model };
+
+const normals = blk: {
     var res = std.mem.zeroes([BLOCK_FACE_CNT * 4]f32);
     for (BlockModel.normals, 0..) |normal, n| {
         res[4 * n + 0] = normal[0];
@@ -471,7 +514,7 @@ const block_normals = blk: {
 // convert from normal-local coordinates (normal is +z)
 // to model coordinates
 // column major as per glsl spec
-const block_mats = blk: {
+const normal_mats = blk: {
     const n = 12;
     var res = std.mem.zeroes([BLOCK_FACE_CNT * n]f32);
     for (std.enums.values(Block.Face), 0..) |dir, i| {
@@ -496,7 +539,7 @@ test "transforms" {
         }
         const idx: usize = @intFromEnum(dir);
 
-        const data = block_mats[9 * idx .. 9 * (idx + 1)];
+        const data = normal_mats[9 * idx .. 9 * (idx + 1)];
         var vec: @Vector(9, f32) = @splat(0);
         inline for (data, 0..) |x, i| vec[i] = x;
         var mat: zm.Mat3f = .{ .data = vec };
@@ -512,15 +555,14 @@ test "transforms" {
     }
 }
 
-const block_model = block_normals ++ block_verts ++ block_mats;
-
 const block_inds: [BlockModel.indices.len]u8 = BlockModel.indices;
 
 const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;
 const CHUNK_DATA_BINDING = 1;
-const BLOCK_MODEL_BINDING = 2;
+const NORMAL_BINDING = 2;
+const MODEL_BINDING = 3;
 const BLOCK_FACE_CNT = BlockModel.normals.len;
 const BLOCK_VERT_CNT = BLOCK_FACE_CNT * BlockModel.faces[0].len;
 const P_STRIDE = 1;
@@ -533,7 +575,8 @@ const block_vert =
     std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_A {d}", .{FACE_DATA_LOCATION_A}) ++
     std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_B {d}", .{FACE_DATA_LOCATION_B}) ++
     std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}", .{CHUNK_DATA_BINDING}) ++
-    std.fmt.comptimePrint("\n#define BLOCK_MODEL_BINDING {d}", .{BLOCK_MODEL_BINDING}) ++
+    std.fmt.comptimePrint("\n#define NORMAL_BINDING {d}", .{NORMAL_BINDING}) ++
+    std.fmt.comptimePrint("\n#define MODEL_BINDING {d}", .{MODEL_BINDING}) ++
     std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}", .{BLOCK_FACE_CNT}) ++
     std.fmt.comptimePrint("\n#define BLOCK_VERT_CNT {d}", .{BLOCK_VERT_CNT}) ++
     std.fmt.comptimePrint("\n#define N_STRIDE {d}", .{N_STRIDE}) ++
@@ -543,6 +586,7 @@ const block_vert =
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
 ++ ChunkMesh.Face.define() ++
     \\
+++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{ChunkMesh.Ao.idx_to_ao.len}) ++
     \\struct Chunk {
     \\  int x;
     \\  int y;
@@ -553,10 +597,34 @@ const block_vert =
     \\layout (std430, binding = CHUNK_DATA_BINDING) buffer ChunkData{
     \\  Chunk chunks[];
     \\};
-    \\layout (std140, binding = BLOCK_MODEL_BINDING) uniform BlockModel {
+    \\
+    \\layout (std430, binding = MODEL_BINDING) buffer Models {
+    \\  uint raw_model[];
+    \\};
+    \\
+    \\struct Model {
+    \\  vec2 scale;
+    \\  vec3 offset;
+    \\};
+    \\
+    \\Model unpack_model(uint model_idx) {
+    \\  uint x = raw_model[model_idx];
+    \\  return Model(
+    \\    vec2(
+    \\      float(((x >> uint(0)) & uint(0xF)) + 1) / 16.0,
+    \\      float(((x >> uint(4)) & uint(0xF)) + 1) / 16.0
+    \\    ),
+    \\    vec3(
+    \\      float((x >> uint(8)) & uint(0xF)) / 16.0,
+    \\      float((x >> uint(12)) & uint(0xF)) / 16.0,
+    \\      float((x >> uint(16)) & uint(0xF)) / 16.0
+    \\    )
+    \\  );
+    \\}
+    \\
+    \\layout (std140, binding = NORMAL_BINDING) uniform Normals {
     \\  vec3 normals[BLOCK_FACE_CNT];
-    \\  vec3 verts[BLOCK_VERT_CNT];
-    \\  mat3 norm_to_world[BLOCK_FACE_CNT]; 
+    \\  mat3 norm_to_world[BLOCK_FACE_CNT];
     \\};
     \\
     \\uniform mat4 u_view;
@@ -572,21 +640,20 @@ const block_vert =
     \\out vec3 frag_color;
     \\
     \\void main() {
-    \\  Face face = unpack();
+    \\  Face face = unpack_face();
+    \\  Model model = unpack_model(face.model);
     \\  Chunk chunk = chunks[gl_DrawID];
     \\
     \\  uint p = gl_VertexID;
     \\  vec3 normal = normals[chunk.normal];
-    \\  vec3 scale = abs(norm_to_world[chunk.normal] * vec3(face.size, 1));
-    \\  vec3 offset = norm_to_world[chunk.normal] * (face.offset * vec3(1, 1, -1));
-    \\  vec3 vert = verts[chunk.normal * N_STRIDE + p * P_STRIDE] * scale + face.pos + offset;
+    \\  frag_uv = uvs[p] * model.scale + model.offset.xy;
+    \\  vec3 vert = norm_to_world[chunk.normal] * vec3(frag_uv - vec2(0.5, 0.5), 0.5 - model.offset.z) + face.pos + vec3(0.5,0.5,0.5);
     \\  vec3 chunk_coords = vec3(chunk.x, chunk.y, chunk.z);
     \\  vec4 view_pos = u_view * vec4(vert + chunk_coords * 16, 1);
     \\  gl_Position = u_proj * view_pos;
     \\
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
-    \\  frag_ao = face.ao;
-    \\  frag_uv = uvs[p] * face.size + face.offset.xy;
+    \\  frag_ao = u_idx_to_ao[face.ao];
     \\  frag_tex = face.texture;
     \\  frag_pos = view_pos.xyz;
     \\  frag_color = vec3(1);
@@ -596,20 +663,9 @@ const block_vert =
 const block_frag =
     \\#version 460 core
 ++
-    std.fmt.comptimePrint("\n#define BASE_TEX_ATTACHMENT {d}\n", .{Renderer.BASE_TEX_ATTACHMENT}) ++
-    std.fmt.comptimePrint("\n#define POSITION_TEX_ATTACHMENT {d}\n", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
-    std.fmt.comptimePrint("\n#define NORMAL_TEX_ATTACHMENT {d}\n", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
-    \\
-    \\#define AO_LEFT 8
-    \\#define AO_RIGHT 4
-    \\#define AO_TOP 2
-    \\#define AO_BOT 1
-    \\#define AO_TL 16
-    \\#define AO_TR 32
-    \\#define AO_BL 64
-    \\#define AO_BR 128
-    \\#define HAS_AO(dirs) ((frag_ao & uint(dirs)) == uint(dirs) ? 1 : 0)
-    \\#define AO_CORNER(v) (1.0 - clamp(length(frag_uv - v), 0, 1))
+    std.fmt.comptimePrint("\n#define BASE_TEX_ATTACHMENT {d}", .{Renderer.BASE_TEX_ATTACHMENT}) ++
+    std.fmt.comptimePrint("\n#define POSITION_TEX_ATTACHMENT {d}", .{Renderer.POSITION_TEX_ATTACHMENT}) ++
+    std.fmt.comptimePrint("\n#define NORMAL_TEX_ATTACHMENT {d}", .{Renderer.NORMAL_TEX_ATTACHMENT}) ++
     \\
     \\layout (location=BASE_TEX_ATTACHMENT) out vec4 out_color;
     \\layout (location=POSITION_TEX_ATTACHMENT) out vec4 out_pos;
@@ -625,29 +681,7 @@ const block_frag =
     \\uniform bool u_enable_face_ao = true;
     \\uniform float u_ao_factor = 0.7;
     \\uniform sampler2DArray u_atlas;
-    \\
-    \\float get_ao() {
-    \\  uint has_l = HAS_AO(AO_LEFT);
-    \\  uint has_t = HAS_AO(AO_TOP);
-    \\  uint has_r = HAS_AO(AO_RIGHT);
-    \\  uint has_b = HAS_AO(AO_BOT);
-    \\  uint has_tl = HAS_AO(AO_TL) * (1 - has_t) * (1 - has_l);
-    \\  uint has_tr = HAS_AO(AO_TR) * (1 - has_t) * (1 - has_r);
-    \\  uint has_bl = HAS_AO(AO_BL) * (1 - has_b) * (1 - has_l);
-    \\  uint has_br = HAS_AO(AO_BR) * (1 - has_b) * (1 - has_r);
-    \\
-    \\  float tl = float(has_tl) * AO_CORNER(vec2(0, 1));
-    \\  float tr = float(has_tr) * AO_CORNER(vec2(1, 1));
-    \\  float bl = float(has_bl) * AO_CORNER(vec2(0, 0));
-    \\  float br = float(has_br) * AO_CORNER(vec2(1, 0));
-    \\  float t = float(has_t) * frag_uv.y;
-    \\  float b = float(has_b) * (1 - frag_uv.y);
-    \\  float l = float(has_l) * (1 - frag_uv.x);
-    \\  float r = float(has_r) * frag_uv.x;
-    \\  
-    \\  float ao = (tl + tr + bl + br + t + b + l + r) / 4.0;
-    \\  return smoothstep(0, 1, ao);
-    \\}
+++ ChunkMesh.Ao.define() ++
     \\
     \\void main() {
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);

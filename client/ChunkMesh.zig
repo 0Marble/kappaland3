@@ -31,7 +31,7 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
     self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
     self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
     self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
-    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, 0 });
+    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
     if (self.is_occluded) return self;
 
     for (0..CHUNK_SIZE) |i| {
@@ -67,7 +67,7 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         const start: Coords = .{
             CHUNK_SIZE - 1,
             @intCast(CHUNK_SIZE - 1 - i),
-            0,
+            CHUNK_SIZE - 1,
         };
         try self.build_layer_mesh(.bot, start, gpa);
     }
@@ -88,42 +88,31 @@ pub const Face = packed struct(u64) {
     x: u4,
     y: u4,
     z: u4,
-    ao: u8,
-    u_offset: u2 = 0,
-    v_offset: u2 = 0,
-    w_offset: u2 = 0,
-    u_size: u2 = 3,
-    v_size: u2 = 3,
-    _unused2: u2 = 2,
+    ao: u6,
+    model: u10 = 0,
+    _unused2: u4 = 0b1010,
     // B:
     texture: u16,
     _unused3: u16 = 0xdead,
 
     pub fn define() [:0]const u8 {
         return 
+        \\
         \\struct Face {
         \\  uvec3 pos;
-        \\  vec3 offset;
-        \\  vec2 size;
         \\  uint ao;
+        \\  uint model;
         \\  uint texture;
         \\};
         \\
-        \\Face unpack(){
+        \\Face unpack_face(){
         \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
         \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
         \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
-        \\  uint ao = (vert_face_a >> uint(12)) & uint(0xFF);
-        \\  uint u = (vert_face_a >> uint(20)) & uint(0x3);
-        \\  uint v = (vert_face_a >> uint(22)) & uint(0x3);
-        \\  uint w = (vert_face_a >> uint(24)) & uint(0x3);
-        \\  uint s = (vert_face_a >> uint(26)) & uint(0x3);
-        \\  uint t = (vert_face_a >> uint(28)) & uint(0x3);
-        \\
+        \\  uint ao = (vert_face_a >> uint(12)) & uint(0x3F);
+        \\  uint model = (vert_face_a >> uint(18)) & uint(0x3FF);
         \\  uint tex = (vert_face_b >> uint(0)) & uint(0xFFFF);
-        \\  vec3 offset = vec3(u, v, w) / 4.0;
-        \\  vec2 size = vec2(s + 1, t + 1) / 4.0;
-        \\  return Face(uvec3(x, y, z), offset, size, ao, tex);
+        \\  return Face(uvec3(x, y, z), ao, model, tex);
         \\}
         ;
     }
@@ -149,33 +138,6 @@ fn next_layer_solid(self: *Mesh, normal: Block.Face, start: Coords) bool {
 
     return true;
 }
-
-const ao_mask: [6][8]u8 = .{
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // front
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // back
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // right
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // left
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // top
-    .{
-        0b00001000, 0b00000100, 0b00000010, 0b00000001,
-        0b00010000, 0b00100000, 0b01000000, 0b10000000,
-    }, // bot
-};
 
 fn build_layer_mesh(
     self: *Mesh,
@@ -203,36 +165,116 @@ fn build_layer_mesh(
                 continue;
             }
 
-            var ao: u8 = 0;
-            const ao_idx: usize = @intFromEnum(normal);
-            if (self.is_solid_neighbour(pos + front + left)) ao |= ao_mask[ao_idx][0];
-            if (self.is_solid_neighbour(pos + front + right)) ao |= ao_mask[ao_idx][1];
-            if (self.is_solid_neighbour(pos + front + up)) ao |= ao_mask[ao_idx][2];
-            if (self.is_solid_neighbour(pos + front + down)) ao |= ao_mask[ao_idx][3];
-
-            if (self.is_solid_neighbour(pos + front + left + up)) ao |= ao_mask[ao_idx][4];
-            if (self.is_solid_neighbour(pos + front + right + up)) ao |= ao_mask[ao_idx][5];
-            if (self.is_solid_neighbour(pos + front + left + down)) ao |= ao_mask[ao_idx][6];
-            if (self.is_solid_neighbour(pos + front + right + down)) ao |= ao_mask[ao_idx][7];
+            const ao = Ao.pack(
+                @intFromBool(self.is_solid_neighbour(pos + front + left)),
+                @intFromBool(self.is_solid_neighbour(pos + front + right)),
+                @intFromBool(self.is_solid_neighbour(pos + front + up)),
+                @intFromBool(self.is_solid_neighbour(pos + front + down)),
+                @intFromBool(self.is_solid_neighbour(pos + front + left + up)),
+                @intFromBool(self.is_solid_neighbour(pos + front + right + up)),
+                @intFromBool(self.is_solid_neighbour(pos + front + left + down)),
+                @intFromBool(self.is_solid_neighbour(pos + front + right + down)),
+            );
 
             var face = Face{
                 .x = @intCast(pos[0]),
                 .y = @intCast(pos[1]),
                 .z = @intCast(pos[2]),
-                .ao = ao,
+                .ao = @intCast(Ao.ao_to_idx[ao]),
                 .texture = @intCast(block.get_texture(normal)),
             };
-            if (normal != .top and normal != .bot and block == .stone_slab_bot) {
-                face.v_size = 1;
-            }
-            if (normal == .top and block == .stone_slab_bot) {
-                face.w_offset = 2;
-            }
+
+            if (block == .planks_slab) switch (normal) {
+                .right, .left, .back, .front => face.model = 1,
+                .top => face.model = 2,
+                .bot => face.model = 0,
+            };
 
             try self.faces[@intFromEnum(normal)].append(gpa, face);
         }
     }
 }
+
+pub const Ao = struct {
+    const ao_to_idx = precalculated[1];
+    pub const idx_to_ao = precalculated[0];
+
+    const L = 0;
+    const R = 1;
+    const T = 2;
+    const B = 3;
+    const TL = 4;
+    const TR = 5;
+    const BL = 6;
+    const BR = 7;
+
+    fn normalize(x: u8) u8 {
+        const l = (x >> L) & 1;
+        const r = (x >> R) & 1;
+        const t = (x >> T) & 1;
+        const b = (x >> B) & 1;
+        const tl = (x >> TL) & 1;
+        const tr = (x >> TR) & 1;
+        const bl = (x >> BL) & 1;
+        const br = (x >> BR) & 1;
+        return pack(l, r, t, b, tl, tr, bl, br);
+    }
+
+    fn pack(l: u8, r: u8, t: u8, b: u8, tl: u8, tr: u8, bl: u8, br: u8) u8 {
+        return (l << L) |
+            (r << R) |
+            (t << T) |
+            (b << B) |
+            ((tl * (1 - l) * (1 - t)) << TL) |
+            ((tr * (1 - r) * (1 - t)) << TR) |
+            ((bl * (1 - l) * (1 - b)) << BL) |
+            ((br * (1 - r) * (1 - b)) << BR);
+    }
+
+    const precalculated = blk: {
+        @setEvalBranchQuota(std.math.maxInt(u32));
+        const UNIQUE_CNT = 47;
+        var to_ao: [UNIQUE_CNT]u8 = @splat(0);
+        var to_idx: [256]u8 = @splat(0);
+
+        var i: usize = 0;
+        for (0..256) |x| {
+            const y = normalize(x);
+            const k = l1: for (0..i) |j| {
+                if (to_ao[j] == y) break :l1 j;
+            } else l2: {
+                to_ao[i] = y;
+                i += 1;
+                break :l2 i - 1;
+            };
+            to_idx[x] = k;
+        }
+        std.debug.assert(i == UNIQUE_CNT);
+        break :blk .{ to_ao, to_idx };
+    };
+
+    pub fn define() [:0]const u8 {
+        return std.fmt.comptimePrint(
+            \\
+            \\float get_ao() {{
+            \\  #define GET(dir) float((frag_ao >> uint(dir)) & uint(1))
+            \\  #define CORNER(v) (1.0 - clamp(abs(frag_uv.x - (v).x) + abs(frag_uv.y - (v).y), 0, 1))
+            \\  float l = GET({}) * (1.0 - frag_uv.x);
+            \\  float r = GET({}) * (frag_uv.x);
+            \\  float t = GET({}) * (frag_uv.y);
+            \\  float b = GET({}) * (1.0 - frag_uv.y);
+            \\  float tl = GET({}) * CORNER(vec2(0, 1));
+            \\  float tr = GET({}) * CORNER(vec2(1, 1));
+            \\  float bl = GET({}) * CORNER(vec2(0, 0));
+            \\  float br = GET({}) * CORNER(vec2(1, 0));
+            \\  float ao = (l + r + t + b + tl + tr + bl + br) / 4.0;
+            \\  return smoothstep(0.0, 1.0, ao);
+            \\  #undef GET
+            \\  #undef CORNER
+            \\}}
+        , .{ Ao.L, Ao.R, Ao.T, Ao.B, Ao.TL, Ao.TR, Ao.BL, Ao.BR });
+    }
+};
 
 inline fn is_solid(self: *Mesh, pos: Coords) bool {
     return self.chunk.is_solid(pos);

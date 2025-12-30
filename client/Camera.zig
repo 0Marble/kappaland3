@@ -72,7 +72,7 @@ fn interact(self: *Camera, button: Keys.MouseButton, _: []const u8) void {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     } else if (button == .right) {
-        Game.instance().chunk_manager.set_block(raycast.prev_coords, .stone_slab_bot) catch |err| {
+        Game.instance().chunk_manager.set_block(raycast.prev_coords, .planks_slab) catch |err| {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     }
