@@ -1,4 +1,5 @@
 .{
     .derives = ".blocks.main.basic",
+    .casts_ao = false,
     .solid = false,
 }

@@ -227,9 +227,6 @@ const Builder = struct {
 
     fn register_blocks(self: *Builder, manager: *BlockManager) !void {
         for (self.blocks.keys(), 0..) |name, idx| {
-            const info_ptr = try manager.arena.allocator().create(Info);
-            info_ptr.* = .{};
-
             self.register_block(manager, idx) catch |err| {
                 self.had_errors = true;
                 logger.err("error while registering block {s}: {}", .{ name, err });
@@ -273,6 +270,7 @@ const Builder = struct {
         state_stack: *std.array_list.Managed([]const u8),
     ) !void {
         var info = Info{
+            .casts_ao = realized.casts_ao.?,
             .solid = realized.solid,
             .textures = .init(.{}),
             .model = .init(.{}),
@@ -332,6 +330,7 @@ const Builder = struct {
 
 const ParsedBlock = struct {
     derives: ?[]const u8 = null,
+    casts_ao: ?bool = null,
     solid: std.EnumMap(Block.Face, bool) = .init(.{}),
     model: std.EnumMap(Block.Face, []const []const u8) = .init(.{}),
     textures: std.EnumMap(Block.Face, []const []const u8) = .init(.{}),
@@ -342,6 +341,10 @@ const ParsedBlock = struct {
     fn realize(self: *ParsedBlock, base: ?*ParsedBlock, gpa: std.mem.Allocator) !*ParsedBlock {
         var new = try gpa.create(ParsedBlock);
         new.* = .{};
+        new.casts_ao = self.casts_ao orelse (if (base) |b| b.casts_ao else null) orelse {
+            logger.err("missing field: .casts_ao", .{});
+            return error.MissingEntry;
+        };
 
         inline for (.{ "solid", "model", "textures" }) |f| {
             var it1 = @field(self, f).iterator();
@@ -388,6 +391,7 @@ const ParsedBlock = struct {
     const HalfParsed = struct {
         const NotParsed = std.zig.Zoir.Node.Index;
         derives: ?[]const u8 = null,
+        casts_ao: ?bool = null,
         solid: ?NotParsed = null,
         model: ?NotParsed = null,
         textures: ?NotParsed = null,
@@ -455,6 +459,7 @@ const ParsedBlock = struct {
         const parsed = try gpa.create(ParsedBlock);
         parsed.* = .{ .derives = half_parsed.derives };
 
+        parsed.casts_ao = half_parsed.casts_ao;
         if (half_parsed.states) |n| parsed.states = try parse_states(builder, ast, zoir, n);
         if (half_parsed.solid) |n| {
             const K = Block.Face;
@@ -618,6 +623,7 @@ const ParsedModel = struct {
 };
 
 const Info = struct {
+    casts_ao: bool,
     solid: std.EnumMap(Block.Face, bool) = .initFull(false),
     model: std.EnumMap(Block.Face, []const usize) = .initFull(&.{}),
     textures: std.EnumMap(Block.Face, []const usize) = .initFull(&.{}),

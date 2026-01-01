@@ -1,4 +1,5 @@
 .{
+    .casts_ao = true,
     .solid = true, // shorthand: all faces are solid
     // shorthand: all faces set to this model
     .model = .{".blocks.main.default"},

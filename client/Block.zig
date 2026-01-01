@@ -24,6 +24,12 @@ pub fn is_solid(self: Block, face: Face) bool {
     return info.solid.get(face).?;
 }
 
+pub fn casts_ao(self: Block) bool {
+    const manager = App.blocks();
+    const info = &manager.blocks.values()[@intCast(self.idx)];
+    return info.casts_ao;
+}
+
 pub var cached_air: Block = undefined;
 pub fn air() Block {
     return cached_air;

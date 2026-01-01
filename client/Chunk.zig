@@ -32,11 +32,9 @@ pub fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Face) bool {
     return b.?.is_solid(face);
 }
 
-pub fn is_solid(self: *Chunk, pos: Coords) bool {
-    for (std.enums.values(Block.Face)) |face| {
-        if (!self.is_solid_face(pos, face)) return false;
-    }
-    return true;
+pub fn casts_ao(self: *Chunk, pos: Coords) bool {
+    const b = self.get_safe(pos) orelse return false;
+    return b.casts_ao();
 }
 
 pub fn get_safe(self: *Chunk, pos: Coords) ?Block {

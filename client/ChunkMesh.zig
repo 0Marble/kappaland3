@@ -166,14 +166,14 @@ fn build_layer_mesh(
             }
 
             const ao = Ao.pack(
-                @intFromBool(self.is_solid_neighbour(pos + front + left)),
-                @intFromBool(self.is_solid_neighbour(pos + front + right)),
-                @intFromBool(self.is_solid_neighbour(pos + front + up)),
-                @intFromBool(self.is_solid_neighbour(pos + front + down)),
-                @intFromBool(self.is_solid_neighbour(pos + front + left + up)),
-                @intFromBool(self.is_solid_neighbour(pos + front + right + up)),
-                @intFromBool(self.is_solid_neighbour(pos + front + left + down)),
-                @intFromBool(self.is_solid_neighbour(pos + front + right + down)),
+                @intFromBool(self.casts_ao(pos + front + left)),
+                @intFromBool(self.casts_ao(pos + front + right)),
+                @intFromBool(self.casts_ao(pos + front + up)),
+                @intFromBool(self.casts_ao(pos + front + down)),
+                @intFromBool(self.casts_ao(pos + front + left + up)),
+                @intFromBool(self.casts_ao(pos + front + right + up)),
+                @intFromBool(self.casts_ao(pos + front + left + down)),
+                @intFromBool(self.casts_ao(pos + front + right + down)),
             );
 
             for (block.get_textures(normal), block.get_model(normal)) |t, m| {
@@ -272,11 +272,11 @@ pub const Ao = struct {
     }
 };
 
-fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
+fn casts_ao(self: *Mesh, pos: Coords) bool {
     const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
     const chunk = Chunk.world_to_chunk(world);
     const block = Chunk.world_to_block(world);
-    if (@reduce(.And, chunk == self.chunk.coords)) return self.chunk.is_solid(block);
+    if (@reduce(.And, chunk == self.chunk.coords)) return self.chunk.casts_ao(block);
 
     const d = chunk - self.chunk.coords;
     const i: usize = @intCast(d[0] + 1);
@@ -284,7 +284,7 @@ fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
     const k: usize = @intCast(d[2] + 1);
     const idx = Chunk.neighbours2_idx[i][j][k];
     std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
-    if (self.neighbour_cache[idx]) |other| return other.is_solid(block);
+    if (self.neighbour_cache[idx]) |other| return other.casts_ao(block);
     return false;
 }
 
