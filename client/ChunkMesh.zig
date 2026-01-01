@@ -132,7 +132,7 @@ fn next_layer_solid(self: *Mesh, normal: Block.Face, start: Coords) bool {
                 @as(Coords, @splat(u)) * right +
                 @as(Coords, @splat(v)) * up;
 
-            if (!self.is_solid_neighbour(pos + front)) return false;
+            if (!self.is_solid_neighbour_face(pos + front, normal.flip())) return false;
         }
     }
 
@@ -161,7 +161,7 @@ fn build_layer_mesh(
                 @as(Coords, @splat(v)) * up;
 
             const block = self.chunk.get(pos);
-            if (block == .air or self.is_solid_neighbour(pos + front)) {
+            if (block.is_air() or self.is_solid_neighbour_face(pos + front, normal.flip())) {
                 continue;
             }
 
@@ -176,21 +176,17 @@ fn build_layer_mesh(
                 @intFromBool(self.is_solid_neighbour(pos + front + right + down)),
             );
 
-            var face = Face{
-                .x = @intCast(pos[0]),
-                .y = @intCast(pos[1]),
-                .z = @intCast(pos[2]),
-                .ao = @intCast(Ao.ao_to_idx[ao]),
-                .texture = @intCast(block.get_texture(normal)),
-            };
-
-            if (block == .planks_slab) switch (normal) {
-                .right, .left, .back, .front => face.model = 1,
-                .top => face.model = 2,
-                .bot => face.model = 0,
-            };
-
-            try self.faces[@intFromEnum(normal)].append(gpa, face);
+            for (block.get_textures(normal), block.get_model(normal)) |t, m| {
+                const face = Face{
+                    .x = @intCast(pos[0]),
+                    .y = @intCast(pos[1]),
+                    .z = @intCast(pos[2]),
+                    .ao = @intCast(Ao.ao_to_idx[ao]),
+                    .model = @intCast(m),
+                    .texture = @intCast(t),
+                };
+                try self.faces[@intFromEnum(normal)].append(gpa, face);
+            }
         }
     }
 }
@@ -276,15 +272,11 @@ pub const Ao = struct {
     }
 };
 
-inline fn is_solid(self: *Mesh, pos: Coords) bool {
-    return self.chunk.is_solid(pos);
-}
-
 fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
     const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
     const chunk = Chunk.world_to_chunk(world);
     const block = Chunk.world_to_block(world);
-    if (@reduce(.And, chunk == self.chunk.coords)) return self.is_solid(block);
+    if (@reduce(.And, chunk == self.chunk.coords)) return self.chunk.is_solid(block);
 
     const d = chunk - self.chunk.coords;
     const i: usize = @intCast(d[0] + 1);
@@ -293,5 +285,21 @@ fn is_solid_neighbour(self: *Mesh, pos: Coords) bool {
     const idx = Chunk.neighbours2_idx[i][j][k];
     std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
     if (self.neighbour_cache[idx]) |other| return other.is_solid(block);
+    return false;
+}
+
+fn is_solid_neighbour_face(self: *Mesh, pos: Coords, face: Block.Face) bool {
+    const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
+    const chunk = Chunk.world_to_chunk(world);
+    const block = Chunk.world_to_block(world);
+    if (@reduce(.And, chunk == self.chunk.coords)) return self.chunk.is_solid_face(block, face);
+
+    const d = chunk - self.chunk.coords;
+    const i: usize = @intCast(d[0] + 1);
+    const j: usize = @intCast(d[1] + 1);
+    const k: usize = @intCast(d[2] + 1);
+    const idx = Chunk.neighbours2_idx[i][j][k];
+    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
+    if (self.neighbour_cache[idx]) |other| return other.is_solid_face(block, face);
     return false;
 }

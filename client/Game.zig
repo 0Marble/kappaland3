@@ -109,7 +109,7 @@ fn on_detatch(self: *Game) void {
     logger.info("{*}: Detatched", .{self});
 }
 
-pub fn get_block(self: *Game, coords: Coords) ?Block.Id {
+pub fn get_block(self: *Game, coords: Coords) ?Block {
     const chunk = self.chunk_manager.get_chunk(Chunk.world_to_chunk(coords)) orelse return null;
     return chunk.get(Chunk.world_to_block(coords));
 }

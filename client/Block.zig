@@ -2,35 +2,36 @@ const std = @import("std");
 const Coords = @import("Chunk.zig").Coords;
 const App = @import("App.zig");
 
-pub const Id = enum(u16) {
-    air = 0,
-    stone,
-    dirt,
-    grass,
-    planks,
-    planks_slab,
-    debug,
+idx: u16,
 
-    pub fn get_texture(self: Id, face: Face) usize {
-        const atlas = &App.blocks().atlas;
+const Block = @This();
 
-        switch (self) {
-            .stone => return atlas.get_idx(".blocks.main.stone"),
-            .planks, .planks_slab => return atlas.get_idx(".blocks.main.planks"),
-            .dirt => return atlas.get_idx(".blocks.main.dirt"),
-            .grass => if (face == .bot) {
-                return atlas.get_idx(".blocks.main.dirt");
-            } else if (face == .top) {
-                return atlas.get_idx(".blocks.main.grass_top");
-            } else {
-                return atlas.get_idx(".blocks.main.grass_side");
-            },
-            else => switch (face) {
-                inline else => |tag| return atlas.get_idx(".blocks.main.debug_" ++ @tagName(tag)),
-            },
-        }
-    }
-};
+pub fn get_textures(self: Block, face: Face) []const usize {
+    const manager = App.blocks();
+    const info = &manager.blocks.values()[@intCast(self.idx)];
+    return info.textures.get(face).?;
+}
+
+pub fn get_model(self: Block, face: Face) []const usize {
+    const manager = App.blocks();
+    const info = &manager.blocks.values()[@intCast(self.idx)];
+    return info.model.get(face).?;
+}
+
+pub fn is_solid(self: Block, face: Face) bool {
+    const manager = App.blocks();
+    const info = &manager.blocks.values()[@intCast(self.idx)];
+    return info.solid.get(face).?;
+}
+
+pub var cached_air: Block = undefined;
+pub fn air() Block {
+    return cached_air;
+}
+
+pub fn is_air(self: Block) bool {
+    return self.idx == cached_air.idx;
+}
 
 pub const indices: []const u8 = &.{ 0, 1, 2, 0, 2, 3 };
 

@@ -125,10 +125,13 @@ fn init_models(self: *Self) !void {
     try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, NORMAL_BINDING, self.normal_ubo));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
+
+    const models: []const Block.Model = App.blocks().models.values();
+
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        @intCast(models.len * @sizeOf(FaceModel)),
-        @ptrCast(&models),
+        @intCast(models.len * @sizeOf(Block.Model)),
+        @ptrCast(models),
         gl.STATIC_DRAW,
     ));
     try gl_call(gl.BindBufferBase(
@@ -463,45 +466,6 @@ const Mesh = struct {
 
         return .{ pos[0], pos[1], pos[2], rad };
     }
-};
-
-const FaceModel = packed struct(u32) {
-    u_scale: u4,
-    v_scale: u4,
-    u_offset: u4,
-    v_offset: u4,
-    w_offset: u4,
-    _unused: u12 = 0xeba,
-};
-
-const block_model: FaceModel = .{
-    .u_scale = 15,
-    .v_scale = 15,
-    .u_offset = 0,
-    .v_offset = 0,
-    .w_offset = 0,
-};
-
-const bot_slab_side_model: FaceModel = .{
-    .u_scale = 15,
-    .v_scale = 7,
-    .u_offset = 0,
-    .v_offset = 0,
-    .w_offset = 0,
-};
-
-const bot_slab_top_model: FaceModel = .{
-    .u_scale = 15,
-    .v_scale = 15,
-    .u_offset = 0,
-    .v_offset = 0,
-    .w_offset = 8,
-};
-
-const models = [_]FaceModel{
-    block_model,
-    bot_slab_side_model,
-    bot_slab_top_model,
 };
 
 const normals = blk: {

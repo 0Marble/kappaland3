@@ -1,0 +1,4 @@
+.{
+    .derives = ".blocks.main.basic",
+    .solid = false,
+}

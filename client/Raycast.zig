@@ -9,7 +9,7 @@ const zm = @import("zm");
 t: f32,
 hit_coords: Coords,
 prev_coords: Coords,
-block: Block.Id,
+block: Block,
 
 const Raycast = @This();
 
@@ -50,7 +50,7 @@ pub fn raycast(ray: zm.Rayf, max_t: f32) ?Raycast {
         const cur_block = Chunk.to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
         const block = Game.instance().get_block(cur_block);
 
-        if (block != null and block.? != .air) {
+        if (block != null and !block.?.is_air()) {
             return Raycast{
                 .t = cur_t,
                 .block = block.?,

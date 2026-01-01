@@ -13,7 +13,7 @@ pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
 pub const Coords = @Vector(3, i32);
 
 coords: Coords,
-blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block.Id,
+blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block,
 
 const Chunk = @This();
 
@@ -21,18 +21,25 @@ pub fn init(self: *Chunk, coords: Coords) void {
     self.coords = coords;
 }
 
-pub fn get(self: *Chunk, pos: Coords) Block.Id {
+pub fn get(self: *Chunk, pos: Coords) Block {
     const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
     return self.blocks[@intCast(i)];
 }
 
-pub fn is_solid(self: *Chunk, pos: Coords) bool {
+pub fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Face) bool {
     const b = self.get_safe(pos);
-    if (b == null or b == .air) return false;
+    if (b == null) return false;
+    return b.?.is_solid(face);
+}
+
+pub fn is_solid(self: *Chunk, pos: Coords) bool {
+    for (std.enums.values(Block.Face)) |face| {
+        if (!self.is_solid_face(pos, face)) return false;
+    }
     return true;
 }
 
-pub fn get_safe(self: *Chunk, pos: Coords) ?Block.Id {
+pub fn get_safe(self: *Chunk, pos: Coords) ?Block {
     const size = Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
     const stride = Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
     const zero = zm.vec.zero(3, i32);
@@ -46,7 +53,7 @@ pub fn get_safe(self: *Chunk, pos: Coords) ?Block.Id {
     return self.blocks[@intCast(i)];
 }
 
-pub fn set(self: *Chunk, pos: Coords, block: Block.Id) void {
+pub fn set(self: *Chunk, pos: Coords, block: Block) void {
     const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
     self.blocks[@intCast(i)] = block;
 }
@@ -61,10 +68,15 @@ fn generate_solid(self: *Chunk) void {
 }
 
 fn generate_flat(self: *Chunk) void {
-    @memset(&self.blocks, .air);
+    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
+    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
+    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
+    const grass = App.blocks().get_block_by_name(".blocks.main.grass").?;
+
+    @memset(&self.blocks, air);
     if (self.coords[1] > 0) return;
     if (self.coords[1] < 0) {
-        @memset(&self.blocks, .stone);
+        @memset(&self.blocks, stone);
         return;
     }
 
@@ -73,10 +85,10 @@ fn generate_flat(self: *Chunk) void {
             for (0..CHUNK_SIZE) |y| {
                 const pos: Coords = @intCast(@Vector(3, usize){ x, y, z });
                 switch (y) {
-                    0...4 => self.set(pos, .stone),
-                    5...7 => self.set(pos, .dirt),
-                    8 => self.set(pos, .grass),
-                    else => self.set(pos, .air),
+                    0...4 => self.set(pos, stone),
+                    5...7 => self.set(pos, dirt),
+                    8 => self.set(pos, grass),
+                    else => self.set(pos, air),
                 }
             }
         }
@@ -86,6 +98,9 @@ fn generate_flat(self: *Chunk) void {
 fn generate_balls(self: *Chunk) void {
     const scale: zm.Vec3f = @splat(std.math.pi / 8.0);
     const size: Coords = @splat(CHUNK_SIZE);
+
+    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
+    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
 
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |j| {
@@ -101,9 +116,9 @@ fn generate_balls(self: *Chunk) void {
                 const w = @abs(@sin(xyz[0]) + @cos(xyz[2]) + @sin(xyz[1]));
 
                 if (w < 3 * 0.4) {
-                    self.blocks[idx] = .air;
+                    self.blocks[idx] = air;
                 } else {
-                    self.blocks[idx] = .stone;
+                    self.blocks[idx] = stone;
                 }
             }
         }
@@ -111,17 +126,26 @@ fn generate_balls(self: *Chunk) void {
 }
 
 fn generate_checkers(self: *Chunk) void {
-    @memset(&self.blocks, .air);
+    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
+    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
+    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
+
+    @memset(&self.blocks, air);
     if (self.coords[1] > 0) return;
 
     if (@mod(@reduce(.Add, self.coords), 2) == 0) {
-        @memset(&self.blocks, .grass);
+        @memset(&self.blocks, dirt);
     } else {
-        @memset(&self.blocks, .stone);
+        @memset(&self.blocks, stone);
     }
 }
 
 fn generate_wavy(self: *Chunk) void {
+    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
+    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
+    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
+    const grass = App.blocks().get_block_by_name(".blocks.main.grass").?;
+
     const scale = std.math.pi / 16.0;
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |k| {
@@ -139,10 +163,10 @@ fn generate_wavy(self: *Chunk) void {
                     CHUNK_SIZE +
                     @as(i32, @intCast(j)));
 
-                var block: Block.Id = .air;
-                if (y < top) block = .grass;
-                if (y + 1 < top) block = .dirt;
-                if (y + 3 < top) block = .stone;
+                var block: Block = air;
+                if (y < top) block = grass;
+                if (y + 1 < top) block = dirt;
+                if (y + 3 < top) block = stone;
                 self.set(pos, block);
             }
         }

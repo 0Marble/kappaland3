@@ -68,11 +68,12 @@ fn interact(self: *Camera, button: Keys.MouseButton, _: []const u8) void {
     const raycast = Raycast.raycast(ray, MAX_REACH) orelse return;
 
     if (button == .left) {
-        Game.instance().chunk_manager.set_block(raycast.hit_coords, .air) catch |err| {
+        Game.instance().chunk_manager.set_block(raycast.hit_coords, .air()) catch |err| {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     } else if (button == .right) {
-        Game.instance().chunk_manager.set_block(raycast.prev_coords, .planks_slab) catch |err| {
+        const block_to_place = App.blocks().get_block_by_name(".blocks.main.stone").?;
+        Game.instance().chunk_manager.set_block(raycast.prev_coords, block_to_place) catch |err| {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     }

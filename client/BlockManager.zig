@@ -29,7 +29,7 @@ pub fn init() !BlockManager {
         .arena = .init(App.gpa()),
     };
 
-    var scanner = Builder{ .parse_arena = .init(App.gpa()) };
+    var scanner = Builder{ .arena = .init(App.gpa()) };
     defer scanner.deinit();
 
     const blocks_path = try std.fs.path.join(
@@ -49,6 +49,10 @@ pub fn init() !BlockManager {
     logger.info("found {d} block models", .{scanner.models.count()});
 
     try scanner.register(&self);
+    Block.cached_air = self.get_block_by_name(".blocks.main.air") orelse {
+        logger.err("missing air block!", .{});
+        return error.MissingAirBlock;
+    };
 
     if (scanner.had_errors) {
         logger.warn("had errors while loading blocks...", .{});
@@ -64,6 +68,11 @@ pub fn deinit(self: *BlockManager) void {
     self.blocks.deinit(App.gpa());
     self.models.deinit(App.gpa());
     self.arena.deinit();
+}
+
+pub fn get_block_by_name(self: *BlockManager, name: []const u8) ?Block {
+    const b = self.blocks.getIndex(name) orelse return null;
+    return .{ .idx = @intCast(b) };
 }
 
 fn concat(
@@ -101,16 +110,18 @@ const Builder = struct {
     had_errors: bool = false,
 
     prefix: std.ArrayList([]const u8) = .empty,
-    parse_arena: std.heap.ArenaAllocator,
+    arena: std.heap.ArenaAllocator,
 
     blocks: std.StringArrayHashMapUnmanaged(*ParsedBlock) = .empty,
+    realized: std.StringArrayHashMapUnmanaged(*ParsedBlock) = .empty,
     models: std.StringArrayHashMapUnmanaged(ParsedModel) = .empty,
 
     fn deinit(self: *Builder) void {
         self.prefix.deinit(App.gpa());
         self.blocks.deinit(App.gpa());
         self.models.deinit(App.gpa());
-        self.parse_arena.deinit();
+        self.realized.deinit(App.gpa());
+        self.arena.deinit();
     }
 
     fn scan(self: *Builder, root: []const u8, comptime fptr: anytype) void {
@@ -215,46 +226,61 @@ const Builder = struct {
     }
 
     fn register_blocks(self: *Builder, manager: *BlockManager) !void {
-        var arena = std.heap.ArenaAllocator.init(App.gpa());
-        defer arena.deinit();
         for (self.blocks.keys(), 0..) |name, idx| {
-            _ = arena.reset(.retain_capacity);
-            const temp = arena.allocator();
-
             const info_ptr = try manager.arena.allocator().create(Info);
             info_ptr.* = .{};
 
-            const parsed = self.blocks.values()[idx];
-            const base: ?*ParsedBlock = if (parsed.derives) |base_name| blk: {
-                const base = self.blocks.get(base_name) orelse {
-                    logger.warn("{s}: missing data for base block {s}", .{ name, base_name });
-                    break :blk null;
-                };
-                break :blk base;
-            } else null;
-
-            const realized = try parsed.realize(base, temp);
-            var state_stack = std.array_list.Managed([]const u8).init(temp);
-            try self.register_block(manager, realized, name, &state_stack);
+            self.register_block(manager, idx) catch |err| {
+                self.had_errors = true;
+                logger.err("error while registering block {s}: {}", .{ name, err });
+            };
         }
     }
 
-    fn register_block(
+    fn realize_block(self: *Builder, idx: usize) !*ParsedBlock {
+        const name = self.blocks.keys()[idx];
+        if (self.realized.get(name)) |x| return x;
+
+        const parsed = self.blocks.values()[idx];
+        const base: ?*ParsedBlock = if (parsed.derives) |base_name| blk: {
+            const base_idx = self.blocks.getIndex(base_name) orelse {
+                logger.warn("{s}: missing data for base block {s}", .{ name, base_name });
+                self.had_errors = true;
+                break :blk null;
+            };
+            break :blk try self.realize_block(base_idx);
+        } else null;
+
+        const realized = try parsed.realize(base, self.arena.allocator());
+        try self.realized.put(App.gpa(), name, realized);
+        return realized;
+    }
+
+    fn register_block(self: *Builder, manager: *BlockManager, idx: usize) !void {
+        const realized = try self.realize_block(idx);
+        var state_stack = std.array_list.Managed([]const u8).init(App.gpa());
+        defer state_stack.deinit();
+
+        const name = self.blocks.keys()[idx];
+        try self.register_block_and_states(manager, realized, name, &state_stack);
+    }
+
+    fn register_block_and_states(
         self: *Builder,
         manager: *BlockManager,
-        block: *ParsedBlock,
+        realized: *ParsedBlock,
         base_name: []const u8,
         state_stack: *std.array_list.Managed([]const u8),
     ) !void {
         var info = Info{
-            .solid = block.solid,
+            .solid = realized.solid,
             .textures = .init(.{}),
             .model = .init(.{}),
         };
 
         const full_name = try manager.concat_state(base_name, state_stack.items);
         {
-            var it = block.textures.iterator();
+            var it = realized.textures.iterator();
             while (it.next()) |kv| {
                 const arr = try manager.arena.allocator().alloc(usize, kv.value.len);
                 for (kv.value.*, arr) |tex_name, *x| {
@@ -265,12 +291,13 @@ const Builder = struct {
         }
 
         {
-            var it = block.model.iterator();
+            var it = realized.model.iterator();
             while (it.next()) |kv| {
                 const arr = try manager.arena.allocator().alloc(usize, kv.value.len);
                 for (kv.value.*, arr) |model_name, *x| {
                     x.* = manager.models.getIndex(model_name) orelse blk: {
                         logger.warn("{s}: missing model {s}", .{ full_name, model_name });
+                        self.had_errors = true;
                         break :blk 0;
                     };
                 }
@@ -282,11 +309,22 @@ const Builder = struct {
         logger.info("registered block {s}", .{full_name});
 
         {
-            var it = block.states.iterator();
+            var it = realized.states.iterator();
             while (it.next()) |kv| {
                 try state_stack.append(kv.key_ptr.*);
                 defer _ = state_stack.pop();
-                try self.register_block(manager, kv.value_ptr.*, base_name, state_stack);
+                self.register_block_and_states(
+                    manager,
+                    kv.value_ptr.*,
+                    base_name,
+                    state_stack,
+                ) catch |err| {
+                    self.had_errors = true;
+                    logger.err(
+                        "error while registering state {s} of {s}: {}",
+                        .{ kv.key_ptr.*, full_name, err },
+                    );
+                };
             }
         }
     }
@@ -313,6 +351,19 @@ const ParsedBlock = struct {
                 while (it2.next()) |kv| if (!@field(new, f).contains(kv.key)) {
                     @field(new, f).put(kv.key, kv.value.*);
                 };
+            }
+            const Map = @FieldType(ParsedBlock, f);
+
+            for (std.enums.values(Map.Key)) |k| {
+                if (!@field(new, f).contains(k)) {
+                    logger.err("missing entry for {s}{}", .{ f, k });
+                    if (base) |b| {
+                        logger.info("note: base contains {s}{}: {}", .{ f, k, @field(b, f).contains(k) });
+                    }
+                    logger.info("note: self contains {s}{}: {}", .{ f, k, @field(self, f).contains(k) });
+
+                    return error.MissingEntry;
+                }
             }
         }
 
@@ -358,7 +409,7 @@ const ParsedBlock = struct {
         var file = try dir.openFile(file_name, .{});
         defer file.close();
 
-        const gpa = builder.parse_arena.allocator();
+        const gpa = builder.arena.allocator();
         var buf = std.mem.zeroes([256]u8);
         var reader = file.reader(&buf);
         const size = try reader.getSize();
@@ -378,14 +429,14 @@ const ParsedBlock = struct {
         try builder.blocks.put(App.gpa(), full_name, parsed);
     }
 
-    const Error = OOM || error{ ParseZon, NotAStruct };
+    const Error = OOM || error{ ParseZon, NotAStruct, MissingEntry };
     fn parse_zon(
         builder: *Builder,
         ast: std.zig.Ast,
         zoir: std.zig.Zoir,
         node: std.zig.Zoir.Node.Index,
     ) Error!*ParsedBlock {
-        const gpa = builder.parse_arena.allocator();
+        const gpa = builder.arena.allocator();
 
         var diag = std.zon.parse.Diagnostics{};
         const half_parsed = std.zon.parse.fromZoirNode(
@@ -403,6 +454,7 @@ const ParsedBlock = struct {
 
         const parsed = try gpa.create(ParsedBlock);
         parsed.* = .{ .derives = half_parsed.derives };
+
         if (half_parsed.states) |n| parsed.states = try parse_states(builder, ast, zoir, n);
         if (half_parsed.solid) |n| {
             const K = Block.Face;
@@ -431,7 +483,7 @@ const ParsedBlock = struct {
         comptime K: type,
         comptime V: type,
     ) !std.EnumMap(K, V) {
-        const gpa = builder.parse_arena.allocator();
+        const gpa = builder.arena.allocator();
         const Struct = std.enums.EnumFieldStruct(K, ?V, @as(?V, null));
 
         const opts = std.zon.parse.Options{ .free_on_error = false };
@@ -449,7 +501,15 @@ const ParsedBlock = struct {
             return err;
         };
 
-        return std.EnumMap(K, V).init(parsed);
+        const map = std.EnumMap(K, V).init(parsed);
+        for (std.enums.values(K)) |k| {
+            if (!map.contains(k)) {
+                logger.err("missing entry for {}", .{k});
+                return error.MissingEntry;
+            }
+        }
+
+        return map;
     }
 
     fn parse_states(
@@ -464,7 +524,7 @@ const ParsedBlock = struct {
             else => return error.NotAStruct,
         }
 
-        const gpa = builder.parse_arena.allocator();
+        const gpa = builder.arena.allocator();
         var res = States.empty;
         for (zon_node.struct_literal.names, 0..) |name, i| {
             const child_node = zon_node.struct_literal.vals.at(@intCast(i));
@@ -538,13 +598,13 @@ const ParsedModel = struct {
         var buf = std.mem.zeroes([256]u8);
         var reader = file.reader(&buf);
         const size = try reader.getSize();
-        const src = try builder.parse_arena.allocator().allocSentinel(u8, size, 0);
+        const src = try builder.arena.allocator().allocSentinel(u8, size, 0);
         try reader.interface.readSliceAll(src);
 
         var diag = std.zon.parse.Diagnostics{};
         const model = std.zon.parse.fromSlice(
             ParsedModel,
-            builder.parse_arena.allocator(),
+            builder.arena.allocator(),
             src,
             &diag,
             .{ .free_on_error = false },

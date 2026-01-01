@@ -295,7 +295,7 @@ pub fn load_region(self: *ChunkManager, min: Chunk.Coords, max: Chunk.Coords) !v
     self.queue_size += 1;
 }
 
-pub fn set_block(self: *ChunkManager, coords: Chunk.Coords, block: Block.Id) !void {
+pub fn set_block(self: *ChunkManager, coords: Chunk.Coords, block: Block) !void {
     self.mutex.lock();
     defer self.mutex.unlock();
 
@@ -357,7 +357,7 @@ const Command = struct {
     const Body = union(enum) {
         load_region: struct { Chunk.Coords, Chunk.Coords },
         mesh_chunks: void,
-        set_block: struct { Chunk.Coords, Block.Id },
+        set_block: struct { Chunk.Coords, Block },
     };
 
     fn from_link(link: *std.DoublyLinkedList.Node) *Command {
