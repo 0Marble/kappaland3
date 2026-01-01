@@ -42,7 +42,7 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !TextureAtlas {
         gl.RGB8,
         @intCast(w),
         @intCast(h),
-        @intCast(cnt),
+        @intCast(cnt + 1),
     ));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
@@ -85,6 +85,8 @@ pub fn init(textures_dir: []const u8, atlas_name: []const u8) !TextureAtlas {
         logger.info("registered texture {s}@{d}", .{ name, idx });
     }
 
+    try self.generate_missing();
+
     return self;
 }
 
@@ -94,7 +96,14 @@ pub fn deinit(self: *TextureAtlas) void {
 }
 
 pub fn get_idx(self: *TextureAtlas, name: []const u8) usize {
-    return self.images.get(name).?;
+    return self.images.get(name) orelse self.images.count();
+}
+
+pub fn get_idx_or_warn(self: *TextureAtlas, name: []const u8) usize {
+    return self.images.get(name) orelse {
+        logger.warn("missing texture: {s}", .{name});
+        return self.images.count();
+    };
 }
 
 const Builder = struct {
@@ -168,3 +177,39 @@ const Builder = struct {
         self.images.deinit(App.gpa());
     }
 };
+
+fn generate_missing(self: *TextureAtlas) !void {
+    const pixels = try App.gpa().alloc(u8, 2 * self.img_width * self.img_height);
+    defer App.gpa().free(pixels);
+    @memset(pixels, 0xFF);
+
+    const a_offset = 0;
+    const b_offset = self.img_width * self.img_height / 2 + self.img_width / 2;
+    const stride = self.img_width;
+
+    for (0..self.img_height / 2) |j| {
+        for (0..self.img_width / 2) |i| {
+            const a = a_offset + j * stride + i;
+            const b = b_offset + j * stride + i;
+            pixels[2 * a] = 0;
+            pixels[2 * a + 1] = 0;
+            pixels[2 * b] = 0;
+            pixels[2 * b + 1] = 0;
+        }
+    }
+
+    try gl_call(gl.TexSubImage3D(
+        gl.TEXTURE_2D_ARRAY,
+        0, // level
+        0, // xoffset
+        0, // yoffset
+        @intCast(self.images.count()), // zoffset
+        @intCast(self.img_width), // width
+        @intCast(self.img_height), // height
+        1, // depth
+        gl.RG,
+        gl.UNSIGNED_BYTE,
+        @ptrCast(pixels),
+    ));
+    logger.info("registered missing texture", .{});
+}

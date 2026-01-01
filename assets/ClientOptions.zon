@@ -1,12 +1,6 @@
 .{
     .{
         .type = .bool,
-        .name = "gpu_alloc_log",
-        .desc = "Enable GpuAlloc logging",
-        .default = false,
-    },
-    .{
-        .type = .bool,
         .name = "gl_debug",
         .desc = "Enable OpenGL debug context",
         .default = true,
@@ -15,12 +9,6 @@
         .type = .bool,
         .name = "gl_check_errors",
         .desc = "Check gl_GetError",
-        .default = true,
-    },
-    .{
-        .type = .bool,
-        .name = "greedy_meshing",
-        .desc = "Use greedy meshing",
         .default = true,
     },
     .{
@@ -44,7 +32,7 @@
     .{
         .type = .str,
         .name = "world_gen",
-        .desc = "Choose world generator: flat | balls | wavy | grid",
+        .desc = "Choose world generator: flat | balls | wavy | checkers",
         .default = "flat",
     },
     .{
@@ -54,9 +42,21 @@
         .default = "./client.zon",
     },
     .{
-        .type = .bool,
-        .name = "renderer_log_settings_changed",
-        .desc = "renderer_log_settings_changed",
-        .default = false,
+        .type = .str,
+        .name = "textures_dir",
+        .desc = "Directory that stores all textures",
+        .default = "textures",
+    },
+    .{
+        .type = .str,
+        .name = "blocks_dir",
+        .desc = "Directory that stores all block info",
+        .default = "blocks",
+    },
+    .{
+        .type = .str,
+        .name = "models_dir",
+        .desc = "Directory that stores all model info",
+        .default = "models",
     },
 }

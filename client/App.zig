@@ -11,7 +11,7 @@ const Options = @import("ClientOptions");
 pub const DebugUi = @import("DebugUi.zig");
 pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
-pub const TextureAtlas = @import("TextureAtlas.zig");
+pub const BlockManager = @import("BlockManager.zig");
 
 const logger = std.log.scoped(.app);
 
@@ -28,7 +28,7 @@ debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
-blocks_atlas: TextureAtlas,
+block_manager: BlockManager,
 
 layers: std.ArrayList(Layer),
 
@@ -67,8 +67,7 @@ pub fn init() !void {
     try init_sdl();
     try init_gl();
     app.debug_ui = try .init(&app);
-
-    app.blocks_atlas = try .init("textures/blocks", "blocks");
+    app.block_manager = try .init();
 
     app.layers = .empty;
     try push_layer(Game.layer());
@@ -175,7 +174,7 @@ pub fn deinit() void {
     app.settings_store.deinit();
     app.events.deinit();
     app.keys_state.deinit();
-    app.blocks_atlas.deinit();
+    app.block_manager.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -341,8 +340,8 @@ pub fn gui() *DebugUi {
     return &app.debug_ui;
 }
 
-pub fn atlas(comptime name: []const u8) *TextureAtlas {
-    return &@field(app, name ++ "_atlas");
+pub fn blocks() *BlockManager {
+    return &app.block_manager;
 }
 
 const FrameData = struct {

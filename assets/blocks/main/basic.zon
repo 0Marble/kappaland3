@@ -1,0 +1,14 @@
+.{
+    .solid = true, // shorthand: all faces are solid
+    // shorthand: all faces set to this model
+    .model = .{".blocks.main.default"},
+    // not shorthand: set textures individually per face
+    .textures = .{
+        .front = .{".blocks.main.debug_front"},
+        .back = .{".blocks.main.debug_back"},
+        .right = .{".blocks.main.debug_right"},
+        .left = .{".blocks.main.debug_left"},
+        .top = .{".blocks.main.debug_top"},
+        .bot = .{".blocks.main.debug_bot"},
+    },
+}

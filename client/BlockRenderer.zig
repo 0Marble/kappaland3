@@ -218,7 +218,7 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BLOCK_ATLAS_TEX));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.atlas("blocks").handle));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.blocks().atlas.handle));
 
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,

@@ -1,6 +1,5 @@
 const std = @import("std");
 const Coords = @import("Chunk.zig").Coords;
-const Model = @import("BlockModel");
 const App = @import("App.zig");
 
 pub const Id = enum(u16) {
@@ -13,7 +12,8 @@ pub const Id = enum(u16) {
     debug,
 
     pub fn get_texture(self: Id, face: Face) usize {
-        const atlas = App.atlas("blocks");
+        const atlas = &App.blocks().atlas;
+
         switch (self) {
             .stone => return atlas.get_idx(".blocks.main.stone"),
             .planks, .planks_slab => return atlas.get_idx(".blocks.main.planks"),
@@ -85,4 +85,13 @@ pub const Face = enum(u3) {
             .bot => .{ 0, 0, -1 },
         };
     }
+};
+
+pub const Model = packed struct(u32) {
+    u_scale: u4,
+    v_scale: u4,
+    u_offset: u4,
+    v_offset: u4,
+    w_offset: u4,
+    _unused: u12 = 0xeba,
 };

@@ -1,0 +1,23 @@
+.{
+    .derives = ".blocks.main.basic",
+    .states = .{
+        .bot_slab = .{
+            .solid = .{
+                .front = false,
+                .back = false,
+                .right = false,
+                .left = false,
+                .top = false,
+                .bot = true,
+            },
+            .model = .{
+                .front = .{".blocks.main.bot_slab_side"},
+                .back = .{".blocks.main.bot_slab_side"},
+                .right = .{".blocks.main.bot_slab_side"},
+                .left = .{".blocks.main.bot_slab_side"},
+                .top = .{".blocks.main.bot_slab_top"},
+                .bot = .{".blocks.main.default"},
+            },
+        },
+    },
+}
