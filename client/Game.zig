@@ -19,6 +19,7 @@ const HEIGHT = Options.world_height;
 camera: Camera,
 renderer: Renderer,
 chunk_manager: *ChunkManager,
+current_selected_block: Block,
 
 const Instance = struct {
     var instance: Game = undefined;
@@ -48,6 +49,8 @@ pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
 }
 
 fn on_attatch(self: *Game) !void {
+    self.current_selected_block = App.blocks().get_block_by_name(".blocks.main.stone").?;
+
     logger.info("{*}: initializing camera", .{self});
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
@@ -76,8 +79,25 @@ fn on_imgui(self: *Game) !void {
     c.igText("%s", camera_str);
 }
 
+fn on_imgui_blocks(self: *Game) !void {
+    const block_names = App.blocks().blocks.keys();
+    const cur_name: [:0]const u8 = @ptrCast(block_names[self.current_selected_block.idx]);
+
+    if (c.igBeginCombo("Placed Block", @ptrCast(cur_name), 0)) {
+        defer c.igEndCombo();
+
+        for (block_names, 0..) |name, idx| {
+            const is_selected = @as(u16, @intCast(idx)) == self.current_selected_block.idx;
+            if (c.igSelectable_Bool(@ptrCast(name), is_selected, 0, .{})) {
+                self.current_selected_block.idx = @intCast(idx);
+            }
+        }
+    }
+}
+
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
+    try App.gui().add_to_frame(Game, "Blocks", self, on_imgui_blocks, @src());
 
     try self.chunk_manager.on_imgui();
     try self.renderer.on_frame_start();

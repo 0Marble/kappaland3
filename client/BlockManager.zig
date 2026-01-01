@@ -3,6 +3,7 @@ const App = @import("App.zig");
 const TextureAtlas = @import("TextureAtlas.zig");
 const Block = @import("Block.zig");
 const Options = @import("ClientOptions");
+const util = @import("util.zig");
 
 const logger = std.log.scoped(.block_manager);
 
@@ -89,7 +90,7 @@ fn concat(
     try w.print(".{s}", .{suffix});
 
     const gpa = App.static_alloc();
-    const res = try gpa.dupe(u8, buf.items);
+    const res = try gpa.dupeZ(u8, buf.items);
     return res;
 }
 
@@ -102,7 +103,7 @@ fn concat_state(self: *BlockManager, base: []const u8, state: []const []const u8
     for (state) |s| try w.print(":{s}", .{s});
 
     const gpa = self.arena.allocator();
-    const res = try gpa.dupe(u8, buf.items);
+    const res = try gpa.dupeZ(u8, buf.items);
     return res;
 }
 
@@ -248,7 +249,7 @@ const Builder = struct {
             break :blk try self.realize_block(base_idx);
         } else null;
 
-        const realized = try parsed.realize(base, self.arena.allocator());
+        const realized = try parsed.realize(base, self.arena.allocator(), true);
         try self.realized.put(App.gpa(), name, realized);
         return realized;
     }
@@ -311,9 +312,11 @@ const Builder = struct {
             while (it.next()) |kv| {
                 try state_stack.append(kv.key_ptr.*);
                 defer _ = state_stack.pop();
+                const sub = try kv.value_ptr.*.realize(realized, self.arena.allocator(), false);
+
                 self.register_block_and_states(
                     manager,
-                    kv.value_ptr.*,
+                    sub,
                     base_name,
                     state_stack,
                 ) catch |err| {
@@ -338,7 +341,12 @@ const ParsedBlock = struct {
 
     const States = std.StringArrayHashMapUnmanaged(*ParsedBlock);
 
-    fn realize(self: *ParsedBlock, base: ?*ParsedBlock, gpa: std.mem.Allocator) !*ParsedBlock {
+    fn realize(
+        self: *ParsedBlock,
+        base: ?*ParsedBlock,
+        gpa: std.mem.Allocator,
+        inherit_states: bool,
+    ) !*ParsedBlock {
         var new = try gpa.create(ParsedBlock);
         new.* = .{};
         new.casts_ao = self.casts_ao orelse (if (base) |b| b.casts_ao else null) orelse {
@@ -371,19 +379,15 @@ const ParsedBlock = struct {
         }
 
         var it1 = self.states.iterator();
-        var states = States.empty;
         while (it1.next()) |kv| {
-            const sub = try kv.value_ptr.*.realize(new, gpa);
-            try states.put(gpa, kv.key_ptr.*, sub);
+            try new.states.put(gpa, kv.key_ptr.*, kv.value_ptr.*);
         }
-        if (base) |b| {
+        if (util.cond_capture(inherit_states, base)) |b| {
             var it2 = b.states.iterator();
-            while (it2.next()) |kv| if (!states.contains(kv.key_ptr.*)) {
-                const sub = try kv.value_ptr.*.realize(new, gpa);
-                try states.put(gpa, kv.key_ptr.*, sub);
+            while (it2.next()) |kv| if (!new.states.contains(kv.key_ptr.*)) {
+                try new.states.put(gpa, kv.key_ptr.*, kv.value_ptr.*);
             };
         }
-        new.states = states;
 
         return new;
     }

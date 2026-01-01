@@ -2,14 +2,7 @@
     .derives = ".blocks.main.basic",
     .states = .{
         .bot_slab = .{
-            .solid = .{
-                .front = false,
-                .back = false,
-                .right = false,
-                .left = false,
-                .top = false,
-                .bot = true,
-            },
+            .solid = false,
             .model = .{
                 .front = .{".blocks.main.bot_slab_side"},
                 .back = .{".blocks.main.bot_slab_side"},
