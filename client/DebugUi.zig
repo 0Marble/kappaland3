@@ -17,10 +17,16 @@ const ContentsCallback = struct {
 
 const FrameContentsMap = std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged(ContentsCallback));
 frames: FrameContentsMap,
+ctx: *c.ImGuiContext,
 
 const DebugUi = @This();
 pub fn init(app: *App) !DebugUi {
-    _ = c.igCreateContext(null) orelse {
+    var self = DebugUi{
+        .frames = .empty,
+        .ctx = undefined,
+    };
+
+    self.ctx = c.igCreateContext(null) orelse {
         std.log.err("Could not create imgui context", .{});
         return error.ImguiError;
     };
@@ -33,9 +39,7 @@ pub fn init(app: *App) !DebugUi {
         return error.ImguiError;
     }
 
-    return .{
-        .frames = .empty,
-    };
+    return self;
 }
 
 pub fn deinit(self: *DebugUi) void {
@@ -61,11 +65,9 @@ pub fn add_to_frame(
     });
 }
 
-pub const EventStatus = enum { captured, fallthrough };
-pub fn handle_event(self: *DebugUi, evt: *c.SDL_Event) EventStatus {
+pub fn handle_event(self: *DebugUi, evt: *c.SDL_Event) void {
     _ = self;
     _ = c.ig_ImplSDL3_ProcessEvent(evt);
-    return .fallthrough;
 }
 
 pub fn on_frame_start(self: *DebugUi) void {

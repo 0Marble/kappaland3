@@ -265,7 +265,8 @@ fn handle_events() !bool {
     var running = true;
     var evt: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&evt)) {
-        if (gui().handle_event(&evt) == .captured) continue;
+        gui().handle_event(&evt);
+        const io: *c.ImGuiIO = @ptrCast(c.igGetIO_Nil());
 
         switch (evt.type) {
             c.SDL_EVENT_QUIT => running = false,
@@ -278,21 +279,27 @@ fn handle_events() !bool {
                 }
             },
             c.SDL_EVENT_KEY_DOWN => {
-                try keys().emit_keydown(.from_sdl(evt.key.scancode));
+                if (!io.WantCaptureKeyboard) try keys().emit_keydown(.from_sdl(evt.key.scancode));
             },
             c.SDL_EVENT_KEY_UP => {
-                try keys().emit_keyup(.from_sdl(evt.key.scancode));
+                if (!io.WantCaptureKeyboard) try keys().emit_keyup(.from_sdl(evt.key.scancode));
             },
             c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                keys().emit_mouse_down(.from_sdl(evt.button.button));
-                keys().emit_mouse_motion(evt.button.x, evt.button.y);
+                if (!io.WantCaptureMouse) {
+                    keys().emit_mouse_down(.from_sdl(evt.button.button));
+                    keys().emit_mouse_motion(evt.button.x, evt.button.y);
+                }
             },
             c.SDL_EVENT_MOUSE_BUTTON_UP => {
-                keys().emit_mouse_up(.from_sdl(evt.button.button));
-                keys().emit_mouse_motion(evt.button.x, evt.button.y);
+                if (!io.WantCaptureMouse) {
+                    keys().emit_mouse_up(.from_sdl(evt.button.button));
+                    keys().emit_mouse_motion(evt.button.x, evt.button.y);
+                }
             },
             c.SDL_EVENT_MOUSE_MOTION => {
-                keys().emit_mouse_motion(evt.motion.x, evt.motion.y);
+                if (!io.WantCaptureMouse) {
+                    keys().emit_mouse_motion(evt.motion.x, evt.motion.y);
+                }
             },
             else => {},
         }
