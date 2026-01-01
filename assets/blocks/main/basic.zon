@@ -12,4 +12,5 @@
         .top = .{".blocks.main.debug_top"},
         .bot = .{".blocks.main.debug_bot"},
     },
+    .states = .{ .block = .{} },
 }

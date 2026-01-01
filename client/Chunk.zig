@@ -66,10 +66,10 @@ fn generate_solid(self: *Chunk) void {
 }
 
 fn generate_flat(self: *Chunk) void {
-    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
-    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
-    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
-    const grass = App.blocks().get_block_by_name(".blocks.main.grass").?;
+    const air = Block.air();
+    const stone = Block.stone();
+    const dirt = Block.dirt();
+    const grass = Block.grass();
 
     @memset(&self.blocks, air);
     if (self.coords[1] > 0) return;
@@ -97,8 +97,8 @@ fn generate_balls(self: *Chunk) void {
     const scale: zm.Vec3f = @splat(std.math.pi / 8.0);
     const size: Coords = @splat(CHUNK_SIZE);
 
-    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
-    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
+    const air = Block.air();
+    const stone = Block.stone();
 
     for (0..CHUNK_SIZE) |i| {
         for (0..CHUNK_SIZE) |j| {
@@ -124,9 +124,9 @@ fn generate_balls(self: *Chunk) void {
 }
 
 fn generate_checkers(self: *Chunk) void {
-    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
-    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
-    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
+    const air = Block.air();
+    const stone = Block.stone();
+    const dirt = Block.dirt();
 
     @memset(&self.blocks, air);
     if (self.coords[1] > 0) return;
@@ -139,10 +139,10 @@ fn generate_checkers(self: *Chunk) void {
 }
 
 fn generate_wavy(self: *Chunk) void {
-    const air = App.blocks().get_block_by_name(".blocks.main.air").?;
-    const stone = App.blocks().get_block_by_name(".blocks.main.stone").?;
-    const dirt = App.blocks().get_block_by_name(".blocks.main.dirt").?;
-    const grass = App.blocks().get_block_by_name(".blocks.main.grass").?;
+    const air = Block.air();
+    const stone = Block.stone();
+    const dirt = Block.dirt();
+    const grass = Block.grass();
 
     const scale = std.math.pi / 16.0;
     for (0..CHUNK_SIZE) |i| {

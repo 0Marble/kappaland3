@@ -161,7 +161,9 @@ fn build_layer_mesh(
                 @as(Coords, @splat(v)) * up;
 
             const block = self.chunk.get(pos);
-            if (block.is_air() or self.is_solid_neighbour_face(pos + front, normal.flip())) {
+            if (block.is_air() or
+                (self.is_solid_neighbour_face(pos + front, normal.flip()) and block.is_solid(normal)))
+            {
                 continue;
             }
 

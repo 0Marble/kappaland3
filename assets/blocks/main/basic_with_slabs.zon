@@ -1,8 +1,11 @@
 .{
     .derives = ".blocks.main.basic",
+    .solid = false,
     .states = .{
+        .block = .{ .solid = true },
         .bot_slab = .{
-            .solid = false,
+            .casts_ao = false,
+            .solid = .{ .bot = true },
             .model = .{
                 .front = .{".blocks.main.bot_slab_side"},
                 .back = .{".blocks.main.bot_slab_side"},
@@ -10,6 +13,18 @@
                 .left = .{".blocks.main.bot_slab_side"},
                 .top = .{".blocks.main.bot_slab_top"},
                 .bot = .{".blocks.main.default"},
+            },
+        },
+        .top_slab = .{
+            .casts_ao = false,
+            .solid = .{ .top = true },
+            .model = .{
+                .front = .{".blocks.main.top_slab_side"},
+                .back = .{".blocks.main.top_slab_side"},
+                .right = .{".blocks.main.top_slab_side"},
+                .left = .{".blocks.main.top_slab_side"},
+                .top = .{".blocks.main.default"},
+                .bot = .{".blocks.main.bot_slab_top"},
             },
         },
     },

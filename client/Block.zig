@@ -30,13 +30,24 @@ pub fn casts_ao(self: Block) bool {
     return info.casts_ao;
 }
 
-pub var cached_air: Block = undefined;
 pub fn air() Block {
-    return cached_air;
+    return App.blocks().cache.air;
+}
+
+pub fn dirt() Block {
+    return App.blocks().cache.dirt;
+}
+
+pub fn stone() Block {
+    return App.blocks().cache.stone;
+}
+
+pub fn grass() Block {
+    return App.blocks().cache.grass;
 }
 
 pub fn is_air(self: Block) bool {
-    return self.idx == cached_air.idx;
+    return self.idx == air().idx;
 }
 
 pub const indices: []const u8 = &.{ 0, 1, 2, 0, 2, 3 };

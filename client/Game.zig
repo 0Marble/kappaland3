@@ -49,7 +49,7 @@ pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
 }
 
 fn on_attatch(self: *Game) !void {
-    self.current_selected_block = App.blocks().get_block_by_name(".blocks.main.stone").?;
+    self.current_selected_block = App.blocks().get_block_by_name(".blocks.main.stone:block").?;
 
     logger.info("{*}: initializing camera", .{self});
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {

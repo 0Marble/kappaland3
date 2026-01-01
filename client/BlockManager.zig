@@ -12,6 +12,9 @@ blocks: std.StringArrayHashMapUnmanaged(Info),
 models: std.StringArrayHashMapUnmanaged(Block.Model),
 arena: std.heap.ArenaAllocator,
 
+cache: std.enums.EnumFieldStruct(CachedBlocks, Block, null) = undefined,
+const CachedBlocks = enum { air, stone, dirt, grass };
+
 const BlockManager = @This();
 const OOM = std.mem.Allocator.Error;
 
@@ -50,10 +53,15 @@ pub fn init() !BlockManager {
     logger.info("found {d} block models", .{scanner.models.count()});
 
     try scanner.register(&self);
-    Block.cached_air = self.get_block_by_name(".blocks.main.air") orelse {
-        logger.err("missing air block!", .{});
-        return error.MissingAirBlock;
-    };
+    inline for (comptime std.enums.values(CachedBlocks)) |cached| {
+        const name = std.fmt.comptimePrint(".blocks.main.{s}:block", .{@tagName(cached)});
+        if (self.get_block_by_name(name)) |block| {
+            @field(self.cache, @tagName(cached)) = block;
+        } else {
+            logger.err("missing block {s}", .{name});
+            return error.MissingBlock;
+        }
+    }
 
     if (scanner.had_errors) {
         logger.warn("had errors while loading blocks...", .{});
@@ -260,10 +268,10 @@ const Builder = struct {
         defer state_stack.deinit();
 
         const name = self.blocks.keys()[idx];
-        try self.register_block_and_states(manager, realized, name, &state_stack);
+        try self.register_block_states(manager, realized, name, &state_stack);
     }
 
-    fn register_block_and_states(
+    fn register_block_states(
         self: *Builder,
         manager: *BlockManager,
         realized: *ParsedBlock,
@@ -304,17 +312,14 @@ const Builder = struct {
             }
         }
 
-        try manager.blocks.put(App.gpa(), full_name, info);
-        logger.info("registered block {s}", .{full_name});
-
-        {
+        if (realized.states.count() > 0) {
             var it = realized.states.iterator();
             while (it.next()) |kv| {
                 try state_stack.append(kv.key_ptr.*);
                 defer _ = state_stack.pop();
                 const sub = try kv.value_ptr.*.realize(realized, self.arena.allocator(), false);
 
-                self.register_block_and_states(
+                self.register_block_states(
                     manager,
                     sub,
                     base_name,
@@ -327,6 +332,9 @@ const Builder = struct {
                     );
                 };
             }
+        } else {
+            try manager.blocks.put(App.gpa(), full_name, info);
+            logger.info("registered block {s}", .{full_name});
         }
     }
 };
@@ -511,13 +519,6 @@ const ParsedBlock = struct {
         };
 
         const map = std.EnumMap(K, V).init(parsed);
-        for (std.enums.values(K)) |k| {
-            if (!map.contains(k)) {
-                logger.err("missing entry for {}", .{k});
-                return error.MissingEntry;
-            }
-        }
-
         return map;
     }
 
