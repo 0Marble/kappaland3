@@ -1,11 +1,16 @@
 .{
     .derives = ".blocks.main.basic",
     .textures = .{
-        .front = .{".blocks.main.grass_side"},
-        .back = .{".blocks.main.grass_side"},
-        .right = .{".blocks.main.grass_side"},
-        .left = .{".blocks.main.grass_side"},
-        .top = .{".blocks.main.grass_top"},
-        .bot = .{".blocks.main.dirt"},
+        .bot = ".blocks.main.dirt",
+        .side = ".blocks.main.grass_side",
+        .top = ".blocks.main.grass_top",
+    },
+    .model = .{
+        .front = .{ .face, .side },
+        .back = .{ .face, .side },
+        .right = .{ .face, .side },
+        .left = .{ .face, .side },
+        .top = .{ .face, .top },
+        .bot = .{ .face, .bot },
     },
 }

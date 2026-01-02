@@ -1,4 +1,4 @@
 .{
-    .derives = ".blocks.main.basic",
-    .textures = .{".blocks.main.planks"},
+    .derives = ".blocks.main.basic_with_slabs",
+    .textures = .{ .tex = ".blocks.main.planks" },
 }

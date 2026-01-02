@@ -102,7 +102,7 @@ pub fn get_idx(self: *TextureAtlas, name: []const u8) usize {
 pub fn get_idx_or_warn(self: *TextureAtlas, name: []const u8) usize {
     return self.images.get(name) orelse {
         logger.warn("missing texture: {s}", .{name});
-        return self.images.count();
+        return self.get_missing();
     };
 }
 

@@ -1,5 +1,12 @@
 .{
     .derives = ".blocks.main.basic",
     .casts_ao = false,
-    .solid = false,
+    .solid = .{
+        .front = false,
+        .back = false,
+        .right = false,
+        .left = false,
+        .top = false,
+        .bot = false,
+    },
 }

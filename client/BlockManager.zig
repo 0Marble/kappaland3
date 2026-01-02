@@ -65,15 +65,16 @@ pub fn init() !BlockManager {
     logger.info("found {d} block models", .{scanner.models.count()});
 
     try scanner.register(&self);
-    inline for (comptime std.enums.values(CachedBlocks)) |cached| {
-        const name = std.fmt.comptimePrint(".blocks.main.{s}", .{@tagName(cached)});
-        @field(self.cache, @tagName(cached)) = self.get_block_by_name(name);
-    }
 
     if (scanner.had_errors) {
         logger.warn("had errors while loading blocks...", .{});
     } else {
         logger.warn("loading blocks ok!", .{});
+    }
+
+    inline for (comptime std.enums.values(CachedBlocks)) |cached| {
+        const name = std.fmt.comptimePrint(".blocks.main.{s}", .{@tagName(cached)});
+        @field(self.cache, @tagName(cached)) = self.get_block_by_name(name);
     }
 
     return self;
@@ -122,13 +123,15 @@ const Builder = struct {
     prefix: std.ArrayList([]const u8) = .empty,
     arena: std.heap.ArenaAllocator,
 
-    blocks: std.StringArrayHashMapUnmanaged(*ParsedBlock) = .empty,
+    blocks: std.StringArrayHashMapUnmanaged(ParsedBlock) = .empty,
+    realized: std.StringArrayHashMapUnmanaged(ParsedBlock) = .empty,
     models: std.StringArrayHashMapUnmanaged(ParsedModel) = .empty,
 
     fn deinit(self: *Builder) void {
         self.prefix.deinit(App.gpa());
         self.blocks.deinit(App.gpa());
         self.models.deinit(App.gpa());
+        self.realized.deinit(App.gpa());
         self.arena.deinit();
     }
 
@@ -254,23 +257,297 @@ const Builder = struct {
     }
 
     fn register_blocks(self: *Builder, manager: *BlockManager) !void {
-        _ = self; // autofix
-        _ = manager; // autofix
+        for (self.blocks.values()) |block| self.realize_block(block) catch |err| {
+            logger.err("{s}: could not register block: {}", .{ block.name, err });
+            self.had_errors = true;
+        };
+        for (self.realized.values()) |block| self.register_block(block, manager) catch |err| {
+            logger.err("{s}: could not register block: {}", .{ block.name, err });
+            self.had_errors = true;
+        };
+    }
+
+    fn register_block(self: *Builder, block: ParsedBlock, manager: *BlockManager) !void {
+        errdefer {
+            logger.err("while registering {s}", .{block.name});
+        }
+        const b = self.realized.get(block.name).?;
+
+        var info = Info{
+            .name = try manager.arena.allocator().dupeZ(u8, b.name),
+            .casts_ao = (try ParsedBlock.get_ensure_type(b.map.*, "casts_ao", .bool)).bool,
+            .solid = .init(.{}),
+            .model = .init(.{}),
+            .textures = .init(.{}),
+        };
+
+        const solid: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "solid", .map)).map;
+        const faces: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "faces", .map)).map;
+        const textures: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "textures", .map)).map;
+        const model: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "model", .map)).map;
+
+        for (std.enums.values(Block.Face)) |face| {
+            const s = (try ParsedBlock.get_ensure_type(solid, @tagName(face), .bool)).bool;
+            info.solid.put(face, s);
+
+            const face_model = (try ParsedBlock.get_ensure_type(model, @tagName(face), .key_list)).key_list;
+            if (face_model.len % 2 != 0) {
+                logger.err("model.{s} should be a list [model1, tex1, ...]", .{@tagName(face)});
+                return error.TypeError;
+            }
+            const faces_buf = try manager.arena.allocator().alloc(usize, face_model.len / 2);
+            const tex_buf = try manager.arena.allocator().alloc(usize, face_model.len / 2);
+
+            for (0..face_model.len / 2) |i| {
+                errdefer {
+                    logger.err("while parsing model[{d}]", .{2 * i});
+                }
+                const model_local_name = face_model[2 * i];
+                const tex_local_name = face_model[2 * i + 1];
+                const model_global_name = (try ParsedBlock.get_ensure_type(faces, model_local_name, .str)).str;
+                const tex_global_name = (try ParsedBlock.get_ensure_type(textures, tex_local_name, .str)).str;
+
+                const model_idx = manager.models.get(model_global_name) orelse {
+                    logger.err("missing model {s}", .{model_global_name});
+                    return error.MissingData;
+                };
+                const tex_idx = manager.atlas.get_idx_or_warn(tex_global_name);
+
+                faces_buf[i] = model_idx;
+                tex_buf[i] = tex_idx;
+            }
+
+            info.model.put(face, faces_buf);
+            info.textures.put(face, tex_buf);
+        }
+
+        try manager.blocks.put(App.gpa(), info.name, info);
+        logger.info("registered block {s}", .{info.name});
+    }
+
+    const Error = OOM || error{ MissingData, TypeError, ValueTypeMismatch } || ParsedBlock.Error;
+    fn realize_block(self: *Builder, block: ParsedBlock) Error!void {
+        const name = block.name;
+        if (self.realized.contains(name)) return;
+        const gpa = self.arena.allocator();
+
+        if (block.map.get("derives")) |base_name_val| {
+            if (base_name_val.* != .str) {
+                logger.err("{s}: 'derives' field should be a string", .{name});
+                return error.TypeError;
+            }
+            const base_name = base_name_val.str;
+            const base_unrealized = self.blocks.get(base_name) orelse {
+                logger.err("{s}: missing data for base block '{s}'", .{ name, base_name });
+                return error.MissingData;
+            };
+            try self.realize_block(base_unrealized);
+            const base = self.realized.get(base_name).?;
+            try ParsedBlock.derive(block.map, base.map.*, gpa);
+        }
+
+        try self.realized.put(App.gpa(), name, block);
+
+        if (block.map.fetchSwapRemove("states")) |kv| {
+            if (kv.value.* != .map) {
+                logger.err("{s}: 'states' should be a kv-map field", .{name});
+                return error.TypeError;
+            }
+            const states = &kv.value.map;
+            for (states.keys(), states.values()) |state_name, state_val_orig| {
+                const state_val = try state_val_orig.clone(gpa);
+                if (state_val.* != .map) {
+                    logger.err("{s}: states.{s} should be a kv-map", .{ name, state_name });
+                    return error.TypeError;
+                }
+                const state_full_name = try std.fmt.allocPrintSentinel(
+                    gpa,
+                    "{s}:{s}",
+                    .{ name, state_name },
+                    0,
+                );
+
+                const state_block = ParsedBlock{ .map = &state_val.map, .name = state_full_name };
+                const derives = try gpa.create(ParsedBlock.Value);
+                derives.* = .{ .str = name };
+                if (try state_block.map.fetchPut(gpa, "derives", derives)) |_| {
+                    logger.err("{s}: 'derives' not allowed in sub-states", .{state_full_name});
+                    self.had_errors = true;
+                    continue;
+                }
+
+                _ = try self.realize_block(state_block);
+            }
+
+            try block.map.put(gpa, kv.key, kv.value);
+        }
     }
 };
 
 const ParsedBlock = struct {
+    name: []const u8,
+    map: *Map,
+
     fn parse_and_store(
         builder: *Builder,
         dir: std.fs.Dir,
         prefix: []const []const u8,
         file_name: []const u8,
     ) !void {
-        _ = builder; // autofix
-        _ = dir; // autofix
-        _ = prefix; // autofix
-        _ = file_name; // autofix
+        const ext: []const u8 = ".zon";
+        if (!std.mem.eql(u8, ext, std.fs.path.extension(file_name))) return error.NotAZonFile;
+        const name = file_name[0 .. file_name.len - ext.len];
+        const map = try parse(builder, dir, file_name);
+        const full_name = try builder.concat("blocks", prefix, name);
+        try builder.blocks.put(App.gpa(), full_name, .{ .map = map, .name = full_name });
     }
+
+    const Zon = std.zig.Zoir.Node;
+    const Ctx = struct { ast: std.zig.Ast, zoir: std.zig.Zoir };
+
+    fn get_ensure_type(map: Map, name: []const u8, typ: Tag) !*Value {
+        const val = map.get(name) orelse {
+            logger.err("missing field {s}", .{name});
+            return error.MissingField;
+        };
+        const tag = @as(Tag, val.*);
+        if (tag != typ) {
+            logger.err("expected {}, got {}", .{ typ, tag });
+            return error.TypeError;
+        }
+        return val;
+    }
+
+    fn parse(builder: *Builder, dir: std.fs.Dir, file_name: []const u8) !*Map {
+        var file = try dir.openFile(file_name, .{});
+        defer file.close();
+        var buf = std.mem.zeroes([256]u8);
+        var reader = file.reader(&buf);
+        const size = try reader.getSize();
+        const gpa = builder.arena.allocator();
+        const src = try gpa.allocSentinel(u8, size, 0);
+        try reader.interface.readSliceAll(src);
+
+        const ast = try std.zig.Ast.parse(gpa, src, .zon);
+        const ctx = Ctx{
+            .ast = ast,
+            .zoir = try std.zig.ZonGen.generate(gpa, ast, .{}),
+        };
+        if (ctx.zoir.hasCompileErrors()) {
+            const stderr = std.debug.lockStderrWriter(&buf);
+            defer std.debug.unlockStderrWriter();
+            for (ctx.ast.errors) |err| {
+                try ctx.ast.renderError(err, stderr);
+            }
+        }
+
+        const val = try zon_to_map(ctx, .root, gpa);
+        return &val.map;
+    }
+
+    const Error = OOM || error{ ExpectedStringLiteral, UnexpectedValue };
+    fn zon_to_map(ctx: Ctx, node: Zon.Index, gpa: std.mem.Allocator) Error!*Value {
+        errdefer {
+            const ast_node = node.getAstNode(ctx.zoir);
+            const tok = ctx.ast.nodeMainToken(ast_node);
+            const loc = ctx.ast.tokenLocation(0, tok);
+            logger.err(
+                "at {d}:{d}\n{s}",
+                .{ loc.line, loc.column, ctx.ast.source[loc.line_start..loc.line_end] },
+            );
+        }
+
+        const val = try gpa.create(Value);
+        const zon_node = node.get(ctx.zoir);
+        switch (zon_node) {
+            .empty_literal => {
+                val.* = .{ .map = .empty };
+            },
+            .struct_literal => |x| {
+                var map = Map.empty;
+                for (x.names, 0..) |key, i| {
+                    try map.put(
+                        gpa,
+                        key.get(ctx.zoir),
+                        try zon_to_map(ctx, x.vals.at(@intCast(i)), gpa),
+                    );
+                }
+                val.* = .{ .map = map };
+            },
+            .true => {
+                val.* = .{ .bool = true };
+            },
+            .false => {
+                val.* = .{ .bool = false };
+            },
+            .string_literal => |x| {
+                val.* = .{ .str = x };
+            },
+            .array_literal => |x| {
+                const arr = try gpa.alloc([]const u8, x.len);
+                for (0..x.len) |i| {
+                    const child = x.at(@intCast(i)).get(ctx.zoir);
+                    switch (child) {
+                        .string_literal => |y| arr[i] = y,
+                        .enum_literal => |y| arr[i] = y.get(ctx.zoir),
+                        else => return error.ExpectedStringLiteral,
+                    }
+                }
+                val.* = .{ .key_list = arr };
+            },
+            else => return error.UnexpectedValue,
+        }
+
+        return val;
+    }
+
+    fn derive(derived: *Map, base: Map, gpa: std.mem.Allocator) !void {
+        for (base.keys(), base.values()) |k, v| {
+            errdefer {
+                logger.err("at .{s}", .{k});
+            }
+
+            if (derived.get(k)) |existing| {
+                const t1 = @as(Tag, existing.*);
+                const t2 = @as(Tag, v.*);
+                if (t1 != t2) {
+                    logger.err("derive type error, expected {} got {}", .{ t1, t2 });
+                    return error.ValueTypeMismatch;
+                }
+                switch (existing.*) {
+                    .map => |*x| try derive(x, v.map, gpa),
+                    else => {},
+                }
+            } else {
+                try derived.put(gpa, k, try v.clone(gpa));
+            }
+        }
+    }
+
+    const Map = std.StringArrayHashMapUnmanaged(*Value);
+    const Value = union(enum) {
+        map: Map,
+        str: []const u8,
+        bool: bool,
+        key_list: []const []const u8,
+
+        fn clone(self: *Value, gpa: std.mem.Allocator) !*Value {
+            switch (self.*) {
+                .map => |x| {
+                    var res = Map.empty;
+                    for (x.keys(), x.values()) |k, v| {
+                        try res.put(gpa, k, try v.clone(gpa));
+                    }
+                    const ptr = try gpa.create(Value);
+                    ptr.* = .{ .map = res };
+                    return ptr;
+                },
+                else => return self,
+            }
+        }
+    };
+
+    const Tag = std.meta.Tag(Value);
 };
 
 const ParsedModel = struct {

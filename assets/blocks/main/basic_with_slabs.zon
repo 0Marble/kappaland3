@@ -1,0 +1,56 @@
+.{
+    .derives = ".blocks.main.basic",
+    .states = .{
+        .slab_bot = .{
+            .faces = .{
+                .side = ".blocks.main.bot_slab_side",
+                .bot = ".blocks.main.default",
+                .top = ".blocks.main.bot_slab_top",
+            },
+            .solid = .{
+                .front = false,
+                .back = false,
+                .right = false,
+                .left = false,
+                .top = false,
+                .bot = true,
+            },
+            .model = .{
+                .front = .{ .side, .tex },
+                .back = .{ .side, .tex },
+                .right = .{ .side, .tex },
+                .left = .{ .side, .tex },
+                .top = .{ .top, .tex },
+                .bot = .{ .bot, .tex },
+            },
+        },
+        .stair_left = .{
+            .faces = .{
+                .bot = ".blocks.main.default",
+                .left = ".blocks.main.default",
+                .@"1" = ".blocks.main.stair.1",
+                .@"2" = ".blocks.main.stair.2",
+                .@"3" = ".blocks.main.stair.3",
+                .@"4" = ".blocks.main.stair.4",
+                .@"5" = ".blocks.main.stair.5",
+                .@"6" = ".blocks.main.stair.6",
+            },
+            .solid = .{
+                .front = false,
+                .back = false,
+                .right = false,
+                .left = true,
+                .top = false,
+                .bot = true,
+            },
+            .model = .{
+                .front = .{ .@"1", .tex, .@"5", .tex },
+                .back = .{ .@"1", .tex, .@"6", .tex },
+                .right = .{ .@"1", .tex, .@"4", .tex },
+                .left = .{ .left, .tex },
+                .top = .{ .@"3", .tex, .@"2", .tex },
+                .bot = .{ .bot, .tex },
+            },
+        },
+    },
+}
