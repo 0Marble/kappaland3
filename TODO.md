@@ -4,7 +4,6 @@
 - Lighting support 
 - Transparency support
 - Generic model rendering - for enemies/players/blocks with crazy models.
-- Better defintion of a block: we want all block info (solid? model? texture? AO interaction?) to be easily accessible and configurable in a single place. Also referring to blocks by generically named id's is stupid.
 
 # Non-critical
 
@@ -26,6 +25,27 @@
 - renderer: there is a maximum allocation size on the gpu, (around 4gigs or `-Dworld_size=128` on flat world).
 
 # Done
+
+- 02.01.2026 (again didnt update the doc):
+    1. Worked on the BlockManager - something to store and process all block data.
+        It definitely needs a couple more iterations to be good, this time the big question is how to make 
+        block defintion file format good? 
+        There is a difficult to achieve balance between copy-pasting defintions and code complexity.
+        My first idea was to have blocks potentially inherit from other block defs, that way we can avoid 
+        copy-pasting the same "normal block model" segment in every file, we just derive from a `basic.zon` 
+        and then override the texture for example.
+        Then, I wanted to make it so a block can have related states described in the same file, so that we 
+        can for example derive from `basic_with_slabs` to get all the slab models automatically.
+        This causes a couple of issues. 
+        We again want to avoid needless copy-pasting, so a block state inherits from the parent state, 
+        but what if the top-level block inherits from another block with another set of states?
+        We basically get into a multiple-inheritance scenario (bad).
+        Another issue is that we support multiple faces with multiple textures. 
+        I.e. we can have multple `.left` faces, like in a stair block we have the bottom stair left side and a top 
+        stair left side, and technically, from the renderer point of view, we can make it so the bottom half 
+        and the top half have different textures.
+        But how do we describe it in a simple file format, while still supporting the inheritance idea, 
+        and the states idea?
 
 - 29.12.2025 (not really, havent updated this doc in a while):
     1. After a number of iterations, introduced a new chunk manager: it generates/meshes/handles `set_block` all in multiple (configurable count) threads.

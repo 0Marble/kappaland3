@@ -1,10 +1,10 @@
 .{
     .derives = ".blocks.main.basic",
     .solid = false,
+    .casts_ao = false,
     .states = .{
-        .block = .{ .solid = true },
+        .block = .{ .solid = true, .casts_ao = true },
         .bot_slab = .{
-            .casts_ao = false,
             .solid = .{ .bot = true },
             .model = .{
                 .front = .{".blocks.main.bot_slab_side"},
@@ -16,7 +16,6 @@
             },
         },
         .top_slab = .{
-            .casts_ao = false,
             .solid = .{ .top = true },
             .model = .{
                 .front = .{".blocks.main.top_slab_side"},
@@ -25,6 +24,40 @@
                 .left = .{".blocks.main.top_slab_side"},
                 .top = .{".blocks.main.default"},
                 .bot = .{".blocks.main.bot_slab_top"},
+            },
+        },
+        .stair_left = .{
+            .solid = .{ .bot = true, .left = true },
+            .textures = .{
+                .front = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .back = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .right = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .top = .{ ".blocks.main.stone", ".blocks.main.stone" },
+            },
+            .model = .{
+                .front = .{ ".blocks.main.stair.1", ".blocks.main.stair.5" },
+                .back = .{ ".blocks.main.stair.1", ".blocks.main.stair.6" },
+                .right = .{ ".blocks.main.stair.1", ".blocks.main.stair.4" },
+                .left = .{".blocks.main.default"},
+                .top = .{ ".blocks.main.stair.3", ".blocks.main.stair.2" },
+                .bot = .{".blocks.main.default"},
+            },
+        },
+        .stair_right = .{
+            .solid = .{ .bot = true, .right = true },
+            .textures = .{
+                .front = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .back = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .left = .{ ".blocks.main.stone", ".blocks.main.stone" },
+                .top = .{ ".blocks.main.stone", ".blocks.main.stone" },
+            },
+            .model = .{
+                .front = .{ ".blocks.main.stair.1", ".blocks.main.stair.6" },
+                .back = .{ ".blocks.main.stair.1", ".blocks.main.stair.5" },
+                .right = .{".blocks.main.default"},
+                .left = .{ ".blocks.main.stair.1", ".blocks.main.stair.4" },
+                .top = .{ ".blocks.main.stair.7", ".blocks.main.stair.8" },
+                .bot = .{".blocks.main.default"},
             },
         },
     },

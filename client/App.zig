@@ -206,13 +206,15 @@ fn on_imgui(self: *App) !void {
     try w.print(
         \\runtime: {f}
         \\CPU Memory: 
-        \\    main:  {f}
-        \\    frame: {f}
+        \\    main:   {f}
+        \\    frame:  {f}
+        \\    static: {f}
         \\
     , .{
         util.TimeFmt{ .seconds = std.time.timestamp() - self.frame_data.start },
         util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
+        util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
     });
 
     const mem_str = try buf.toOwnedSliceSentinel(App.frame_alloc(), 0);
