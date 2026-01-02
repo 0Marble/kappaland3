@@ -1,4 +1,4 @@
 .{
-    .derives = ".blocks.main.basic_with_slabs",
+    .derives = ".blocks.main.basic",
     .textures = .{".blocks.main.stone"},
 }

@@ -49,7 +49,7 @@ pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
 }
 
 fn on_attatch(self: *Game) !void {
-    self.current_selected_block = App.blocks().get_block_by_name(".blocks.main.stone:block").?;
+    self.current_selected_block = Block.stone();
 
     logger.info("{*}: initializing camera", .{self});
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {
@@ -81,15 +81,15 @@ fn on_imgui(self: *Game) !void {
 
 fn on_imgui_blocks(self: *Game) !void {
     const block_names = App.blocks().blocks.keys();
-    const cur_name: [:0]const u8 = @ptrCast(block_names[self.current_selected_block.idx]);
+    const cur_name: [:0]const u8 = App.blocks().get_block_info(self.current_selected_block).name;
 
     if (c.igBeginCombo("Placed Block", @ptrCast(cur_name), 0)) {
         defer c.igEndCombo();
 
         for (block_names, 0..) |name, idx| {
-            const is_selected = @as(u16, @intCast(idx)) == self.current_selected_block.idx;
+            const is_selected: bool = idx == self.current_selected_block.to_int(usize);
             if (c.igSelectable_Bool(@ptrCast(name), is_selected, 0, .{})) {
-                self.current_selected_block.idx = @intCast(idx);
+                self.current_selected_block = .from_int(idx);
             }
         }
     }

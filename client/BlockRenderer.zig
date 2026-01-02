@@ -126,7 +126,7 @@ fn init_models(self: *Self) !void {
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
 
-    const models: []const Block.Model = App.blocks().models.values();
+    const models: []const Block.Model = App.blocks().models_dedup.keys();
 
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,

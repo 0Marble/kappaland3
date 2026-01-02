@@ -106,6 +106,10 @@ pub fn get_idx_or_warn(self: *TextureAtlas, name: []const u8) usize {
     };
 }
 
+pub fn get_missing(self: *TextureAtlas) usize {
+    return self.images.count();
+}
+
 const Builder = struct {
     images: std.StringArrayHashMapUnmanaged([*]c.SDL_Surface),
     prefix: std.ArrayList([]const u8),
