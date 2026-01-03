@@ -26,6 +26,11 @@
 
 # Done
 
+- 03.01.2026
+    1. Improve BlockManager - now the whole inheritance thing makes more sense, I just treat files as generic 
+        Values: bool | str | arr[str] | Map[str, str] and to inherit I just add extra entries to maps recursively.
+        For the textures problem, I went with a texture slot idea.
+
 - 02.01.2026 (again didnt update the doc):
     1. Worked on the BlockManager - something to store and process all block data.
         It definitely needs a couple more iterations to be good, this time the big question is how to make 
