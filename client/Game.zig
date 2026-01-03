@@ -4,7 +4,7 @@ const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
 const Renderer = @import("Renderer.zig");
 pub const ChunkManager = @import("ChunkManager.zig");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 const Chunk = @import("Chunk.zig");
 const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
@@ -13,8 +13,8 @@ const Block = @import("Block.zig");
 const logger = std.log.scoped(.game);
 
 const Game = @This();
-const WIDTH = Build.world_size;
-const HEIGHT = Build.world_height;
+const WIDTH = Options.world_size;
+const HEIGHT = Options.world_height;
 
 camera: Camera,
 renderer: Renderer,

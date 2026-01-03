@@ -1,7 +1,7 @@
 const std = @import("std");
 const App = @import("App.zig");
 const zm = @import("zm");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 const Handle = @import("GpuAlloc.zig").Handle;
 const Block = @import("Block.zig");
 const ChunkManager = @import("ChunkManager.zig");
@@ -57,7 +57,7 @@ pub fn set(self: *Chunk, pos: Coords, block: Block) void {
 }
 
 pub fn generate(self: *Chunk) void {
-    const fptr = @field(Chunk, "generate_" ++ Build.world_gen);
+    const fptr = @field(Chunk, "generate_" ++ Options.world_gen);
     @call(.auto, fptr, .{self});
 }
 

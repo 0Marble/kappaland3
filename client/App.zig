@@ -7,11 +7,12 @@ const gl = @import("gl");
 const zm = @import("zm");
 pub const Keys = @import("Keys.zig");
 const EventManager = @import("libmine").EventManager;
-const Build = @import("Build");
+const Options = @import("Build").Options;
 pub const DebugUi = @import("DebugUi.zig");
 pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
 pub const BlockManager = @import("BlockManager.zig");
+pub const Assets = @import("Assets.zig");
 
 const logger = std.log.scoped(.app);
 
@@ -101,7 +102,7 @@ fn init_sdl() !void {
     try sdl_call(c.SDL_GL_SetAttribute(
         c.SDL_GL_CONTEXT_FLAGS,
         c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG |
-            if (Build.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
+            if (Options.gl_debug) c.SDL_GL_CONTEXT_DEBUG_FLAG else 0,
     ));
     logger.info("Set OpenGL attributes", .{});
 
@@ -127,7 +128,7 @@ fn init_gl() !void {
     try gl_call(gl.ClipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE));
     try gl_call(gl.DepthFunc(gl.GREATER));
 
-    if (Build.gl_debug) {
+    if (Options.gl_debug) {
         var flags: u32 = 0;
         try gl_call(gl.GetIntegerv(gl.CONTEXT_FLAGS, @ptrCast(&flags)));
         if (flags & gl.CONTEXT_FLAG_DEBUG_BIT == 0) {

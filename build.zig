@@ -81,10 +81,33 @@ fn build_imgui(
     return install.artifact;
 }
 
-fn artifact_options(b: *std.Build, comptime opts: anytype) *std.Build.Step.Options {
+fn read_asset(b: *std.Build, path: [:0]const u8) !struct { [:0]const u8, [:0]const u8 } {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    var buf = std.mem.zeroes([256]u8);
+    var reader = file.reader(&buf);
+    const size = try reader.getSize();
+    const src = try b.allocator.allocSentinel(u8, size, 0);
+    try reader.interface.readSliceAll(src);
+
+    const path_no_ext = path[0 .. path.len - std.fs.path.extension(path).len];
+    var it = try std.fs.path.componentIterator(path_no_ext);
+    var name = std.ArrayList(u8).empty;
+    defer name.deinit(b.allocator);
+    var w = name.writer(b.allocator);
+    while (it.next()) |sub| try w.print(".{s}", .{sub.name});
+
+    return .{ try b.allocator.dupeZ(u8, name.items), src };
+}
+
+fn builtins(b: *std.Build) *std.Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("wrapper/build.zig"),
+    });
+
     const opts_map = b.addOptions();
 
-    inline for (opts) |o| {
+    inline for (@import("build/Options.zon")) |o| {
         const t = switch (o.type) {
             .bool => bool,
             .usize => usize,
@@ -94,7 +117,20 @@ fn artifact_options(b: *std.Build, comptime opts: anytype) *std.Build.Step.Optio
         opts_map.addOption(t, o.name, b.option(t, o.name, o.desc) orelse o.default);
     }
 
-    return opts_map;
+    mod.addImport("Options", opts_map.createModule());
+
+    const assets = b.addOptions();
+    inline for (@import("build/BuiltinAssets.zon")) |path| {
+        if (read_asset(b, path)) |ok| {
+            const name, const src = ok;
+            assets.addOption([:0]const u8, name, src);
+        } else |err| {
+            std.log.err("Could not find builtin asset '{s}': {}", .{ path, err });
+        }
+    }
+    mod.addImport("Assets", assets.createModule());
+
+    return mod;
 }
 
 fn build_client(
@@ -220,17 +256,23 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const options = artifact_options(b, @import("./Build.zon"));
+    const build_mod = builtins(b);
+    b.installDirectory(.{
+        .source_dir = b.path("assets/"),
+        .install_dir = .bin,
+        .install_subdir = "assets/",
+    });
 
     const libmine = build_libmine(b, target, optimize);
     const client = build_client(b, target, optimize);
     const server = build_server(b, target, optimize);
+    client.addImport("Build", build_mod);
 
     const test_step = b.step("test", "run all tests");
     const llvm = b.option(bool, "llvm", "Use llvm") orelse false;
 
     inline for (.{ server, client, libmine }) |mod| {
-        mod.addOptions("Build", options);
+        // mod.addImport("Build", build_mod);
 
         const test_artifact = b.addTest(.{ .root_module = mod });
         test_artifact.use_llvm = llvm;

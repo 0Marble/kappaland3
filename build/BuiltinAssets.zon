@@ -1,0 +1,7 @@
+.{
+    "assets/SettingsMenu.zon",
+    "assets/blocks/main/basic.zon",
+    "assets/blocks/main/air.zon",
+    "assets/textures/main/missing.png",
+    "assets/models/blocks/main/default.zon",
+}

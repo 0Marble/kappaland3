@@ -2,7 +2,7 @@ const std = @import("std");
 const App = @import("App.zig");
 const TextureAtlas = @import("TextureAtlas.zig");
 const Block = @import("Block.zig");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 const util = @import("util.zig");
 
 const logger = std.log.scoped(.block_manager);
@@ -28,7 +28,7 @@ pub fn init() !BlockManager {
     logger.info("loading blocks", .{});
     const textures_path = try std.fs.path.join(
         App.frame_alloc(),
-        &.{ "assets", Build.textures_dir, "blocks" },
+        &.{ "assets", Options.textures_dir, "blocks" },
     );
     logger.info("scanning block textures in {s}", .{textures_path});
 
@@ -60,7 +60,7 @@ pub fn init() !BlockManager {
 
     const blocks_path = try std.fs.path.join(
         App.frame_alloc(),
-        &.{ "assets", Build.blocks_dir },
+        &.{ "assets", Options.blocks_dir },
     );
     logger.info("scanning blocks in {s}", .{blocks_path});
     scanner.scan(blocks_path, ParsedBlock.parse_and_store);
@@ -68,7 +68,7 @@ pub fn init() !BlockManager {
 
     const models_path = try std.fs.path.join(
         App.frame_alloc(),
-        &.{ "assets", Build.models_dir, "blocks" },
+        &.{ "assets", Options.models_dir, "blocks" },
     );
     logger.info("scanning block models in {s}", .{models_path});
     scanner.scan(models_path, ParsedModel.parse_and_store);

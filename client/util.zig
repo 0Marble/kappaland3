@@ -1,7 +1,7 @@
 const c = @import("c.zig").c;
 const gl = @import("gl");
 const std = @import("std");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 
 pub const MemoryUsage = struct {
     bytes: usize,
@@ -67,7 +67,7 @@ fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
 
 pub const GlError = error{GlError};
 pub fn gl_call(res: anytype) GlError!@TypeOf(res) {
-    if (!Build.gl_check_errors) {
+    if (!Options.gl_check_errors) {
         return res;
     }
     var ok = true;

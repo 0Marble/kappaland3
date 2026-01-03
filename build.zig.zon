@@ -1,7 +1,7 @@
 .{
-    .name = .vkmine,
+    .name = .kappaland,
     .version = "0.0.0",
-    .fingerprint = 0xcab705ac65613b2d, // Changing this has security and trust implications.
+    .fingerprint = 0xee222221a9a22358, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .zigglgen = .{
@@ -24,6 +24,10 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "src",
+        "client",
+        "server",
+        "lib",
+        "Build.zon",
+        "assets",
     },
 }

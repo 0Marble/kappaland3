@@ -1,6 +1,6 @@
 const std = @import("std");
 const App = @import("App.zig");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const EventManager = @import("libmine").EventManager;
@@ -60,7 +60,7 @@ fn set_value(self: *Settings, name: [:0]const u8, val: Node) OOM!void {
 
 const LoadError = error{ ParseZon, ZonSchemaError } || std.fs.File.ReadError || OOM || std.fs.File.OpenError;
 pub fn load(self: *Settings) LoadError!void {
-    var file = try std.fs.cwd().openFile(Build.settings_file, .{});
+    var file = try std.fs.cwd().openFile(Options.settings_file, .{});
     defer file.close();
 
     const len = (try file.stat()).size;
@@ -88,7 +88,7 @@ pub fn load(self: *Settings) LoadError!void {
                 const tok = this.ast.nodeMainToken(ast_node);
                 const loc = this.ast.tokenLocation(0, tok);
                 std.log.warn("Settings file invalid, expected an array_literal: {s}:{d}:{d}", .{
-                    Build.settings_file,
+                    Options.settings_file,
                     loc.line,
                     loc.column,
                 });
@@ -141,14 +141,14 @@ fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) error{ZonSchemaError
                 if (note.token.unwrap()) |tok| {
                     const loc = ast.tokenLocation(note.node_or_offset, tok);
                     std.log.warn("{s}:{d}:{d}: {s}", .{
-                        Build.settings_file,
+                        Options.settings_file,
                         loc.line,
                         loc.column,
                         note.msg.get(zoir),
                     });
                 } else {
                     std.log.warn("{s}: {s}", .{
-                        Build.settings_file,
+                        Options.settings_file,
                         note.msg.get(zoir),
                     });
                 }
@@ -179,7 +179,7 @@ pub fn save(self: *Settings) SaveError!void {
         }
     };
 
-    var file = try std.fs.cwd().createFile(Build.settings_file, .{});
+    var file = try std.fs.cwd().createFile(Options.settings_file, .{});
     defer file.close();
 
     var buf = std.mem.zeroes([256]u8);

@@ -1,12 +1,12 @@
 const std = @import("std");
 const c = @import("c.zig").c;
 const App = @import("App.zig");
-const Build = @import("Build");
+const Options = @import("Build").Options;
 
 const OOM = std.mem.Allocator.Error;
 
 const ContentsCallback = struct {
-    src: if (Build.ui_store_src) std.builtin.SourceLocation else void,
+    src: if (Options.ui_store_src) std.builtin.SourceLocation else void,
     data: *anyopaque,
     callback: *const fn (*anyopaque) anyerror!void,
 
@@ -61,7 +61,7 @@ pub fn add_to_frame(
     try entry.value_ptr.append(App.frame_alloc(), .{
         .data = @ptrCast(ctx),
         .callback = @ptrCast(contents),
-        .src = if (Build.ui_store_src) src else {},
+        .src = if (Options.ui_store_src) src else {},
     });
 }
 
@@ -85,7 +85,7 @@ pub fn draw(self: *DebugUi) void {
             cb.do() catch |err| {
                 const err_str = @errorName(err);
                 const red: c.ImVec4 = .{ .x = 1, .y = 0, .z = 0, .w = 1 };
-                if (Build.ui_store_src) {
+                if (Options.ui_store_src) {
                     c.igTextColored(
                         red,
                         "[%s:%d:%d] Error: '%s'",
