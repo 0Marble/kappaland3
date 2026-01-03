@@ -14,8 +14,12 @@ models_dedup: std.AutoArrayHashMapUnmanaged(Block.Model, void),
 arena: std.heap.ArenaAllocator,
 invalid_block: Info,
 
-cache: std.enums.EnumFieldStruct(CachedBlocks, Block, null) = undefined,
-const CachedBlocks = enum { air, stone, dirt, grass };
+cache: struct {
+    air: Block,
+    stone: Block,
+    dirt: Block,
+    grass: Block,
+} = undefined,
 
 const BlockManager = @This();
 const OOM = std.mem.Allocator.Error;
@@ -37,12 +41,18 @@ pub fn init() !BlockManager {
         .invalid_block = undefined,
     };
     try self.models_dedup.put(App.gpa(), .{}, {});
+
+    const invalid_model_arr = try self.arena.allocator().alloc(usize, 1);
+    invalid_model_arr[0] = 0;
+    const invalid_tex_arr = try self.arena.allocator().alloc(usize, 1);
+    invalid_tex_arr[0] = self.atlas.get_missing();
+
     self.invalid_block = .{
         .name = "invalid",
         .casts_ao = false,
         .solid = .initFull(true),
-        .model = .initFull(&.{0}),
-        .textures = .initFull(&.{self.atlas.get_missing()}),
+        .model = .initFull(invalid_model_arr),
+        .textures = .initFull(invalid_tex_arr),
     };
 
     var scanner = Builder{ .arena = .init(App.gpa()) };
@@ -72,10 +82,10 @@ pub fn init() !BlockManager {
         logger.warn("loading blocks ok!", .{});
     }
 
-    inline for (comptime std.enums.values(CachedBlocks)) |cached| {
-        const name = std.fmt.comptimePrint(".blocks.main.{s}", .{@tagName(cached)});
-        @field(self.cache, @tagName(cached)) = self.get_block_by_name(name);
-    }
+    self.cache.air = self.get_block_by_name(".blocks.main.air");
+    self.cache.stone = self.get_block_by_name(".blocks.main.stone:block");
+    self.cache.dirt = self.get_block_by_name(".blocks.main.dirt");
+    self.cache.grass = self.get_block_by_name(".blocks.main.grass");
 
     return self;
 }
@@ -125,6 +135,7 @@ const Builder = struct {
 
     blocks: std.StringArrayHashMapUnmanaged(ParsedBlock) = .empty,
     realized: std.StringArrayHashMapUnmanaged(ParsedBlock) = .empty,
+    with_states: std.StringArrayHashMapUnmanaged(void) = .empty,
     models: std.StringArrayHashMapUnmanaged(ParsedModel) = .empty,
 
     fn deinit(self: *Builder) void {
@@ -132,6 +143,7 @@ const Builder = struct {
         self.blocks.deinit(App.gpa());
         self.models.deinit(App.gpa());
         self.realized.deinit(App.gpa());
+        self.with_states.deinit(App.gpa());
         self.arena.deinit();
     }
 
@@ -268,6 +280,7 @@ const Builder = struct {
     }
 
     fn register_block(self: *Builder, block: ParsedBlock, manager: *BlockManager) !void {
+        if (self.with_states.contains(block.name)) return;
         errdefer {
             logger.err("while registering {s}", .{block.name});
         }
@@ -322,7 +335,7 @@ const Builder = struct {
         }
 
         try manager.blocks.put(App.gpa(), info.name, info);
-        logger.info("registered block {s}", .{info.name});
+        logger.info("registered block {s}@{d}", .{ info.name, manager.blocks.count() - 1 });
     }
 
     const Error = OOM || error{ MissingData, TypeError, ValueTypeMismatch } || ParsedBlock.Error;
@@ -337,7 +350,7 @@ const Builder = struct {
                 return error.TypeError;
             }
             const base_name = base_name_val.str;
-            const base_unrealized = self.blocks.get(base_name) orelse {
+            const base_unrealized = self.blocks.get(base_name) orelse self.realized.get(base_name) orelse {
                 logger.err("{s}: missing data for base block '{s}'", .{ name, base_name });
                 return error.MissingData;
             };
@@ -380,6 +393,7 @@ const Builder = struct {
             }
 
             try block.map.put(gpa, kv.key, kv.value);
+            try self.with_states.put(App.gpa(), block.name, {});
         }
     }
 };

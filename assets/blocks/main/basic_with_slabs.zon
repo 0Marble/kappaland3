@@ -1,9 +1,11 @@
 .{
     .derives = ".blocks.main.basic",
     .states = .{
-        .slab_bot = .{
+        .block = .{},
+        .slab = .{
             .faces = .{
-                .side = ".blocks.main.bot_slab_side",
+                .bot_side = ".blocks.main.bot_slab_side",
+                .top_side = ".blocks.main.top_slab_side",
                 .bot = ".blocks.main.default",
                 .top = ".blocks.main.bot_slab_top",
             },
@@ -13,43 +15,102 @@
                 .right = false,
                 .left = false,
                 .top = false,
-                .bot = true,
+                .bot = false,
             },
-            .model = .{
-                .front = .{ .side, .tex },
-                .back = .{ .side, .tex },
-                .right = .{ .side, .tex },
-                .left = .{ .side, .tex },
-                .top = .{ .top, .tex },
-                .bot = .{ .bot, .tex },
+            .casts_ao = false,
+            .states = .{
+                .bot = .{
+                    .solid = .{ .bot = true },
+                    .model = .{
+                        .front = .{ .bot_side, .tex },
+                        .back = .{ .bot_side, .tex },
+                        .right = .{ .bot_side, .tex },
+                        .left = .{ .bot_side, .tex },
+                        .top = .{ .top, .tex },
+                        .bot = .{ .bot, .tex },
+                    },
+                },
+                .top = .{
+                    .solid = .{ .top = true },
+                    .model = .{
+                        .front = .{ .top_side, .tex },
+                        .back = .{ .top_side, .tex },
+                        .right = .{ .top_side, .tex },
+                        .left = .{ .top_side, .tex },
+                        .top = .{ .bot, .tex },
+                        .bot = .{ .top, .tex },
+                    },
+                },
             },
         },
-        .stair_left = .{
+        .stairs = .{
             .faces = .{
                 .bot = ".blocks.main.default",
-                .left = ".blocks.main.default",
+                .full = ".blocks.main.default",
                 .@"1" = ".blocks.main.stair.1",
                 .@"2" = ".blocks.main.stair.2",
                 .@"3" = ".blocks.main.stair.3",
                 .@"4" = ".blocks.main.stair.4",
                 .@"5" = ".blocks.main.stair.5",
                 .@"6" = ".blocks.main.stair.6",
+                .@"7" = ".blocks.main.stair.7",
+                .@"8" = ".blocks.main.stair.8",
+                .@"9" = ".blocks.main.stair.9",
+                .@"10" = ".blocks.main.stair.10",
             },
             .solid = .{
                 .front = false,
                 .back = false,
                 .right = false,
-                .left = true,
+                .left = false,
                 .top = false,
                 .bot = true,
             },
-            .model = .{
-                .front = .{ .@"1", .tex, .@"5", .tex },
-                .back = .{ .@"1", .tex, .@"6", .tex },
-                .right = .{ .@"1", .tex, .@"4", .tex },
-                .left = .{ .left, .tex },
-                .top = .{ .@"3", .tex, .@"2", .tex },
-                .bot = .{ .bot, .tex },
+            .states = .{
+                .left = .{
+                    .solid = .{ .left = true },
+                    .model = .{
+                        .front = .{ .@"1", .tex, .@"5", .tex },
+                        .back = .{ .@"1", .tex, .@"6", .tex },
+                        .right = .{ .@"1", .tex, .@"4", .tex },
+                        .left = .{ .full, .tex },
+                        .top = .{ .@"3", .tex, .@"2", .tex },
+                        .bot = .{ .bot, .tex },
+                    },
+                },
+                .right = .{
+                    .solid = .{ .right = true },
+                    .model = .{
+                        .front = .{ .@"1", .tex, .@"6", .tex },
+                        .back = .{ .@"1", .tex, .@"5", .tex },
+                        .right = .{ .full, .tex },
+                        .left = .{ .@"1", .tex, .@"4", .tex },
+                        .top = .{ .@"7", .tex, .@"8", .tex },
+                        .bot = .{ .bot, .tex },
+                    },
+                },
+                .front = .{
+                    .solid = .{ .front = true },
+                    .model = .{
+                        .front = .{ .full, .tex },
+                        .back = .{ .@"1", .tex, .@"4", .tex },
+                        .right = .{ .@"1", .tex, .@"5", .tex },
+                        .left = .{ .@"1", .tex, .@"6", .tex },
+                        .top = .{ .@"1", .tex, .@"4", .tex },
+                        .bot = .{ .bot, .tex },
+                    },
+                },
+                .back = .{
+                    .solid = .{ .back = true },
+                    .model = .{
+                        .front = .{ .@"1", .tex, .@"4", .tex },
+                        .back = .{ .full, .tex },
+                        .right = .{ .@"1", .tex, .@"6", .tex },
+                        .left = .{ .@"1", .tex, .@"5", .tex },
+                        .top = .{ .@"9", .tex, .@"10", .tex },
+                        .bot = .{ .bot, .tex },
+                    },
+                },
             },
         },
     },
