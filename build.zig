@@ -129,24 +129,17 @@ fn build_client(
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
     client.root_module.addImport("libmine", libmine);
-    client.root_module.addImport("HelloScene", b.createModule(.{
-        .root_source_file = b.path("assets/HelloScene.zon"),
-    }));
     client.root_module.addImport("SettingsMenu", b.createModule(.{
         .root_source_file = b.path("assets/SettingsMenu.zon"),
     }));
     client.root_module.linkLibrary(imgui);
     b.installArtifact(client);
 
-    const client_options = artifact_options(b, @import("assets/ClientOptions.zon"));
-    client.root_module.addOptions("ClientOptions", client_options);
-
     const wrapper: ?[]const u8 = b.option([]const u8, "command", "Wrapper command");
     const run_client = if (wrapper) |command| blk: {
         if (std.mem.eql(u8, command, "gdb")) {
             const cmd = b.addSystemCommand(&.{command});
             client.use_llvm = true;
-            client_options.addOption(bool, "in_gdb", true);
             cmd.addArg("--args");
             cmd.addFileArg(client.getEmittedBin());
             break :blk cmd;
@@ -192,9 +185,6 @@ fn build_libmine(
         .root_source_file = b.path("lib/root.zig"),
     });
 
-    const lib_options = artifact_options(b, @import("assets/LibMineOptions.zon"));
-    libmine.addOptions("Options", lib_options);
-
     return libmine;
 }
 
@@ -215,9 +205,6 @@ fn build_server(
     server.root_module.addImport("libmine", libmine);
     b.installArtifact(server);
 
-    const options = artifact_options(b, @import("assets/ServerOptions.zon"));
-    server.root_module.addOptions("Options", options);
-
     const run_server = b.addRunArtifact(server);
     const run_step = b.step("serve", "run the server");
     run_step.dependOn(b.getInstallStep());
@@ -233,6 +220,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const options = artifact_options(b, @import("./Build.zon"));
+
     const libmine = build_libmine(b, target, optimize);
     const client = build_client(b, target, optimize);
     const server = build_server(b, target, optimize);
@@ -241,6 +230,8 @@ pub fn build(b: *std.Build) void {
     const llvm = b.option(bool, "llvm", "Use llvm") orelse false;
 
     inline for (.{ server, client, libmine }) |mod| {
+        mod.addOptions("Build", options);
+
         const test_artifact = b.addTest(.{ .root_module = mod });
         test_artifact.use_llvm = llvm;
         const run_tests = b.addRunArtifact(test_artifact);

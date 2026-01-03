@@ -1,53 +1,7 @@
 const c = @import("c.zig").c;
 const gl = @import("gl");
 const std = @import("std");
-const Options = @import("ClientOptions");
-
-pub fn Xyz(comptime T: type) type {
-    return struct {
-        x: T = 0,
-        y: T = 0,
-        z: T = 0,
-
-        pub fn init(x: T, y: T, z: T) @This() {
-            return .{ .x = x, .y = y, .z = z };
-        }
-
-        pub fn add(self: @This(), other: @This()) @This() {
-            return .{ .x = self.x + other.x, .y = self.y + other.y, .z = self.z + other.z };
-        }
-        pub fn sub(self: @This(), other: @This()) @This() {
-            return .{ .x = self.x - other.x, .y = self.y - other.y, .z = self.z - other.z };
-        }
-        pub fn as_vec(self: @This()) @Vector(3, T) {
-            return .{ self.x, self.y, self.z };
-        }
-        pub fn neg(self: @This()) @This() {
-            return .init(-self.x, -self.y, -self.z);
-        }
-    };
-}
-
-pub fn Xy(comptime T: type) type {
-    return struct {
-        x: T = 0,
-        y: T = 0,
-
-        pub fn init(x: T, y: T) @This() {
-            return .{ .x = x, .y = y };
-        }
-
-        pub fn add(self: @This(), other: @This()) @This() {
-            return .{ .x = self.x + other.x, .y = self.y + other.y };
-        }
-        pub fn sub(self: @This(), other: @This()) @This() {
-            return .{ .x = self.x - other.x, .y = self.y - other.y };
-        }
-        pub fn as_vec(self: @This()) @Vector(2, T) {
-            return .{ self.x, self.y };
-        }
-    };
-}
+const Build = @import("Build");
 
 pub const MemoryUsage = struct {
     bytes: usize,
@@ -113,7 +67,7 @@ fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
 
 pub const GlError = error{GlError};
 pub fn gl_call(res: anytype) GlError!@TypeOf(res) {
-    if (!Options.gl_check_errors) {
+    if (!Build.gl_check_errors) {
         return res;
     }
     var ok = true;
