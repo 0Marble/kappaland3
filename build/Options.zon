@@ -43,6 +43,12 @@
     },
     .{
         .type = .str,
+        .name = "assets_dir",
+        .desc = "Directory that stores all textures within assets",
+        .default = "assets",
+    },
+    .{
+        .type = .str,
         .name = "textures_dir",
         .desc = "Directory that stores all textures within assets",
         .default = "textures",

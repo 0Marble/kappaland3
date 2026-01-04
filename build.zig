@@ -81,25 +81,19 @@ fn build_imgui(
     return install.artifact;
 }
 
-// fn read_asset(b: *std.Build, path: std.Build.LazyPath) ![:0]const u8 {
-// var file = try std.fs.cwd().openFile(path, .{});
-// defer file.close();
-// var buf = std.mem.zeroes([256]u8);
-// var reader = file.reader(&buf);
-// const size = try reader.getSize();
-// const src = try b.allocator.allocSentinel(u8, size, 0);
-// try reader.interface.readSliceAll(src);
-// return src;
-// }
-
-fn builtins(b: *std.Build) *std.Build.Module {
+fn generate_builtins(b: *std.Build) *std.Build.Module {
+    const builtins = b.addWriteFile("main.zig",
+        \\pub const Options = @import("Options");
+        \\pub const Assets = @import("Assets.zig");
+    );
     const mod = b.createModule(.{
-        .root_source_file = b.path("wrapper/build.zig"),
+        .root_source_file = builtins.getDirectory().path(b, "main.zig"),
     });
 
     const opts_map = b.addOptions();
     const opts = @import("build/Options.zon");
 
+    var assets_dir: ?[]const u8 = null;
     inline for (opts) |o| {
         const t = switch (o.type) {
             .bool => bool,
@@ -108,6 +102,7 @@ fn builtins(b: *std.Build) *std.Build.Module {
             else => @compileError("Unsupported option type " ++ @tagName(o.type)),
         };
         const val = b.option(t, o.name, o.desc) orelse o.default;
+        if (comptime std.mem.eql(u8, "assets_dir", o.name)) assets_dir = val;
         opts_map.addOption(t, o.name, val);
     }
 
@@ -124,16 +119,11 @@ fn builtins(b: *std.Build) *std.Build.Module {
         }
         break :blk src;
     };
-
-    const assets_mod_dir = b.addWriteFile("Assets.zig", assets_src);
+    _ = builtins.add("Assets.zig", assets_src);
 
     inline for (builtin_assets) |asset_path| {
-        _ = assets_mod_dir.addCopyFile(b.path("assets/").path(b, asset_path), asset_path);
+        _ = builtins.addCopyFile(b.path(assets_dir orelse "assets/").path(b, asset_path), asset_path);
     }
-    const assets = b.createModule(.{
-        .root_source_file = assets_mod_dir.getDirectory().path(b, "Assets.zig"),
-    });
-    mod.addImport("Assets", assets);
 
     return mod;
 }
@@ -261,7 +251,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const build_mod = builtins(b);
+    const build_mod = generate_builtins(b);
     b.installDirectory(.{
         .source_dir = b.path("assets/"),
         .install_dir = .bin,

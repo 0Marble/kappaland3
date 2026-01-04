@@ -1,4 +1,5 @@
 const std = @import("std");
+const Options = @import("Build").Options;
 
 const Assets = @import("Assets.zig");
 const logger = std.log.scoped(.assets);
@@ -48,7 +49,7 @@ pub fn get_src_by_name(self: *Assets, gpa: std.mem.Allocator, name: []const u8) 
 
     const path = self.names.get(name) orelse return error.MissingFile;
 
-    var dir = try std.fs.cwd().openDir("assets", .{});
+    var dir = try std.fs.cwd().openDir(Options.assets_dir, .{});
     defer dir.close();
     for (path[0 .. path.len - 1]) |s| {
         const next = try dir.openDir(s, .{});
