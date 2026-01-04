@@ -2,6 +2,5 @@
     "SettingsMenu.zon",
     "blocks/main/basic.zon",
     "blocks/main/air.zon",
-    "textures/missing.png",
     "models/blocks/main/default.zon",
 }

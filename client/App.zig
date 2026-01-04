@@ -61,7 +61,7 @@ pub fn init() !void {
     app.random = .init(69);
 
     try init_memory();
-    app.assets = try .init(App.gpa(), "assets");
+    app.assets = try .init(App.gpa());
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
     app.frame_data = .{ .start = std.time.timestamp() };
