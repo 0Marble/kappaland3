@@ -81,16 +81,16 @@ fn build_imgui(
     return install.artifact;
 }
 
-fn read_asset(b: *std.Build, path: [:0]const u8) ![:0]const u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    var buf = std.mem.zeroes([256]u8);
-    var reader = file.reader(&buf);
-    const size = try reader.getSize();
-    const src = try b.allocator.allocSentinel(u8, size, 0);
-    try reader.interface.readSliceAll(src);
-    return src;
-}
+// fn read_asset(b: *std.Build, path: std.Build.LazyPath) ![:0]const u8 {
+// var file = try std.fs.cwd().openFile(path, .{});
+// defer file.close();
+// var buf = std.mem.zeroes([256]u8);
+// var reader = file.reader(&buf);
+// const size = try reader.getSize();
+// const src = try b.allocator.allocSentinel(u8, size, 0);
+// try reader.interface.readSliceAll(src);
+// return src;
+// }
 
 fn builtins(b: *std.Build) *std.Build.Module {
     const mod = b.createModule(.{
@@ -113,15 +113,27 @@ fn builtins(b: *std.Build) *std.Build.Module {
 
     mod.addImport("Options", opts_map.createModule());
 
-    const assets = b.addOptions();
-    inline for (@import("build/BuiltinAssets.zon")) |path| {
-        if (read_asset(b, "assets/" ++ path)) |src| {
-            assets.addOption([:0]const u8, path, src);
-        } else |err| {
-            std.log.err("Could not find builtin asset '{s}': {}", .{ path, err });
+    const builtin_assets = @import("build/BuiltinAssets.zon");
+    const assets_src = comptime blk: {
+        var src: [:0]const u8 = "";
+        for (builtin_assets) |asset_path| {
+            src = src ++ std.fmt.comptimePrint(
+                "pub const @\"{s}\" = @embedFile(\"{s}\");\n",
+                .{ asset_path, asset_path },
+            );
         }
+        break :blk src;
+    };
+
+    const assets_mod_dir = b.addWriteFile("Assets.zig", assets_src);
+
+    inline for (builtin_assets) |asset_path| {
+        _ = assets_mod_dir.addCopyFile(b.path("assets/").path(b, asset_path), asset_path);
     }
-    mod.addImport("Assets", assets.createModule());
+    const assets = b.createModule(.{
+        .root_source_file = assets_mod_dir.getDirectory().path(b, "Assets.zig"),
+    });
+    mod.addImport("Assets", assets);
 
     return mod;
 }
