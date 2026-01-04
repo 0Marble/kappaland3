@@ -30,6 +30,7 @@ random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
 block_manager: BlockManager,
+assets: Assets,
 
 layers: std.ArrayList(Layer),
 
@@ -60,6 +61,7 @@ pub fn init() !void {
     app.random = .init(69);
 
     try init_memory();
+    app.assets = try .init(App.gpa(), "assets");
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
     app.frame_data = .{ .start = std.time.timestamp() };
@@ -176,6 +178,7 @@ pub fn deinit() void {
     app.events.deinit();
     app.keys_state.deinit();
     app.block_manager.deinit();
+    app.assets.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);

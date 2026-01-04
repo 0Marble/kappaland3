@@ -4,50 +4,59 @@ const Assets = @import("Assets.zig");
 const logger = std.log.scoped(.assets);
 const OOM = std.mem.Allocator.Error;
 
-paths: std.StaticStringMap([]const []const u8),
+names: std.StringArrayHashMapUnmanaged([]const []const u8),
+file_tree: PathTrie(void),
 builtins: std.StaticStringMap([:0]const u8),
 arena: std.heap.ArenaAllocator,
 
 pub fn init(gpa: std.mem.Allocator, root_dir: []const u8) !Assets {
     var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
     defer dir.close();
-    var temp = std.heap.ArenaAllocator.init(gpa);
-    defer temp.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa);
 
-    var scanner = Scanner{ .temp_gpa = temp.allocator(), .result_gpa = arena.allocator() };
-    try scanner.scan(dir);
+    var trie = try PathTrie(void).init(arena.allocator());
+    inline for (builtin[1]) |path| {
+        try trie.add(path, {});
+    }
+    try scan_dir(trie.visitor(), dir);
 
-    return Assets{
+    var self = Assets{
         .arena = arena,
-        .paths = try .init(scanner.kvs.items, arena.allocator()),
-        .builtins = .initComptime(builtin_kvs),
+        .file_tree = trie,
+        .builtins = .initComptime(builtin[0]),
+        .names = .empty,
     };
+    try trie.visitor().visit(on_visit, .{&self});
+
+    return self;
 }
 
-pub fn deinit(self: *Assets) !void {
+pub fn deinit(self: *Assets) void {
     self.arena.deinit();
 }
 
-pub fn get_src(self: *Assets, gpa: std.mem.Allocator, name: []const u8) !Source {
-    if (self.builtins.get(name)) |src| {
-        return Source{ .name = name, .src = src, .src_needs_free = false };
-    }
+pub const FileTreeVisitor = PathTrie(void).Visitor;
+pub fn visit_dir(self: *Assets, dir: []const u8, comptime fptr: anytype, args: anytype) !void {
+    var visitor: FileTreeVisitor = self.file_tree.visitor();
+    var it = try std.fs.path.componentIterator(dir);
+    while (it.next()) |sub| visitor = visitor.step(sub.name) orelse return error.NoSuchPath;
+    try visitor.visit(fptr, args);
+}
 
-    const path = self.paths.get(name) orelse {
-        return error.MissingAsset;
-    };
-    std.debug.assert(path.len > 0);
+pub fn get_src_by_name(self: *Assets, gpa: std.mem.Allocator, name: []const u8) !Source {
+    if (self.builtins.get(name)) |src| return Source{ .name = name, .src = src, .src_needs_free = false };
 
-    var dir = std.fs.cwd();
+    const path = self.names.get(name) orelse return error.MissingFile;
+
+    var dir = try std.fs.cwd().openDir("assets", .{});
     defer dir.close();
-    for (path[0 .. path.len - 1]) |sub| {
-        const next_dir = try dir.openDir(sub, .{});
+    for (path[0 .. path.len - 1]) |s| {
+        const next = try dir.openDir(s, .{});
         dir.close();
-        dir = next_dir;
+        dir = next;
     }
-
     const file_name = path[path.len - 1];
+
     var file = try dir.openFile(file_name, .{});
     defer file.close();
     var buf = std.mem.zeroes([256]u8);
@@ -57,15 +66,11 @@ pub fn get_src(self: *Assets, gpa: std.mem.Allocator, name: []const u8) !Source 
     errdefer gpa.free(src);
     try reader.interface.readSliceAll(src);
 
-    return Source{
-        .name = name,
-        .src = src,
-        .src_needs_free = true,
-    };
+    return Source{ .name = name, .src = src, .src_needs_free = true };
 }
 
-pub fn get_zon(self: *Assets, gpa: std.mem.Allocator, name: []const u8) !Zon {
-    var src = try self.get_src(gpa, name);
+pub fn get_zon_by_name(self: *Assets, gpa: std.mem.Allocator, name: []const u8) !Zon {
+    var src = try self.get_src_by_name(gpa, name);
     errdefer src.deinit(gpa);
     var diag = std.zon.parse.Diagnostics{};
     errdefer diag.deinit(gpa);
@@ -114,63 +119,183 @@ pub const Zon = struct {
     }
 };
 
-const Scanner = struct {
-    prefix: std.ArrayList([]const u8) = .empty,
-    kvs: std.ArrayList(struct { [:0]const u8, []const []const u8 }) = .empty,
-    temp_gpa: std.mem.Allocator,
-    result_gpa: std.mem.Allocator,
+fn get_name(gpa: std.mem.Allocator, paths: []const []const u8) ![:0]const u8 {
+    std.debug.assert(paths.len > 0);
+    const file_name = paths[paths.len - 1];
+    const ext = std.fs.path.extension(file_name);
+    const name = file_name[0 .. file_name.len - ext.len];
 
-    fn get_name(self: *Scanner, name: []const u8) ![:0]const u8 {
-        var buf = std.ArrayList(u8).empty;
-        defer buf.deinit(self.temp_gpa);
-        var w = buf.writer(self.temp_gpa);
+    var len: usize = 0;
+    for (paths) |s| len += s.len;
+    len -= ext.len;
+    len += paths.len; // for dots
 
-        for (self.prefix.items) |s| try w.print(".{s}", .{s});
-        try w.print(".{s}", .{name});
+    const buf = try gpa.allocSentinel(u8, len, 0);
+    var w = std.Io.Writer.fixed(buf);
+    for (paths[0 .. paths.len - 1]) |s| try w.print(".{s}", .{s});
+    try w.print(".{s}", .{name});
 
-        return self.result_gpa.dupeZ(u8, buf.items);
+    return buf;
+}
+
+fn on_visit(self: *Assets, visitor: PathTrie(void).Visitor) !void {
+    if (visitor.value() == null) return;
+    const path = try visitor.trace(self.arena.allocator());
+    const name = try get_name(self.arena.allocator(), path);
+    if (try self.names.fetchPut(self.arena.allocator(), name, path)) |_| {
+        logger.warn("duplicate asset with name '{s}'", .{name});
     }
+    logger.info("found asset {s}", .{name});
+}
 
-    fn get_path(self: *Scanner, file_name: []const u8) OOM![]const []const u8 {
-        const new_arr = try self.result_gpa.alloc([]const u8, self.prefix.items.len + 1);
-        for (self.prefix.items, 0..) |s, i| new_arr[i] = try self.result_gpa.dupe(u8, s);
-        new_arr[new_arr.len - 1] = try self.result_gpa.dupe(u8, file_name);
-        return new_arr;
-    }
+fn scan_dir(trie: PathTrie(void).Visitor, parent: std.fs.Dir) !void {
+    var it = parent.iterate();
+    while (try it.next()) |entry| switch (entry.kind) {
+        .directory => {
+            var dir = try parent.openDir(entry.name, .{ .iterate = true });
+            defer dir.close();
+            try scan_dir(try trie.step_add(entry.name), dir);
+        },
+        .file => {
+            const leaf = try trie.step_add(entry.name);
+            leaf.set_value({});
+        },
+        else => continue,
+    };
+}
 
-    fn scan(self: *Scanner, parent: std.fs.Dir) !void {
-        var it = parent.iterate();
-        while (try it.next()) |entry| switch (entry.kind) {
-            .directory => {
-                var dir = try parent.openDir(entry.name, .{ .iterate = true });
-                defer dir.close();
-                try self.prefix.append(self.temp_gpa, entry.name);
-                defer _ = self.prefix.pop();
-                try self.scan(dir);
-            },
-            .file => {
-                const ext = std.fs.path.extension(entry.name);
-                const name = entry.name[0 .. entry.name.len - ext.len];
-                try self.kvs.append(self.temp_gpa, .{
-                    try self.get_name(name),
-                    try self.get_path(entry.name),
-                });
-            },
-            else => continue,
-        };
-    }
-};
-
-const builtin_kvs = blk: {
-    const KVs = @import("Build").Assets;
-    const decl_names = @typeInfo(KVs).@"struct".decls;
+const builtin = blk: {
+    const List = @import("Build").Assets;
+    const names = @typeInfo(List).@"struct".decls;
     const KV = struct { [:0]const u8, [:0]const u8 };
-    var kvs = std.mem.zeroes([decl_names.len]KV);
+    var kvs = std.mem.zeroes([names.len]KV);
+    var paths = std.mem.zeroes([names.len][]const []const u8);
 
-    for (decl_names, 0..) |name, i| {
-        const val: [:0]const u8 = @field(KVs, name.name);
-        kvs[i] = .{ name.name, val };
+    for (names, 0..) |path, i| {
+        const val: [:0]const u8 = @field(List, path.name);
+        const ext = std.fs.path.extension(path.name);
+        if (std.fs.path.componentIterator(path.name)) |iter| {
+            var it = iter;
+            var name: []const u8 = "";
+            var arr: []const []const u8 = &.{};
+            while (it.next()) |s| {
+                arr = arr ++ .{s.name};
+                name = &std.fmt.comptimePrint("{s}.{s}", .{ name, s.name }).*;
+            }
+            name = name[0 .. name.len - ext.len];
+            paths[i] = arr;
+            kvs[i] = .{ @ptrCast(name ++ .{0}), val };
+        } else |err| {
+            std.debug.panic("Error while creating iterator for {s}: {}", .{ path.name, err });
+        }
     }
 
-    break :blk kvs;
+    break :blk .{ kvs, paths };
 };
+
+fn PathTrie(comptime T: type) type {
+    return struct {
+        const Node = struct {
+            next: std.StringArrayHashMapUnmanaged(*Node) = .empty,
+            value: ?T = null,
+            parent: ?*Node = null,
+            last_key: ?[]const u8 = null,
+        };
+
+        root: *Node,
+        pool: std.heap.MemoryPool(Node),
+        gpa: std.mem.Allocator,
+
+        const Self = @This();
+
+        pub fn init(gpa: std.mem.Allocator) !Self {
+            var self = Self{
+                .pool = .init(gpa),
+                .root = undefined,
+                .gpa = gpa,
+            };
+            self.root = try self.new_node();
+            return self;
+        }
+
+        pub fn add(self: *Self, path: []const []const u8, val: T) !void {
+            var cur = self.visitor();
+            for (path) |s| cur = try cur.step_add(s);
+            cur.set_value(val);
+        }
+
+        pub fn get(self: *const Self, path: []const []const u8) ?T {
+            var cur = self.visitor();
+            for (path) |s| cur = cur.step(s) orelse return null;
+            return cur.value();
+        }
+
+        pub fn visitor(self: *Self) Visitor {
+            return Visitor{ .root = self.root, .trie = self };
+        }
+
+        fn new_node(self: *Self) !*Node {
+            const node = try self.pool.create();
+            node.* = Node{};
+            return node;
+        }
+
+        pub const Visitor = struct {
+            root: *Node,
+            trie: *Self,
+
+            pub fn step(self: Visitor, dir: []const u8) ?Visitor {
+                const next = self.root.next.get(dir) orelse return null;
+                return .{ .root = next, .trie = self.trie };
+            }
+
+            pub fn step_add(self: Visitor, dir: []const u8) !Visitor {
+                const next = self.root.next.get(dir) orelse blk: {
+                    const n: *Node = try self.trie.new_node();
+                    try self.root.next.put(self.trie.gpa, dir, n);
+                    n.parent = self.root;
+                    n.last_key = try self.trie.gpa.dupeZ(u8, dir);
+                    break :blk n;
+                };
+                return .{ .root = next, .trie = self.trie };
+            }
+
+            pub fn value(self: Visitor) ?*T {
+                if (self.root.value) |*x| return x;
+                return null;
+            }
+
+            pub fn set_value(self: Visitor, val: T) void {
+                self.root.value = val;
+            }
+
+            pub fn trace(self: Visitor, gpa: std.mem.Allocator) ![]const []const u8 {
+                var cnt: usize = 0;
+                var cur = self.root;
+                while (true) : (cnt += 1) {
+                    cur = cur.parent orelse break;
+                }
+                if (cnt == 0) return &.{};
+
+                const buf = try gpa.alloc([]const u8, cnt);
+                var i: usize = cnt;
+                cur = self.root;
+                while (cur.parent) |next| {
+                    i -= 1;
+                    buf[i] = cur.last_key.?;
+                    cur = next;
+                }
+                std.debug.assert(i == 0);
+                return buf;
+            }
+
+            pub fn visit(self: Visitor, comptime fptr: anytype, args: anytype) !void {
+                try @call(.auto, fptr, args ++ .{self});
+                for (self.root.next.values()) |next| {
+                    const sub = Visitor{ .root = next, .trie = self.trie };
+                    try sub.visit(fptr, args);
+                }
+            }
+        };
+    };
+}

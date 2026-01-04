@@ -44,19 +44,19 @@
     .{
         .type = .str,
         .name = "textures_dir",
-        .desc = "Directory that stores all textures",
+        .desc = "Directory that stores all textures within assets",
         .default = "textures",
     },
     .{
         .type = .str,
         .name = "blocks_dir",
-        .desc = "Directory that stores all block info",
+        .desc = "Directory that stores all block info within assets",
         .default = "blocks",
     },
     .{
         .type = .str,
         .name = "models_dir",
-        .desc = "Directory that stores all model info",
+        .desc = "Directory that stores all model info within assets",
         .default = "models",
     },
 }
