@@ -285,7 +285,7 @@ pub const Zon = struct {
             }
         }
 
-        return .{ .ast = ast, .zoir = .zoir, .src = src };
+        return Zon{ .ast = ast, .zoir = zoir, .src = src };
     }
 
     pub fn deinit(self: Zon, gpa: std.mem.Allocator) void {
@@ -295,7 +295,7 @@ pub const Zon = struct {
     }
 
     pub fn parse(self: Zon, comptime T: type, gpa: std.mem.Allocator) !T {
-        var diag = std.zon.parse.Diagnostics{ .ast = self.ast, .zoir = self.zoir };
+        var diag = std.zon.parse.Diagnostics{};
         errdefer |err| {
             logger.warn("{s}: {}\n{f}", .{ self.src.path, err, diag });
         }

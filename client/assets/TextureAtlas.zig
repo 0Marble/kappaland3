@@ -18,7 +18,7 @@ img_height: usize,
 const TextureAtlas = @This();
 pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
     const prefix: []const u8 = if (dir.parent) |p| p.path else "";
-    logger.info("building atlas {s}", .{dir.path});
+    logger.info("loading atlas {s}", .{dir.path});
 
     var ok = true;
 

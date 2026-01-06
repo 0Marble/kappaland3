@@ -2,6 +2,7 @@ const std = @import("std");
 const Options = @import("Build").Options;
 const VFS = @import("assets/VFS.zig");
 const TextureAtlas = @import("assets/TextureAtlas.zig");
+const Models = @import("assets/Models.zig");
 
 const Assets = @import("Assets.zig");
 const logger = std.log.scoped(.assets);
@@ -11,18 +12,19 @@ vfs: *VFS,
 arena: std.heap.ArenaAllocator,
 
 blocks_atlas: TextureAtlas,
+models: Models,
 
 pub fn init(gpa: std.mem.Allocator) !Assets {
     logger.info("loading assets...", .{});
-    var self = Assets{
-        .vfs = try VFS.init(gpa, Options.assets_dir, &builtins),
-        .arena = .init(gpa),
-        .blocks_atlas = undefined,
-    };
-
+    const vfs = try VFS.init(gpa, Options.assets_dir, &builtins);
     const blocks_atlas_dir = Options.textures_dir ++ "/blocks";
-    logger.info("loading block atlas from {s}", .{blocks_atlas_dir});
-    self.blocks_atlas = try .init(gpa, try self.vfs.root().get_dir(blocks_atlas_dir));
+
+    const self = Assets{
+        .vfs = vfs,
+        .blocks_atlas = try .init(gpa, try vfs.root().get_dir(blocks_atlas_dir)),
+        .models = try .init(gpa, try vfs.root().get_dir(Options.models_dir)),
+        .arena = .init(gpa),
+    };
 
     logger.info("loading assets complete!", .{});
     return self;
@@ -31,6 +33,7 @@ pub fn init(gpa: std.mem.Allocator) !Assets {
 pub fn deinit(self: *Assets) void {
     self.vfs.deinit();
     self.blocks_atlas.deinit();
+    self.models.deinit();
     self.arena.deinit();
 }
 
