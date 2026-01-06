@@ -55,12 +55,15 @@ fn on_attatch(self: *Game) !void {
     self.camera.init(std.math.pi * 0.5, 1.0) catch |err| {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
+    errdefer self.camera.deinit();
     logger.info("{*}: initializing renderer", .{self});
     try self.renderer.init();
+    errdefer self.renderer.deinit();
     logger.info("{*}: initializing ChunkManager", .{self});
     self.chunk_manager = try ChunkManager.init(.{
         .thread_cnt = 4,
     });
+    errdefer self.chunk_manager.deinit();
     logger.info("{*}: Attatched", .{self});
 }
 

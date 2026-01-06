@@ -279,10 +279,10 @@ pub const Zon = struct {
             const stderr = std.debug.lockStderrWriter(&buf);
             defer std.debug.unlockStderrWriter();
             for (ast.errors) |err| {
-                ast.renderError(err, stderr) catch |print_err| {
-                    logger.err("cant print to stderr!! {}", .{print_err});
-                };
+                ast.renderError(err, stderr) catch unreachable;
+                try stderr.print("\n", .{});
             }
+            return error.ParseZon;
         }
 
         return Zon{ .ast = ast, .zoir = zoir, .src = src };
@@ -300,5 +300,21 @@ pub const Zon = struct {
             logger.warn("{s}: {}\n{f}", .{ self.src.path, err, diag });
         }
         return try std.zon.parse.fromZoir(T, gpa, self.ast, self.zoir, &diag, .{});
+    }
+
+    pub fn parse_node(self: Zon, comptime T: type, gpa: std.mem.Allocator, node: std.zig.Zoir.Node.Index) !T {
+        var diag = std.zon.parse.Diagnostics{};
+        errdefer |err| {
+            logger.warn("{s}: {}\n{f}", .{ self.src.path, err, diag });
+        }
+        return try std.zon.parse.fromZoirNode(
+            T,
+            gpa,
+            self.ast,
+            self.zoir,
+            node,
+            &diag,
+            .{ .ignore_unknown_fields = true },
+        );
     }
 };

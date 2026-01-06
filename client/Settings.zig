@@ -4,195 +4,80 @@ const Options = @import("Build").Options;
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const EventManager = @import("libmine").EventManager;
+const VFS = @import("assets/VFS.zig");
 
-map: Map,
 events: std.StringHashMapUnmanaged(EventManager.Event),
 save_on_exit: bool,
-
-const Map = std.StringArrayHashMapUnmanaged(Node);
+map: std.StringArrayHashMapUnmanaged(Node),
+arena: std.heap.ArenaAllocator,
 
 const OOM = std.mem.Allocator.Error;
+const logger = std.log.scoped(.settings);
 
 const Settings = @This();
 pub fn init() !Settings {
     var self: Settings = .{
         .events = .empty,
-        .map = .empty,
         .save_on_exit = true,
+        .map = .empty,
+        .arena = .init(App.gpa()),
     };
-    try self.load_template();
+    try self.load_templates();
     self.load() catch |err| {
-        std.log.warn("Could not load settings file: {}", .{err});
+        logger.warn("Could not load settings file: {}", .{err});
     };
 
     return self;
 }
 
-fn load_template(self: *Settings) OOM!void {
-    const Visitor = struct {
-        fn add_node_callback(this: *Settings, name: [:0]const u8, node: Node) OOM!void {
-            try this.set_value(name, node);
-        }
-    };
-    try Scanner(*Settings, OOM).scan(self, &Visitor.add_node_callback);
-}
-
 pub fn deinit(self: *Settings) void {
-    self.save() catch |err| {
-        std.log.warn("Couldn't save settings: {}", .{err});
-    };
+    self.save() catch |err| logger.warn("Couldn't save settings: {}", .{err});
+    self.arena.deinit();
 }
 
-fn set_value(self: *Settings, name: [:0]const u8, val: Node) OOM!void {
-    if (self.events.get(name)) |evt| {
-        switch (std.meta.activeTag(val)) {
-            .section => {},
+pub fn load(self: *Settings) !void {
+    var file = try std.fs.cwd().openFile(Options.settings_file, .{});
+    defer file.close();
+    var buf = std.mem.zeroes([256]u8);
+    var reader = file.reader(&buf);
+    const size = try reader.getSize();
+    const src = try App.frame_alloc().allocSentinel(u8, size, 0);
+    try reader.interface.readSliceAll(src);
+
+    const zon = try VFS.Zon.from_src(.{ .src = src, .path = Options.settings_file }, App.frame_alloc());
+    const root = std.zig.Zoir.Node.Index.root.get(zon.zoir).struct_literal;
+    for (root.names, 0..) |key, idx| {
+        const name = key.get(zon.zoir);
+        var orig = self.map.get(name) orelse continue;
+        switch (@as(Node.Tag, orig)) {
+            .section => continue,
             inline else => |tag| {
-                App.event_manager().emit(evt, @field(val, @tagName(tag)).value) catch |err| {
-                    std.log.warn("Settings.set_value: Couldn't emit event: {}", .{err});
-                };
+                const T = @FieldType(std.meta.TagPayload(Node, tag), "value");
+                const val = try zon.parse_node(T, self.arena.allocator(), root.vals.at(@intCast(idx)));
+                @field(orig, @tagName(tag)).value = val;
+                try self.set_value(name, orig);
             },
         }
     }
-
-    try self.map.put(App.static_alloc(), name, val);
 }
 
-const LoadError = error{ ParseZon, ZonSchemaError } || std.fs.File.ReadError || OOM || std.fs.File.OpenError;
-pub fn load(self: *Settings) LoadError!void {
-    var file = try std.fs.cwd().openFile(Options.settings_file, .{});
-    defer file.close();
-
-    const len = (try file.stat()).size;
-    const source = try App.frame_alloc().allocSentinel(u8, len, 0);
-    _ = try file.read(source);
-
-    const ast = try std.zig.Ast.parse(App.frame_alloc(), source, .zon);
-    const zoir = try std.zig.ZonGen.generate(App.frame_alloc(), ast, .{});
-    try report_zoir_errors(ast, zoir);
-
-    const Visitor = struct {
-        settings: *Settings,
-        zoir: Zoir,
-        ast: Ast,
-
-        const Zoir = std.zig.Zoir;
-        const ZonIndex = std.zig.Zoir.Node.Index;
-        const Ast = std.zig.Ast;
-        const Visitor = @This();
-
-        fn callback(this: *Visitor, name: [:0]const u8, node: Node) LoadError!void {
-            const root = ZonIndex.root.get(this.zoir);
-            if (root != .struct_literal) {
-                const ast_node = ZonIndex.root.getAstNode(this.zoir);
-                const tok = this.ast.nodeMainToken(ast_node);
-                const loc = this.ast.tokenLocation(0, tok);
-                std.log.warn("Settings file invalid, expected an array_literal: {s}:{d}:{d}", .{
-                    Options.settings_file,
-                    loc.line,
-                    loc.column,
-                });
-            }
-
-            for (root.struct_literal.names, 0..) |name_ref, i| {
-                if (std.mem.eql(u8, name, name_ref.get(this.zoir))) {
-                    const value_node = root.struct_literal.vals.at(@intCast(i));
-
-                    switch (std.meta.activeTag(node)) {
-                        .section => unreachable,
-                        inline else => |tag| {
-                            const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
-                            const val = try std.zon.parse.fromZoirNode(
-                                Value,
-                                App.static_alloc(),
-                                this.ast,
-                                this.zoir,
-                                value_node,
-                                null,
-                                .{ .ignore_unknown_fields = true },
-                            );
-
-                            var old = this.settings.map.get(name).?;
-                            @field(old, @tagName(tag)).value = val;
-                            try this.settings.set_value(name, old);
-                        },
-                    }
-
-                    return;
-                }
-            }
-        }
-    };
-
-    var visitor = Visitor{
-        .settings = self,
-        .zoir = zoir,
-        .ast = ast,
-    };
-    try Scanner(*Visitor, LoadError).scan(&visitor, Visitor.callback);
-}
-
-fn report_zoir_errors(ast: std.zig.Ast, zoir: std.zig.Zoir) error{ZonSchemaError}!void {
-    if (zoir.hasCompileErrors()) {
-        std.log.warn("Couldn't parse settings file: invalid ZON:", .{});
-        for (zoir.compile_errors) |err| {
-            std.log.warn("{s}", .{err.msg.get(zoir)});
-            for (err.getNotes(zoir)) |note| {
-                if (note.token.unwrap()) |tok| {
-                    const loc = ast.tokenLocation(note.node_or_offset, tok);
-                    std.log.warn("{s}:{d}:{d}: {s}", .{
-                        Options.settings_file,
-                        loc.line,
-                        loc.column,
-                        note.msg.get(zoir),
-                    });
-                } else {
-                    std.log.warn("{s}: {s}", .{
-                        Options.settings_file,
-                        note.msg.get(zoir),
-                    });
-                }
-            }
-        }
-
-        return error.ZonSchemaError;
-    }
-}
-
-const SaveError = std.zon.Serializer.Error || std.Io.Writer.Error || std.fs.File.OpenError;
-pub fn save(self: *Settings) SaveError!void {
-    const Visitor = struct {
-        settings: *Settings,
-        struct_builder: *std.zon.Serializer.Struct,
-
-        const Visitor = @This();
-        fn save_node_callback(this: *Visitor, name: [:0]const u8, node: Node) SaveError!void {
-            switch (std.meta.activeTag(node)) {
-                .section => unreachable,
-                inline else => |tag| {
-                    const Value = @FieldType(@FieldType(Node, @tagName(tag)), "value");
-                    const default = @field(node, @tagName(tag)).value;
-                    const value = this.settings.get_value(Value, name) orelse default;
-                    try this.struct_builder.field(name, value, .{});
-                },
-            }
-        }
-    };
-
+pub fn save(self: *Settings) !void {
     var file = try std.fs.cwd().createFile(Options.settings_file, .{});
     defer file.close();
-
     var buf = std.mem.zeroes([256]u8);
     var writer = file.writer(&buf);
+
     var serializer = std.zon.Serializer{ .writer = &writer.interface };
     var struct_builder = try serializer.beginStruct(.{});
-
-    var visitor = Visitor{
-        .settings = self,
-        .struct_builder = &struct_builder,
-    };
-    try Scanner(*Visitor, SaveError).scan(&visitor, Visitor.save_node_callback);
-
+    var it = self.map.iterator();
+    while (it.next()) |kv| {
+        switch (@as(Node.Tag, kv.value_ptr.*)) {
+            .section => {},
+            inline else => |tag| {
+                try struct_builder.field(kv.key_ptr.*, @field(kv.value_ptr.*, @tagName(tag)).value, .{});
+            },
+        }
+    }
     try struct_builder.end();
     try writer.interface.flush();
 }
@@ -222,27 +107,35 @@ pub fn settings_change_event(
             },
         }
     } else {
+        logger.err("attempted to add listener for non-existant setting {s}", .{name});
         return error.NoSuchSetting;
     }
 }
 
-pub fn get_value(self: *Settings, comptime T: type, name: []const u8) ?T {
-    const node = self.map.get(name) orelse {
-        std.log.warn("Attempted to access non-existant setting: {s}", .{name});
-        return null;
+pub fn get_value(self: *Settings, comptime T: type, name: []const u8) T {
+    const default = switch (T) {
+        bool => false,
+        i32 => 0,
+        f32 => 0.0,
+        else => @compileError("Unsupported settings value type"),
     };
+    const node = self.map.get(name) orelse {
+        logger.warn("Attempted to access non-existant setting: {s}", .{name});
+        return default;
+    };
+
     switch (std.meta.activeTag(node)) {
         .section => unreachable,
         inline else => |tag| {
             const Body = @FieldType(Node, @tagName(tag));
             const Value = @FieldType(Body, "value");
             if (Value != T) {
-                std.log.warn("Setting '{s}' type mismatch, expected {s} got {s}", .{
+                logger.warn("Setting '{s}' type mismatch, expected {s} got {s}", .{
                     name,
                     @typeName(Value),
                     @typeName(T),
                 });
-                return null;
+                return default;
             }
 
             return @field(@field(node, @tagName(tag)), "value");
@@ -259,8 +152,14 @@ fn emit_on_changed(self: *Settings, name: []const u8, node: *const Node) void {
         .section => {},
         inline else => |tag| {
             const evt = self.events.get(name) orelse return;
-            App.event_manager().emit(evt, @field(@field(node, @tagName(tag)), "value")) catch |err| {
-                std.log.warn("Settings.emit_on_changed: {s}: couldn't emit event: {}", .{ name, err });
+            App.event_manager().emit(evt, @field(
+                @field(node, @tagName(tag)),
+                "value",
+            )) catch |err| {
+                logger.warn(
+                    "Settings.emit_on_changed: {s}: couldn't emit event: {}",
+                    .{ name, err },
+                );
             };
         },
     }
@@ -270,12 +169,12 @@ fn on_imgui_impl(self: *Settings) !void {
     _ = c.igCheckbox("Save on exit", &self.save_on_exit);
     if (c.igButton("Save", .{})) {
         self.save() catch |err| {
-            std.log.warn("Couldn't save settings: {}", .{err});
+            logger.warn("Couldn't save settings: {}", .{err});
         };
     }
     if (c.igButton("Restore", .{})) {
-        self.load_template() catch |err| {
-            std.log.warn("Couldn't load settings template: {}", .{err});
+        self.load_templates() catch |err| {
+            logger.warn("Couldn't load settings template: {}", .{err});
         };
     }
 
@@ -326,87 +225,104 @@ fn on_imgui_impl(self: *Settings) !void {
 
 const Node = union(enum) {
     section: void,
-    checkbox: struct { value: bool },
-    int_slider: struct { min: i32, max: i32, value: i32 },
-    float_slider: struct { min: f32, max: f32, value: f32 },
+    checkbox: Checkbox,
+    int_slider: IntSlider,
+    float_slider: FloatSlider,
+
+    const Tag = std.meta.Tag(Node);
+    const Checkbox = struct { value: bool };
+    const IntSlider = struct { min: i32, max: i32, value: i32 };
+    const FloatSlider = struct { min: f32, max: f32, value: f32 };
 };
 
-const Menu = @import("SettingsMenu");
-fn Scanner(comptime Ctx: type, comptime Err: type) type {
-    return struct {
-        const VisitorCallback = fn (ctx: Ctx, name: [:0]const u8, node: Node) Err!void;
-        const ScannerT = @This();
+const LoadCtx = struct {
+    zon: VFS.Zon,
+    stack: std.ArrayList([]const u8),
+};
 
-        ctx: Ctx,
-        fptr: *const VisitorCallback,
-
-        pub fn scan(ctx: Ctx, callback: *const VisitorCallback) Err!void {
-            var self: ScannerT = .{
-                .ctx = ctx,
-                .fptr = callback,
-            };
-            try self.scan_node(Menu, &(.{}));
-        }
-
-        fn scan_node(
-            self: ScannerT,
-            node: anytype,
-            comptime name_stack: []const []const u8,
-        ) Err!void {
-            const kind: std.meta.Tag(Node) = node.kind;
-            switch (kind) {
-                .section => try self.scan_section(node, name_stack),
-                inline else => |tag| try self.scan_any(node, tag, name_stack),
-            }
-        }
-
-        fn scan_section(
-            self: ScannerT,
-            node: anytype,
-            comptime name_stack: []const []const u8,
-        ) Err!void {
-            const new_stack = name_stack ++ .{node.name};
-
-            inline for (node.children) |child| {
-                try self.scan_node(child, new_stack);
-            }
-        }
-
-        fn scan_any(
-            self: ScannerT,
-            node: anytype,
-            comptime tag: std.meta.Tag(Node),
-            comptime name_stack: []const []const u8,
-        ) Err!void {
-            const Sub = @FieldType(Node, @tagName(tag));
-            var sub: Sub = undefined;
-            inline for (comptime std.meta.fieldNames(Sub)) |field_name| {
-                @field(sub, field_name) = @field(node, field_name);
-            }
-            const name = concat(name_stack ++ .{node.name});
-            try self.visit(name, @unionInit(Node, @tagName(tag), sub));
-        }
-
-        inline fn visit(self: ScannerT, name: [:0]const u8, node: Node) Err!void {
-            try self.fptr(self.ctx, name, node);
-        }
-
-        fn concat(comptime list: []const []const u8) [:0]const u8 {
-            const res = comptime blk: {
-                var len: usize = 0;
-                for (list) |s| len += s.len + 1;
-                var res = std.mem.zeroes([len:0]u8);
-                var offset: usize = 0;
-                for (list) |s| {
-                    res[offset] = '.';
-                    offset += 1;
-                    @memcpy(res[offset .. offset + s.len], s);
-                    offset += s.len;
-                }
-                break :blk res;
-            };
-
-            return &res;
-        }
+fn load_templates(self: *Settings) OOM!void {
+    logger.info("scanning {s} for settings menus", .{Options.settings_dir});
+    const dir: *VFS.Dir = App.assets().get_vfs().root().get_dir(
+        Options.settings_dir,
+    ) catch |err| {
+        logger.err("could not open settings dir: {}", .{err});
+        return;
     };
+
+    dir.visit(load_template, .{self}) catch |err| {
+        logger.err("could not load settings menus: {}", .{err});
+    };
+}
+
+fn load_template(self: *Settings, file: *VFS.File) !void {
+    const src = try file.read_all(App.frame_alloc());
+    const zon = try src.parse_zon(App.frame_alloc());
+    var ctx = LoadCtx{ .zon = zon, .stack = .empty };
+    self.load_template_rec(&ctx, .root) catch |err| {
+        logger.err("could not load settings file {s}: {}", .{ file.path, err });
+        return;
+    };
+    logger.info("loaded settings from {s}", .{file.path});
+}
+
+fn load_template_rec(
+    self: *Settings,
+    ctx: *LoadCtx,
+    node_idx: std.zig.Zoir.Node.Index,
+) !void {
+    errdefer {
+        const ast_node = node_idx.getAstNode(ctx.zon.zoir);
+        const tok = ctx.zon.ast.nodeMainToken(ast_node);
+        const loc = ctx.zon.ast.tokenLocation(0, tok);
+        logger.err(
+            "at {d}:{d}\n{s}",
+            .{ loc.line, loc.column, ctx.zon.ast.source[loc.line_start..loc.line_end] },
+        );
+    }
+
+    const HalfParsed = struct { kind: Node.Tag, name: []const u8 };
+    const header = try ctx.zon.parse_node(HalfParsed, App.frame_alloc(), node_idx);
+    const HalfParsedSection = struct {
+        children: []const std.zig.Zoir.Node.Index,
+    };
+
+    switch (header.kind) {
+        .section => {
+            try ctx.stack.append(App.frame_alloc(), header.name);
+            defer _ = ctx.stack.pop();
+            const sec = try ctx.zon.parse_node(HalfParsedSection, App.frame_alloc(), node_idx);
+            for (sec.children) |child| try self.load_template_rec(ctx, child);
+        },
+        inline else => |tag| {
+            const T = std.meta.TagPayload(Node, tag);
+            const val: T = try ctx.zon.parse_node(T, self.arena.allocator(), node_idx);
+            try self.set_value(
+                try self.concat(ctx.stack.items, header.name),
+                @unionInit(Node, @tagName(tag), val),
+            );
+        },
+    }
+}
+
+fn concat(self: *Settings, items: []const []const u8, name: []const u8) ![:0]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    var w = buf.writer(App.frame_alloc());
+    for (items) |s| try w.print(".{s}", .{s});
+    try w.print(".{s}", .{name});
+    return try self.arena.allocator().dupeZ(u8, buf.items);
+}
+
+fn set_value(self: *Settings, name: [:0]const u8, val: Node) OOM!void {
+    if (self.events.get(name)) |evt| {
+        switch (std.meta.activeTag(val)) {
+            .section => {},
+            inline else => |tag| {
+                App.event_manager().emit(evt, @field(val, @tagName(tag)).value) catch |err| {
+                    logger.warn("Settings.set_value: Couldn't emit event: {}", .{err});
+                };
+            },
+        }
+    }
+
+    try self.map.put(self.arena.allocator(), name, val);
 }

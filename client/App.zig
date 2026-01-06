@@ -411,7 +411,7 @@ pub fn log_fn(
         else => {},
     }
 
-    const prefix = "[" ++ @tagName(scope) ++ "] [" ++ @tagName(level) ++ "]: ";
+    const prefix = "[" ++ @tagName(level) ++ "] " ++ "[" ++ @tagName(scope) ++ "]: ";
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
     const stderr = std.fs.File.stderr().deprecatedWriter();

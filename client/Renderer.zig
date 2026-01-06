@@ -124,7 +124,7 @@ pub fn destroy_chunk_mesh(self: *Renderer, coords: Chunk.Coords) !void {
 }
 
 pub fn draw(self: *Renderer) (OOM || GlError)!void {
-    const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable") orelse false;
+    const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable");
     const render_size = zm.Vec2f{ @floatFromInt(self.cur_width), @floatFromInt(self.cur_height) };
 
     try gl_call(gl.ClearDepth(0.0));

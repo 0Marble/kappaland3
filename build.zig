@@ -125,6 +125,11 @@ fn generate_builtins(b: *std.Build) *std.Build.Module {
         _ = builtins.addCopyFile(b.path(assets_dir orelse "assets/").path(b, asset_path), asset_path);
     }
 
+    const builtin_assets_path = b.path("build/BuiltinAssets.zon");
+    builtin_assets_path.addStepDependencies(&builtins.step);
+    const options_path = b.path("build/Options.zon");
+    options_path.addStepDependencies(&builtins.step);
+
     return mod;
 }
 
@@ -160,9 +165,6 @@ fn build_client(
     client.root_module.addImport("gl", gl);
     client.root_module.addImport("zm", zm.module("zm"));
     client.root_module.addImport("libmine", libmine);
-    client.root_module.addImport("SettingsMenu", b.createModule(.{
-        .root_source_file = b.path("assets/SettingsMenu.zon"),
-    }));
     client.root_module.linkLibrary(imgui);
     b.installArtifact(client);
 

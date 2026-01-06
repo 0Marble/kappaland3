@@ -65,4 +65,10 @@
         .desc = "Directory that stores all model info within assets",
         .default = "models",
     },
+    .{
+        .type = .str,
+        .name = "settings_dir",
+        .desc = "Directory that stores all settings templates within assets",
+        .default = "settings",
+    },
 }

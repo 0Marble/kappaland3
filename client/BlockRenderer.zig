@@ -343,11 +343,11 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     const do_frustum_culling = App.settings().get_value(
         bool,
         ".main.renderer.frustum_culling",
-    ).?;
+    );
     const do_occlusion_culling = App.settings().get_value(
         bool,
         ".main.renderer.occlusion_culling",
-    ).?;
+    );
 
     const cam = &Game.instance().camera;
     const cam_chunk = cam.chunk_coords();
