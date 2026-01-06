@@ -11,7 +11,6 @@ const Options = @import("Build").Options;
 pub const DebugUi = @import("DebugUi.zig");
 pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
-pub const BlockManager = @import("BlockManager.zig");
 pub const Assets = @import("Assets.zig");
 
 const logger = std.log.scoped(.app);
@@ -29,8 +28,7 @@ debug_ui: DebugUi,
 random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
-block_manager: BlockManager,
-assets: Assets,
+asset_manager: Assets,
 
 layers: std.ArrayList(Layer),
 
@@ -64,13 +62,12 @@ pub fn init() !void {
     try init_sdl();
     try init_gl();
 
-    app.assets = try .init(App.gpa());
+    app.asset_manager = try .init(App.gpa());
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
     app.frame_data = .{ .start = std.time.timestamp() };
     try app.keys_state.init();
     app.debug_ui = try .init(&app);
-    app.block_manager = try .init();
 
     app.layers = .empty;
     try push_layer(Game.layer());
@@ -177,8 +174,7 @@ pub fn deinit() void {
     app.settings_store.deinit();
     app.events.deinit();
     app.keys_state.deinit();
-    app.block_manager.deinit();
-    app.assets.deinit();
+    app.asset_manager.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -353,8 +349,8 @@ pub fn gui() *DebugUi {
     return &app.debug_ui;
 }
 
-pub fn blocks() *BlockManager {
-    return &app.block_manager;
+pub fn assets() *Assets {
+    return &app.asset_manager;
 }
 
 const FrameData = struct {

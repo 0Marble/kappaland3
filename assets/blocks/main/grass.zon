@@ -1,5 +1,5 @@
 .{
-    .derives = ".blocks.main.basic",
+    .derives = ".main.basic",
     .textures = .{
         .bot = ".blocks.main.dirt",
         .side = ".blocks.main.grass_side",

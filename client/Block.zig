@@ -2,65 +2,53 @@ const std = @import("std");
 const Coords = @import("Chunk.zig").Coords;
 const App = @import("App.zig");
 
-const Idx = enum(u16) {
-    invalid = 0,
-    _,
-
-    pub fn from_int(x: anytype) Idx {
-        return @as(Idx, @enumFromInt(x + 1));
-    }
-
-    pub fn to_int(self: Idx, comptime Int: type) Int {
-        return @intFromEnum(self) - 1;
-    }
-};
-idx: Idx,
+idx: u16,
 
 const Block = @This();
 pub const invalid: Block = .{ .idx = .invalid };
 
 pub fn from_int(x: anytype) Block {
-    return .{ .idx = .from_int(x) };
+    return .{ .idx = @intCast(x) };
 }
 
 pub fn to_int(self: Block, comptime Int: type) Int {
-    return self.idx.to_int(Int);
+    return @intCast(self.idx);
 }
 
 pub fn get_textures(self: Block, face: Face) []const usize {
-    const info = App.blocks().get_block_info(self);
+    const info = App.assets().get_blocks().get_info(self);
     return info.textures.get(face).?;
 }
 
 pub fn get_model(self: Block, face: Face) []const usize {
-    const info = App.blocks().get_block_info(self);
+    const info = App.assets().get_blocks().get_info(self);
     return info.model.get(face).?;
 }
 
 pub fn is_solid(self: Block, face: Face) bool {
-    const info = App.blocks().get_block_info(self);
+    const info = App.assets().get_blocks().get_info(self);
     return info.solid.get(face).?;
 }
 
 pub fn casts_ao(self: Block) bool {
-    const info = App.blocks().get_block_info(self);
+    const info = App.assets().get_blocks().get_info(self);
     return info.casts_ao;
 }
 
 pub fn air() Block {
-    return App.blocks().cache.air;
+    return App.assets().get_blocks().air;
 }
 
 pub fn dirt() Block {
-    return App.blocks().cache.dirt;
+    return App.assets().get_blocks().dirt;
 }
 
 pub fn stone() Block {
-    return App.blocks().cache.stone;
+    return App.assets().get_blocks().stone;
 }
 
 pub fn grass() Block {
-    return App.blocks().cache.grass;
+    return App.assets().get_blocks().grass;
 }
 
 pub fn is_air(self: Block) bool {

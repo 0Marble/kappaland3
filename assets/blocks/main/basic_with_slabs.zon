@@ -1,5 +1,5 @@
 .{
-    .derives = ".blocks.main.basic",
+    .derives = ".main.basic",
     .states = .{
         .block = .{},
         .slab = .{

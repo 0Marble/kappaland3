@@ -126,7 +126,7 @@ fn init_models(self: *Self) !void {
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
 
-    const models: []const Block.Model = App.blocks().models_dedup.keys();
+    const models: []const Block.Model = App.assets().get_models().models.keys();
 
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
@@ -221,7 +221,7 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BLOCK_ATLAS_TEX));
-    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.blocks().atlas.handle));
+    try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.assets().get_blocks_atlas().handle));
 
     try gl_call(gl.MultiDrawElementsIndirect(
         gl.TRIANGLES,

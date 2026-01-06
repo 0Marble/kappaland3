@@ -80,8 +80,8 @@ fn on_imgui(self: *Game) !void {
 }
 
 fn on_imgui_blocks(self: *Game) !void {
-    const block_names = App.blocks().blocks.keys();
-    const cur_name: [:0]const u8 = App.blocks().get_block_info(self.current_selected_block).name;
+    const block_names = App.assets().get_blocks().blocks.keys();
+    const cur_name: [:0]const u8 = App.assets().get_blocks().get_info(self.current_selected_block).name;
 
     if (c.igBeginCombo("Placed Block", @ptrCast(cur_name), 0)) {
         defer c.igEndCombo();
