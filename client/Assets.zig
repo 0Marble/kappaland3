@@ -13,13 +13,18 @@ arena: std.heap.ArenaAllocator,
 blocks_atlas: TextureAtlas,
 
 pub fn init(gpa: std.mem.Allocator) !Assets {
+    logger.info("loading assets...", .{});
     var self = Assets{
         .vfs = try VFS.init(gpa, Options.assets_dir, &builtins),
         .arena = .init(gpa),
         .blocks_atlas = undefined,
     };
-    self.blocks_atlas = try .init(gpa, try self.vfs.root().get_dir(Options.textures_dir ++ "/blocks"));
 
+    const blocks_atlas_dir = Options.textures_dir ++ "/blocks";
+    logger.info("loading block atlas from {s}", .{blocks_atlas_dir});
+    self.blocks_atlas = try .init(gpa, try self.vfs.root().get_dir(blocks_atlas_dir));
+
+    logger.info("loading assets complete!", .{});
     return self;
 }
 

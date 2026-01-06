@@ -134,7 +134,7 @@ fn find_textures(
 ) !void {
     errdefer all_ok.* = false;
 
-    const contents = try file.read_all(arena);
+    const contents = (try file.read_all(arena)).src;
     const io: *c.SDL_IOStream = try sdl_call(c.SDL_IOFromConstMem(@ptrCast(contents), contents.len));
 
     const allowed_formats = .{ .PNG, .JPG, .BMP };
@@ -159,7 +159,6 @@ fn find_textures(
     }
 
     try list.append(arena, .{ file, surface });
-    logger.info("found texture: {s}", .{file.path});
 }
 
 fn generate_missing(self: *TextureAtlas) !void {
