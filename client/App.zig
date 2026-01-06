@@ -61,14 +61,14 @@ pub fn init() !void {
     app.random = .init(69);
 
     try init_memory();
+    try init_sdl();
+    try init_gl();
+
     app.assets = try .init(App.gpa());
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
     app.frame_data = .{ .start = std.time.timestamp() };
     try app.keys_state.init();
-
-    try init_sdl();
-    try init_gl();
     app.debug_ui = try .init(&app);
     app.block_manager = try .init();
 
