@@ -16,7 +16,6 @@
     4. Maybe footprints or something? Or some ambient cracks?
     
 - Better phase handling - in which order do we update the world/game state/ui/input/... Right now its a mess!
-- Settings: make it possible to have different settings menus loadable at run-time (for modding)
 - Rebinding keys (through a separate settings field)
 
 # Debt
@@ -32,6 +31,7 @@
     1. Worked a bunch on the new Assets system. 
     Now all assets are loaded in a single place, and they are loaded from a virtual file system, 
     which allows me to have certain key files to be precompiled into the executable.
+    2. Now it is possible to add custom settings files
 
 - 03.01.2026
     1. Improve BlockManager - now the whole inheritance thing makes more sense, I just treat files as generic 
