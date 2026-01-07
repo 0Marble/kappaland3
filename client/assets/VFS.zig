@@ -175,6 +175,21 @@ pub const Dir = struct {
         }
     }
 
+    pub fn visit_no_fail(self: *Dir, comptime fptr: anytype, args: anytype) bool {
+        for (self.entries.values()) |node| {
+            switch (node.*) {
+                .dir => |*dir| if (!dir.visit_no_fail(fptr, args)) return false,
+                .file => |*file| {
+                    @call(.auto, fptr, args ++ .{file}) catch |err| {
+                        logger.err("{s}: could not visit: {}", .{ file.path, err });
+                        return false;
+                    };
+                },
+            }
+        }
+        return true;
+    }
+
     pub fn format(
         self: *Dir,
         writer: *std.Io.Writer,

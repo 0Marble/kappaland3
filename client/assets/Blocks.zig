@@ -30,7 +30,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas, models:
         .models = models,
     };
     defer ctx.arena.deinit();
-    try dir.visit(BuildCtx.parse, .{&ctx});
+    _ = dir.visit_no_fail(BuildCtx.parse, .{&ctx});
 
     logger.info("realizing block data", .{});
     try ctx.realize_all();

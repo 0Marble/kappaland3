@@ -2,11 +2,13 @@ const Assets = @import("../Assets.zig");
 const std = @import("std");
 const VFS = @import("VFS.zig");
 const Block = @import("../Block.zig");
+const glTF = @import("glTF.zig");
 
 const Models = @This();
 const logger = std.log.scoped(.models);
 
 name_to_model: std.StringArrayHashMapUnmanaged(usize),
+gltfs: std.ArrayList(glTF),
 models: std.AutoArrayHashMapUnmanaged(Block.Model, void),
 arena: std.heap.ArenaAllocator,
 prefix: []const u8,
@@ -17,6 +19,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !Models {
         .models = .empty,
         .arena = .init(gpa),
         .prefix = dir.path,
+        .gltfs = .empty,
     };
     var ctx = BuildCtx{
         .temp = std.heap.ArenaAllocator.init(gpa),
@@ -27,7 +30,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !Models {
 
     logger.info("loading models from {s}", .{dir.path});
 
-    try dir.visit(add_model, .{ &self, &ctx });
+    _ = dir.visit_no_fail(add_model, .{ &self, &ctx });
 
     if (ctx.ok) {
         logger.info("{s}: all models loaded successfully!", .{dir.path});
@@ -103,6 +106,15 @@ const FaceModel = struct {
 fn add_model(self: *Models, ctx: *BuildCtx, file: *VFS.File) !void {
     errdefer ctx.ok = false;
     defer _ = ctx.temp.reset(.retain_capacity);
+
+    const ext = std.fs.path.extension(file.path);
+    if (std.mem.eql(u8, ".glb", ext)) {
+        var gltf = try glTF.init(self.arena.allocator(), file);
+        errdefer gltf.deinit();
+        try self.gltfs.append(self.arena.allocator(), gltf);
+        return;
+    }
+
     const zon = try (try file.read_all(ctx.temp.allocator())).parse_zon(ctx.temp.allocator());
     const model = try zon.parse(FaceModel, ctx.temp.allocator());
 

@@ -4,6 +4,7 @@ const VFS = @import("assets/VFS.zig");
 const TextureAtlas = @import("assets/TextureAtlas.zig");
 const Models = @import("assets/Models.zig");
 const Blocks = @import("assets/Blocks.zig");
+const glTF = @import("assets/glTF.zig");
 
 const Assets = @import("Assets.zig");
 const logger = std.log.scoped(.assets);
@@ -26,6 +27,7 @@ pub fn init(gpa: std.mem.Allocator) !Assets {
     errdefer blocks_atlas.deinit();
     var models = try Models.init(gpa, try vfs.root().get_dir(Options.models_dir));
     errdefer models.deinit();
+
     var blocks = try Blocks.init(
         gpa,
         try vfs.root().get_dir(Options.blocks_dir),

@@ -27,7 +27,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
 
     var surfaces = std.ArrayList(FileAndSurface).empty;
     defer surfaces.deinit(temp.allocator());
-    try dir.visit(find_textures, .{ &surfaces, temp.allocator(), &ok });
+    _ = dir.visit_no_fail(find_textures, .{ &surfaces, temp.allocator(), &ok });
 
     var self = TextureAtlas{
         .handle = 0,
