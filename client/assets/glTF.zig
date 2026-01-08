@@ -17,18 +17,9 @@ mesh_parents_vbo: gl.uint = 0,
 buffers: []gl.uint = &.{},
 shader: Shader = undefined,
 
-var counter: usize = 0;
-
 pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !glTF {
     var parser = try Parser.init(gpa, file);
     defer parser.arena.deinit();
-
-    const vert = try std.fmt.allocPrintSentinel(parser.arena.allocator(),
-        \\#version 460 core
-        \\#define NODE_TREE {d}
-        \\#define INSTANCE_DATA {d}
-        \\{s}
-    , .{ counter * 2, counter * 2 + 1, vert_suffix }, 0);
 
     var self = glTF{};
     var src: [2]Shader.Source = .{
@@ -38,7 +29,6 @@ pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !glTF {
     self.shader = try .init(&src, "gltf_pass");
     try self.upload(gpa, &parser);
 
-    counter += 1;
     return self;
 }
 
@@ -57,6 +47,7 @@ pub fn draw(self: *glTF, cam: *GameCamera) !void {
     try self.shader.bind();
     try self.shader.set_mat4("u_view", cam.view_mat());
     try self.shader.set_mat4("u_proj", cam.proj_mat());
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, @intCast(NODE_TREE), self.nodes_ssbo));
 
     for (self.primitives) |*p| try p.draw(1);
 }
@@ -117,11 +108,7 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
         @ptrCast(node_data),
         gl.STATIC_DRAW,
     ));
-    try gl_call(gl.BindBufferBase(
-        gl.SHADER_STORAGE_BUFFER,
-        @intCast(counter * 2),
-        self.nodes_ssbo,
-    ));
+    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, @intCast(NODE_TREE), self.nodes_ssbo));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     var prims = std.ArrayList(PrimitiveMesh).empty;
@@ -135,7 +122,7 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
                 self,
                 &parser.root,
                 prim,
-                @intCast(parent_offset),
+                @intCast(parent_offset * @sizeOf(u32)),
                 parents.items.len,
             );
             try prims.append(gpa, primitive);
@@ -162,7 +149,7 @@ fn save_parents(
     const n = &root.nodes.?[node];
     if (n.mesh) |m| try mp[m].append(alloc, node);
     if (n.children) |nodes| {
-        for (nodes) |child| node_data[child].parent = node + 1;
+        for (nodes) |child| node_data[child].parent = node;
     }
 }
 
@@ -285,7 +272,7 @@ const PrimitiveMesh = struct {
         model: *glTF,
         root: *Root,
         prim: Mesh.Primitive,
-        parent_node_offset: u32,
+        parent_node_byte_offset: u32,
         parent_node_cnt: usize,
     ) !PrimitiveMesh {
         var self: PrimitiveMesh = undefined;
@@ -340,7 +327,7 @@ const PrimitiveMesh = struct {
 
         {
             try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, model.mesh_parents_vbo));
-            try gl_call(gl.VertexAttribIPointer(NODE, 1, gl.UNSIGNED_INT, 4, parent_node_offset));
+            try gl_call(gl.VertexAttribIPointer(NODE, 1, gl.UNSIGNED_INT, 4, parent_node_byte_offset));
             try gl_call(gl.EnableVertexAttribArray(NODE));
             try gl_call(gl.VertexAttribDivisor(NODE, 1));
         }
@@ -750,10 +737,10 @@ const locations = std.EnumArray(Mesh.Primitive.AttribMap.Attribute, u32).init(.{
 });
 
 const NODE = 3;
-const INSTANCE = 4;
+const NODE_TREE = 10;
 
-const vert_suffix =
-    \\
+const vert =
+    \\#version 460 core
 ++ blk: {
     var str: []const u8 = "";
 
@@ -767,7 +754,7 @@ const vert_suffix =
     break :blk str;
 } ++
     std.fmt.comptimePrint("\n#define NODE {d}", .{NODE}) ++
-    std.fmt.comptimePrint("\n#define INSTANCE {d}", .{INSTANCE}) ++
+    std.fmt.comptimePrint("\n#define NODE_TREE {d}", .{NODE_TREE}) ++
     \\
     \\layout (location = POSITION) in vec3 vert_pos;
     \\layout (location = NORMAL) in vec3 vert_norm;
@@ -775,9 +762,6 @@ const vert_suffix =
     \\
     \\// per primitive 
     \\layout (location = NODE) in uint mesh_node; 
-    \\
-    \\// per model instance
-    \\layout (location = INSTANCE) in uint model_instance;
     \\
     \\out vec3 frag_pos;
     \\out vec3 frag_norm;
@@ -795,27 +779,23 @@ const vert_suffix =
     \\  Node nodes[];
     \\};
     \\
-    \\struct InstanceData {
-    \\  mat4 transform;
-    \\};
-    \\
-    \\layout (std430, binding = INSTANCE_DATA) buffer InstanceDataBuf {
-    \\  InstanceData instances[];
-    \\};
-    \\
     \\mat4 compute_transform() {
     \\  mat4 model = mat4(1.0);
-    \\  uint cur_node = mesh_node + 1;
-    \\  while (cur_node != 0) {
-    \\    model = nodes[cur_node - 1].transform * model;
-    \\    cur_node = nodes[cur_node - 1].parent;
+    \\  uint cur_node = mesh_node;
+    \\  while (true) {
+    \\    model = nodes[cur_node].transform * model;
+    \\    if (cur_node == nodes[cur_node].parent) break;
+    \\    cur_node = nodes[cur_node].parent;
     \\  }
     \\  return model;
     \\}
     \\
     \\void main() {
     \\  mat4 model = compute_transform();
-    \\  vec4 view_norm = u_view * inverse(transpose(model)) * vec4(vert_norm, 0);
+    \\  mat4 norm_transform = model;
+    \\  norm_transform[3] = vec4(0, 0, 0, 1);
+    \\  norm_transform = inverse(transpose(norm_transform));
+    \\  vec4 view_norm = u_view * norm_transform * vec4(vert_norm, 0);
     \\  vec4 view_pos = u_view * model * vec4(vert_pos, 1);
     \\  
     \\  frag_pos = view_pos.xyz;
