@@ -9,7 +9,7 @@ const logger = std.log.scoped(.models);
 
 name_to_model: std.StringArrayHashMapUnmanaged(usize),
 gltfs: std.ArrayList(glTF),
-models: std.AutoArrayHashMapUnmanaged(Block.Model, void),
+models: std.AutoArrayHashMapUnmanaged(Block.Face, void),
 arena: std.heap.ArenaAllocator,
 prefix: []const u8,
 

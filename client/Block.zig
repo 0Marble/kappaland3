@@ -15,17 +15,17 @@ pub fn to_int(self: Block, comptime Int: type) Int {
     return @intCast(self.idx);
 }
 
-pub fn get_textures(self: Block, face: Face) []const usize {
+pub fn get_textures(self: Block, face: Direction) []const usize {
     const info = App.assets().get_blocks().get_info(self);
     return info.textures.get(face).?;
 }
 
-pub fn get_model(self: Block, face: Face) []const usize {
+pub fn get_faces(self: Block, face: Direction) []const usize {
     const info = App.assets().get_blocks().get_info(self);
-    return info.model.get(face).?;
+    return info.faces.get(face).?;
 }
 
-pub fn is_solid(self: Block, face: Face) bool {
+pub fn is_solid(self: Block, face: Direction) bool {
     const info = App.assets().get_blocks().get_info(self);
     return info.solid.get(face).?;
 }
@@ -57,7 +57,7 @@ pub fn is_air(self: Block) bool {
 
 pub const indices: []const u8 = &.{ 0, 1, 2, 0, 2, 3 };
 
-pub const Face = enum(u3) {
+pub const Direction = enum(u3) {
     front,
     back,
     right,
@@ -65,7 +65,7 @@ pub const Face = enum(u3) {
     top,
     bot,
 
-    pub fn flip(self: Face) Face {
+    pub fn flip(self: Direction) Direction {
         return switch (self) {
             .front => .back,
             .back => .front,
@@ -76,7 +76,7 @@ pub const Face = enum(u3) {
         };
     }
 
-    pub fn front_dir(self: Face) Coords {
+    pub fn front_dir(self: Direction) Coords {
         return switch (self) {
             .front => .{ 0, 0, 1 },
             .back => .{ 0, 0, -1 },
@@ -87,7 +87,7 @@ pub const Face = enum(u3) {
         };
     }
 
-    pub fn left_dir(self: Face) Coords {
+    pub fn left_dir(self: Direction) Coords {
         return switch (self) {
             .front => .{ -1, 0, 0 },
             .back => .{ 1, 0, 0 },
@@ -98,7 +98,7 @@ pub const Face = enum(u3) {
         };
     }
 
-    pub fn up_dir(self: Face) Coords {
+    pub fn up_dir(self: Direction) Coords {
         return switch (self) {
             .front => .{ 0, 1, 0 },
             .back => .{ 0, 1, 0 },
@@ -110,7 +110,7 @@ pub const Face = enum(u3) {
     }
 };
 
-pub const Model = packed struct(u32) {
+pub const Face = packed struct(u32) {
     u_scale: u4 = 15,
     v_scale: u4 = 15,
     u_offset: u4 = 0,

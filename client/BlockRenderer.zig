@@ -126,11 +126,11 @@ fn init_models(self: *Self) !void {
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
 
-    const models: []const Block.Model = App.assets().get_models().models.keys();
+    const models: []const Block.Face = App.assets().get_models().models.keys();
 
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        @intCast(models.len * @sizeOf(Block.Model)),
+        @intCast(models.len * @sizeOf(Block.Face)),
         @ptrCast(models),
         gl.STATIC_DRAW,
     ));
@@ -379,7 +379,7 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
     @memset(chunk_data, std.mem.zeroes(ChunkData));
 
     for (meshes.items, 0..) |mesh, i| {
-        for (std.enums.values(Block.Face)) |normal| {
+        for (std.enums.values(Block.Direction)) |normal| {
             const j: u32 = @intFromEnum(normal);
             const range = self.faces.get_range(mesh.mesh.handles[j]).?;
 
@@ -470,7 +470,7 @@ const Mesh = struct {
 
 const normals = blk: {
     var res = std.mem.zeroes([BLOCK_FACE_CNT * 4]f32);
-    for (std.enums.values(Block.Face), 0..) |face, n| {
+    for (std.enums.values(Block.Direction), 0..) |face, n| {
         const normal: zm.Vec3f = @floatFromInt(face.front_dir());
         res[4 * n + 0] = normal[0];
         res[4 * n + 1] = normal[1];
@@ -485,7 +485,7 @@ const normals = blk: {
 const normal_mats = blk: {
     const n = 12;
     var res = std.mem.zeroes([BLOCK_FACE_CNT * n]f32);
-    for (std.enums.values(Block.Face), 0..) |dir, i| {
+    for (std.enums.values(Block.Direction), 0..) |dir, i| {
         const right: zm.Vec3f = @floatFromInt(-dir.left_dir());
         const up: zm.Vec3f = @floatFromInt(dir.up_dir());
         const front: zm.Vec3f = @floatFromInt(dir.front_dir());
@@ -501,7 +501,7 @@ const normal_mats = blk: {
 };
 
 test "transforms" {
-    inline for (comptime std.enums.values(Block.Face)) |dir| {
+    inline for (comptime std.enums.values(Block.Direction)) |dir| {
         errdefer {
             std.log.err("failed at {}", .{dir});
         }
@@ -529,7 +529,7 @@ const FACE_DATA_BINDING = 0;
 const CHUNK_DATA_BINDING = 1;
 const NORMAL_BINDING = 2;
 const MODEL_BINDING = 3;
-const BLOCK_FACE_CNT = std.enums.values(Block.Face).len;
+const BLOCK_FACE_CNT = std.enums.values(Block.Direction).len;
 
 const block_vert =
     \\#version 460 core

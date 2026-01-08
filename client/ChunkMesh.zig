@@ -6,7 +6,7 @@ const Block = @import("Block.zig");
 const Game = @import("Game.zig");
 
 chunk: *Chunk,
-faces: [std.enums.values(Block.Face).len]std.ArrayList(Face),
+faces: [std.enums.values(Block.Direction).len]std.ArrayList(Face),
 
 neighbour_cache: [26]?*Chunk,
 is_occluded: bool,
@@ -118,7 +118,7 @@ pub const Face = packed struct(u64) {
     }
 };
 
-fn next_layer_solid(self: *Mesh, normal: Block.Face, start: Coords) bool {
+fn next_layer_solid(self: *Mesh, normal: Block.Direction, start: Coords) bool {
     const right = -normal.left_dir();
     const up = normal.up_dir();
     const front = normal.front_dir();
@@ -141,7 +141,7 @@ fn next_layer_solid(self: *Mesh, normal: Block.Face, start: Coords) bool {
 
 fn build_layer_mesh(
     self: *Mesh,
-    normal: Block.Face,
+    normal: Block.Direction,
     start: Coords,
     gpa: std.mem.Allocator,
 ) !void {
@@ -178,7 +178,7 @@ fn build_layer_mesh(
                 @intFromBool(self.casts_ao(pos + front + right + down)),
             );
 
-            for (block.get_textures(normal), block.get_model(normal)) |t, m| {
+            for (block.get_textures(normal), block.get_faces(normal)) |t, m| {
                 const face = Face{
                     .x = @intCast(pos[0]),
                     .y = @intCast(pos[1]),
@@ -290,7 +290,7 @@ fn casts_ao(self: *Mesh, pos: Coords) bool {
     return false;
 }
 
-fn is_solid_neighbour_face(self: *Mesh, pos: Coords, face: Block.Face) bool {
+fn is_solid_neighbour_face(self: *Mesh, pos: Coords, face: Block.Direction) bool {
     const world = self.chunk.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
     const chunk = Chunk.world_to_chunk(world);
     const block = Chunk.world_to_block(world);

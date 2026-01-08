@@ -26,7 +26,7 @@ pub fn get(self: *Chunk, pos: Coords) Block {
     return self.blocks[@intCast(i)];
 }
 
-pub fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Face) bool {
+pub fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Direction) bool {
     const b = self.get_safe(pos);
     if (b == null) return false;
     return b.?.is_solid(face);

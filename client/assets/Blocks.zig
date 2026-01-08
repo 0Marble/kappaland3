@@ -3,7 +3,6 @@ const Assets = @import("../Assets.zig");
 const VFS = @import("VFS.zig");
 const TextureAtlas = @import("TextureAtlas.zig");
 const Models = @import("Models.zig");
-const Face = @import("../Block.zig").Face;
 const Block = @import("../Block.zig");
 
 const Blocks = @import("Blocks.zig");
@@ -177,7 +176,7 @@ const BuildCtx = struct {
             .name = try self.blocks.arena.allocator().dupeZ(u8, b.name),
             .casts_ao = (try ParsedBlock.get_ensure_type(b.map.*, "casts_ao", .bool)).bool,
             .solid = .init(.{}),
-            .model = .init(.{}),
+            .faces = .init(.{}),
             .textures = .init(.{}),
         };
 
@@ -190,7 +189,7 @@ const BuildCtx = struct {
         )).map;
         const model: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "model", .map)).map;
 
-        for (std.enums.values(Face)) |face| {
+        for (std.enums.values(Block.Direction)) |face| {
             const s = (try ParsedBlock.get_ensure_type(solid, @tagName(face), .bool)).bool;
             info.solid.put(face, s);
 
@@ -229,7 +228,7 @@ const BuildCtx = struct {
                 tex_buf[i] = tex_idx;
             }
 
-            info.model.put(face, faces_buf);
+            info.faces.put(face, faces_buf);
             info.textures.put(face, tex_buf);
         }
 
@@ -362,7 +361,7 @@ const ParsedBlock = struct {
 pub const Info = struct {
     name: [:0]const u8,
     casts_ao: bool,
-    solid: std.EnumMap(Face, bool) = .initFull(false),
-    model: std.EnumMap(Face, []const usize) = .initFull(&.{}),
-    textures: std.EnumMap(Face, []const usize) = .initFull(&.{}),
+    solid: std.EnumMap(Block.Direction, bool) = .initFull(false),
+    faces: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),
+    textures: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),
 };
