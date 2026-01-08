@@ -122,7 +122,9 @@ fn generate_builtins(b: *std.Build) *std.Build.Module {
     _ = builtins.add("Assets.zig", assets_src);
 
     inline for (builtin_assets) |asset_path| {
-        _ = builtins.addCopyFile(b.path(assets_dir orelse "assets/").path(b, asset_path), asset_path);
+        const path = b.path(assets_dir orelse "assets/").path(b, asset_path);
+        path.addStepDependencies(&builtins.step);
+        _ = builtins.addCopyFile(path, asset_path);
     }
 
     const builtin_assets_path = b.path("build/BuiltinAssets.zon");

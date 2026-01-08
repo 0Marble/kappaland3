@@ -13,19 +13,38 @@ const Renderer = @import("../Renderer.zig");
 primitives: []PrimitiveMesh = &.{},
 
 nodes_ssbo: gl.uint = 0,
-materials_ssbo: gl.uint = 0,
 mesh_parents_vbo: gl.uint = 0,
 buffers: []gl.uint = &.{},
 shader: Shader = undefined,
 
+var counter: usize = 0;
+
 pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !glTF {
+    counter += 1;
+
     var parser = try Parser.init(gpa, file);
     defer parser.arena.deinit();
+
+    const vert_defines = try std.fmt.allocPrintSentinel(
+        parser.arena.allocator(),
+        \\#version 460 core
+        \\#define NODE_TREE {d}
+        \\#define INSTANCE_DATA {d}
+    ,
+        .{ counter * 2, counter * 2 + 1 },
+        0,
+    );
+    const vert_shader = try std.mem.concatWithSentinel(
+        parser.arena.allocator(),
+        u8,
+        &.{ vert_defines, vert },
+        0,
+    );
 
     var self = glTF{};
     try self.upload(gpa, &parser);
     var src: [2]Shader.Source = .{
-        Shader.Source{ .name = "vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
+        Shader.Source{ .name = "vert", .sources = &.{vert_shader}, .kind = gl.VERTEX_SHADER },
         Shader.Source{ .name = "frag", .sources = &.{frag}, .kind = gl.FRAGMENT_SHADER },
     };
     self.shader = try .init(&src, "gltf_pass");
@@ -49,9 +68,7 @@ pub fn draw(self: *glTF, cam: *GameCamera) !void {
     try self.shader.set_mat4("u_view", cam.view_mat());
     try self.shader.set_mat4("u_proj", cam.proj_mat());
 
-    for (self.primitives) |*p| {
-        try p.draw(1);
-    }
+    for (self.primitives) |*p| try p.draw(1);
 }
 
 fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
@@ -66,13 +83,27 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
 
     const meshes = parser.root.meshes orelse &.{};
     const mesh_parents = try parser.arena.allocator().alloc(std.ArrayList(u32), meshes.len);
+    const nodes = parser.root.nodes orelse &.{};
+    const node_data = try parser.arena.allocator().alloc(NodeData, nodes.len);
+    for (node_data, nodes) |*data, n| {
+        const matrix = (zm.Mat4f{ .data = n.matrix }).transpose();
+        const T = zm.Mat4f.translationVec3(n.translation);
+        const R = zm.Mat4f.fromQuaternion(
+            .init(n.rotation[3], n.rotation[0], n.rotation[1], n.rotation[2]),
+        );
+        const S = zm.Mat4f.scalingVec3(n.scale);
+        const transform = matrix.multiply(T.multiply(R.multiply(S))).transpose();
+
+        data.* = .{ .transform = transform.data };
+    }
+
     @memset(mesh_parents, .empty);
     for (parser.root.scenes orelse &.{}, 0..) |_, i| {
         try scene_dfs(
             &parser.root,
             i,
-            find_parents,
-            .{ mesh_parents, parser.arena.allocator(), &parser.root },
+            save_parents,
+            .{ mesh_parents, node_data, parser.arena.allocator(), &parser.root },
         );
     }
 
@@ -87,6 +118,21 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
         @ptrCast(all_parents.items),
         gl.STATIC_DRAW,
     ));
+
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.nodes_ssbo)));
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.nodes_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(node_data.len * @sizeOf(NodeData)),
+        @ptrCast(node_data),
+        gl.STATIC_DRAW,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(counter * 2),
+        self.nodes_ssbo,
+    ));
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     var prims = std.ArrayList(PrimitiveMesh).empty;
     defer prims.deinit(gpa);
@@ -110,22 +156,38 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
     self.primitives = try prims.toOwnedSlice(gpa);
 }
 
-fn find_parents(mp: []std.ArrayList(u32), alloc: std.mem.Allocator, root: *Root, node: u32) !void {
+const NodeData = packed struct(u640) {
+    parent: u32 = 0,
+    _padding: u96 = 0xdeaddeaddead,
+    transform: @Vector(16, f32) = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 },
+};
+
+fn save_parents(
+    mp: []std.ArrayList(u32),
+    node_data: []NodeData,
+    alloc: std.mem.Allocator,
+    root: *Root,
+    node: u32,
+) !void {
     const n = &root.nodes.?[node];
     if (n.mesh) |m| try mp[m].append(alloc, node);
+    if (n.children) |nodes| {
+        for (nodes) |child| node_data[child].parent = node + 1;
+    }
 }
 
 fn scene_dfs(root: *Root, scene: usize, comptime fptr: anytype, args: anytype) !void {
-    for (root.scenes.?[scene].nodes orelse &.{}) |node| {
+    const s = &root.scenes.?[scene];
+    if (s.nodes) |nodes| for (nodes) |node| {
         try node_dfs(root, node, fptr, args);
-    }
+    };
 }
 
 fn node_dfs(root: *Root, node: u32, comptime fptr: anytype, args: anytype) !void {
     try @call(.auto, fptr, args ++ .{node});
-    for (root.nodes.?[node].children orelse &.{}) |child| {
+    if (root.nodes.?[node].children) |nodes| for (nodes) |child| {
         try node_dfs(root, child, fptr, args);
-    }
+    };
 }
 
 const Parser = struct {
@@ -171,7 +233,7 @@ const Parser = struct {
                     const json = src[reader.seek .. reader.seek + length];
                     try reader.discardAll(length);
 
-                    var json_reader = std.json.Scanner.initCompleteInput(arena.allocator(), json);
+                    var json_reader = std.json.Scanner.initCompleteInput(self.arena.allocator(), json);
                     var diag = std.json.Diagnostics{};
 
                     errdefer |err| {
@@ -195,15 +257,15 @@ const Parser = struct {
 
                     self.root = try std.json.parseFromTokenSourceLeaky(
                         Root,
-                        arena.allocator(),
+                        self.arena.allocator(),
                         &json_reader,
                         .{},
                     );
                 },
                 std.mem.bytesToValue(u32, &[4]u8{ 'B', 'I', 'N', 0 }) => {
                     try self.buffers.append(
-                        arena.allocator(),
-                        try reader.readAlloc(arena.allocator(), length),
+                        self.arena.allocator(),
+                        try reader.readAlloc(self.arena.allocator(), length),
                     );
                 },
                 else => {
@@ -520,7 +582,7 @@ const Root = struct {
 
 const Image = struct {
     uri: ?[]const u8 = null,
-    mineType: ?MimeType = null,
+    mimeType: ?MimeType = null,
     bufferView: ?Integer = null,
     name: ?[]const u8 = null,
     extensions: ?Extension = null,
@@ -537,7 +599,7 @@ const Material = struct {
     pbrMetallicRoughness: ?PbrMetallicRoughness = null,
     normalTexture: ?NormalTexture = null,
     occlusionTexture: ?OcclusionTexture = null,
-    emmisiveTexture: ?TextureInfo = null,
+    emissiveTexture: ?TextureInfo = null,
     emissiveFactor: @Vector(3, Number) = @splat(0),
     alphaMode: AlphaMode = .OPAQUE,
     alphaCutoff: Number = 0.5,
@@ -699,11 +761,9 @@ const locations = std.EnumArray(Mesh.Primitive.AttribMap.Attribute, u32).init(.{
 
 const NODE = 3;
 const INSTANCE = 4;
-const NODE_TREE = 0;
-const INSTANCE_DATA = 1;
 
 const vert =
-    \\#version 460 core
+    \\
 ++ blk: {
     var str: []const u8 = "";
 
@@ -718,8 +778,6 @@ const vert =
 } ++
     std.fmt.comptimePrint("\n#define NODE {d}", .{NODE}) ++
     std.fmt.comptimePrint("\n#define INSTANCE {d}", .{INSTANCE}) ++
-    std.fmt.comptimePrint("\n#define NODE_TREE {d}", .{NODE_TREE}) ++
-    std.fmt.comptimePrint("\n#define INSTANCE_DATA {d}", .{INSTANCE_DATA}) ++
     \\
     \\layout (location = POSITION) in vec3 vert_pos;
     \\layout (location = NORMAL) in vec3 vert_norm;
@@ -757,17 +815,16 @@ const vert =
     \\
     \\mat4 compute_transform() {
     \\  mat4 model = mat4(1.0);
-    \\  uint cur_node = mesh_node;
+    \\  uint cur_node = mesh_node + 1;
     \\  while (cur_node != 0) {
-    \\    model = nodes[cur_node].transform * model;
+    \\    model = nodes[cur_node - 1].transform * model;
     \\    cur_node = nodes[cur_node].parent;
     \\  }
     \\  return model;
     \\}
     \\
     \\void main() {
-    \\  mat4 model = mat4(1.0);
-    \\  model[3] = vec4(0, 16, 0, 1);
+    \\  mat4 model = compute_transform();
     \\  vec4 view_norm = u_view * inverse(transpose(model)) * vec4(vert_norm, 0);
     \\  vec4 view_pos = u_view * model * vec4(vert_pos, 1);
     \\  
@@ -776,6 +833,7 @@ const vert =
     \\  frag_uv = vert_uv;
     \\  gl_Position = u_proj * view_pos;
     \\}
+    \\
 ;
 
 const frag =
@@ -794,7 +852,7 @@ const frag =
     \\in vec2 frag_uv;
     \\
     \\void main() {
-    \\  out_color = vec4(frag_uv.x, 0, frag_uv.y, 1);
+    \\  out_color = vec4(frag_uv, 1, 1);
     \\  out_pos = vec4(frag_pos, 1);
     \\  out_norm = vec4(frag_norm, 1);
     \\}

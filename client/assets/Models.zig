@@ -51,65 +51,15 @@ pub fn missing_model(self: *Models) usize {
     return self.name_to_model.get(".blocks.main.default").?;
 }
 
-const ModelKind = enum {
-    face_model,
-};
-
-const FaceModel = struct {
-    kind: ModelKind,
-    size: struct { Size, Size },
-    offset: struct { Offset, Offset, Offset },
-
-    const Size = enum(u4) {
-        @"1/16" = 0,
-        @"2/16",
-        @"3/16",
-        @"4/16",
-        @"5/16",
-        @"6/16",
-        @"7/16",
-        @"8/16",
-        @"9/16",
-        @"10/16",
-        @"11/16",
-        @"12/16",
-        @"13/16",
-        @"14/16",
-        @"15/16",
-        @"16/16",
-    };
-
-    const Offset = enum(u4) {
-        @"0/16" = 0,
-        @"1/16",
-        @"2/16",
-        @"3/16",
-        @"4/16",
-        @"5/16",
-        @"6/16",
-        @"7/16",
-        @"8/16",
-        @"9/16",
-        @"10/16",
-        @"11/16",
-        @"12/16",
-        @"13/16",
-        @"14/16",
-        @"15/16",
-    };
-};
-
 fn add_model(self: *Models, ctx: *BuildCtx, file: *VFS.File) !void {
     errdefer ctx.ok = false;
     defer _ = ctx.temp.reset(.retain_capacity);
 
     var gltf = try glTF.init(self.arena.allocator(), file);
     errdefer gltf.deinit(self.arena.allocator());
-    try self.gltfs.put(
-        self.arena.allocator(),
-        try Assets.to_name(self.arena.allocator(), file.path),
-        gltf,
-    );
+    const name = try Assets.to_name(self.arena.allocator(), file.path);
+    try self.gltfs.put(self.arena.allocator(), name, gltf);
+    logger.info("registered model {s}", .{name});
 }
 
 const BuildCtx = struct {

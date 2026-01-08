@@ -138,8 +138,8 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
     const camera = &Game.instance().camera;
-    try self.block_renderer.draw();
-    for (App.assets().get_models().gltfs.values()) |*model| {
+    // try self.block_renderer.draw();
+    if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.Buggy")) |model| {
         try model.draw(camera);
     }
 

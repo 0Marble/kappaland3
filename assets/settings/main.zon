@@ -83,6 +83,13 @@
                     .kind = .checkbox,
                     .value = true,
                 },
+                .{
+                    .name = "fov",
+                    .kind = .float_slider,
+                    .min = 0.0,
+                    .max = 2.0,
+                    .value = 1.5,
+                },
             },
         },
         .{

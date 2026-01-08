@@ -54,6 +54,11 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
         .{ .scancode = .from_sdl(c.SDL_SCANCODE_LEFTBRACKET) },
     );
     try App.keys().on_action(".main.keys.detatch", detatch, .{self}, @src());
+    {
+        const evt = try App.settings().settings_change_event(".main.renderer.fov");
+        _ = try App.event_manager().add_listener(evt, Frustum.update_fov, .{&self.frustum}, @src());
+    }
+
     std.log.info("{*}: initialized camera", .{self});
 }
 

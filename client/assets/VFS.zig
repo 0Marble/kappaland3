@@ -176,18 +176,19 @@ pub const Dir = struct {
     }
 
     pub fn visit_no_fail(self: *Dir, comptime fptr: anytype, args: anytype) bool {
+        var ok = true;
         for (self.entries.values()) |node| {
             switch (node.*) {
-                .dir => |*dir| if (!dir.visit_no_fail(fptr, args)) return false,
+                .dir => |*dir| ok &= dir.visit_no_fail(fptr, args),
                 .file => |*file| {
                     @call(.auto, fptr, args ++ .{file}) catch |err| {
                         logger.err("{s}: could not visit: {}", .{ file.path, err });
-                        return false;
+                        ok = false;
                     };
                 },
             }
         }
-        return true;
+        return !ok;
     }
 
     pub fn format(
