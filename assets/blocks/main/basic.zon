@@ -1,6 +1,11 @@
 .{
-    .textures = .{ .tex = ".blocks.main.debug_bot" },
-    .faces = .{ .face = ".blocks.main.default" },
+    .textures = .{ .tex = "missing" },
+    .faces = .{
+        .face = .{
+            .size = .{ .@"16/16", .@"16/16" },
+            .offset = .{ .@"0/16", .@"0/16", .@"0/16" },
+        },
+    },
     .model = .{
         .front = .{ .face, .tex },
         .back = .{ .face, .tex },

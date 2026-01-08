@@ -7,16 +7,12 @@ const glTF = @import("glTF.zig");
 const Models = @This();
 const logger = std.log.scoped(.models);
 
-name_to_model: std.StringArrayHashMapUnmanaged(usize),
-gltfs: std.ArrayList(glTF),
-models: std.AutoArrayHashMapUnmanaged(Block.Face, void),
+gltfs: std.StringArrayHashMapUnmanaged(glTF),
 arena: std.heap.ArenaAllocator,
 prefix: []const u8,
 
 pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !Models {
     var self = Models{
-        .name_to_model = .empty,
-        .models = .empty,
         .arena = .init(gpa),
         .prefix = dir.path,
         .gltfs = .empty,
@@ -107,27 +103,13 @@ fn add_model(self: *Models, ctx: *BuildCtx, file: *VFS.File) !void {
     errdefer ctx.ok = false;
     defer _ = ctx.temp.reset(.retain_capacity);
 
-    const ext = std.fs.path.extension(file.path);
-    if (std.mem.eql(u8, ".glb", ext)) {
-        var gltf = try glTF.init(self.arena.allocator(), file);
-        errdefer gltf.deinit();
-        try self.gltfs.append(self.arena.allocator(), gltf);
-        return;
-    }
-
-    const zon = try (try file.read_all(ctx.temp.allocator())).parse_zon(ctx.temp.allocator());
-    const model = try zon.parse(FaceModel, ctx.temp.allocator());
-
-    const name = try Assets.to_name(self.arena.allocator(), file.path[self.prefix.len..]);
-    const entry = try self.models.getOrPut(self.arena.allocator(), .{
-        .u_scale = @intFromEnum(model.size[0]),
-        .v_scale = @intFromEnum(model.size[1]),
-        .u_offset = @intFromEnum(model.offset[0]),
-        .v_offset = @intFromEnum(model.offset[1]),
-        .w_offset = @intFromEnum(model.offset[2]),
-    });
-    try self.name_to_model.put(self.arena.allocator(), name, entry.index);
-    logger.info("registered model {s}@{d}", .{ name, entry.index });
+    var gltf = try glTF.init(self.arena.allocator(), file);
+    errdefer gltf.deinit();
+    try self.gltfs.put(
+        self.arena.allocator(),
+        try Assets.to_name(self.arena.allocator(), file.path),
+        gltf,
+    );
 }
 
 const BuildCtx = struct {

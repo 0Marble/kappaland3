@@ -32,7 +32,6 @@ pub fn init(gpa: std.mem.Allocator) !Assets {
         gpa,
         try vfs.root().get_dir(Options.blocks_dir),
         &blocks_atlas,
-        &models,
     );
     errdefer blocks.deinit();
 

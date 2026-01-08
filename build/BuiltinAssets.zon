@@ -2,5 +2,4 @@
     "settings/main.zon",
     "blocks/main/basic.zon",
     "blocks/main/air.zon",
-    "models/blocks/main/default.zon",
 }

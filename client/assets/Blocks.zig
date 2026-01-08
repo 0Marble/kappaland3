@@ -10,6 +10,7 @@ const OOM = std.mem.Allocator.Error;
 const logger = std.log.scoped(.blocks);
 
 blocks: std.StringArrayHashMapUnmanaged(Info) = .empty,
+models: std.AutoArrayHashMapUnmanaged(Block.Face, void) = .empty,
 arena: std.heap.ArenaAllocator,
 
 air: Block = undefined,
@@ -17,7 +18,7 @@ dirt: Block = undefined,
 stone: Block = undefined,
 grass: Block = undefined,
 
-pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas, models: *Models) !Blocks {
+pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas) !Blocks {
     logger.info("loading block data from {s}", .{dir.path});
     var self = Blocks{ .arena = .init(gpa) };
 
@@ -26,7 +27,6 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas, models:
         .arena = .init(gpa),
         .blocks = &self,
         .atlas = atlas,
-        .models = models,
     };
     defer ctx.arena.deinit();
     _ = dir.visit_no_fail(BuildCtx.parse, .{&ctx});
@@ -76,7 +76,6 @@ const BuildCtx = struct {
     prefix: []const u8,
     arena: std.heap.ArenaAllocator,
     atlas: *TextureAtlas,
-    models: *Models,
     blocks: *Blocks,
 
     fn parse(self: *BuildCtx, file: *VFS.File) !void {
@@ -189,17 +188,17 @@ const BuildCtx = struct {
         )).map;
         const model: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "model", .map)).map;
 
-        for (std.enums.values(Block.Direction)) |face| {
-            const s = (try ParsedBlock.get_ensure_type(solid, @tagName(face), .bool)).bool;
-            info.solid.put(face, s);
+        for (std.enums.values(Block.Direction)) |direction| {
+            const s = (try ParsedBlock.get_ensure_type(solid, @tagName(direction), .bool)).bool;
+            info.solid.put(direction, s);
 
             const face_model = (try ParsedBlock.get_ensure_type(
                 model,
-                @tagName(face),
+                @tagName(direction),
                 .key_list,
             )).key_list;
             if (face_model.len % 2 != 0) {
-                logger.err("model.{s} should be a list [model1, tex1, ...]", .{@tagName(face)});
+                logger.err("model.{s} should be a list [model1, tex1, ...]", .{@tagName(direction)});
                 return error.TypeError;
             }
             const faces_buf = try self.blocks.arena.allocator().alloc(usize, face_model.len / 2);
@@ -208,28 +207,74 @@ const BuildCtx = struct {
             for (0..face_model.len / 2) |i| {
                 errdefer logger.err("while parsing model[{d}]", .{2 * i});
 
-                const model_local_name = face_model[2 * i];
+                const face_local_name = face_model[2 * i];
                 const tex_local_name = face_model[2 * i + 1];
-                const model_global_name = (try ParsedBlock.get_ensure_type(
-                    faces,
-                    model_local_name,
-                    .str,
-                )).str;
                 const tex_global_name = (try ParsedBlock.get_ensure_type(
                     textures,
                     tex_local_name,
                     .str,
                 )).str;
+                const face_map = (try ParsedBlock.get_ensure_type(
+                    faces,
+                    face_local_name,
+                    .map,
+                )).map;
 
-                const model_idx = self.models.get_idx_or_warn(model_global_name);
+                const size_str = (try ParsedBlock.get_ensure_type(
+                    face_map,
+                    "size",
+                    .key_list,
+                )).key_list;
+                if (size_str.len != 2) {
+                    logger.err("expected size to have 2 values", .{});
+                    return error.InvalidName;
+                }
+                const u_size = std.meta.stringToEnum(Size, size_str[0]) orelse {
+                    logger.err("invaid value of size: {s}", .{size_str[0]});
+                    return error.InvalidName;
+                };
+                const v_size = std.meta.stringToEnum(Size, size_str[1]) orelse {
+                    logger.err("invaid value of size: {s}", .{size_str[1]});
+                    return error.InvalidName;
+                };
+
+                const offset_str = (try ParsedBlock.get_ensure_type(
+                    face_map,
+                    "offset",
+                    .key_list,
+                )).key_list;
+                if (offset_str.len != 3) {
+                    logger.err("expected offset to have 3 values", .{});
+                    return error.InvalidName;
+                }
+                const u_offset = std.meta.stringToEnum(Offset, offset_str[0]) orelse {
+                    logger.err("invaid value of offset: {s}", .{offset_str[0]});
+                    return error.InvalidName;
+                };
+                const v_offset = std.meta.stringToEnum(Offset, offset_str[1]) orelse {
+                    logger.err("invaid value of offset: {s}", .{offset_str[1]});
+                    return error.InvalidName;
+                };
+                const w_offset = std.meta.stringToEnum(Offset, offset_str[2]) orelse {
+                    logger.err("invaid value of offset: {s}", .{offset_str[2]});
+                    return error.InvalidName;
+                };
+                const entry = try self.blocks.models.getOrPut(self.blocks.arena.allocator(), .{
+                    .u_scale = @intFromEnum(u_size),
+                    .v_scale = @intFromEnum(v_size),
+                    .u_offset = @intFromEnum(u_offset),
+                    .v_offset = @intFromEnum(v_offset),
+                    .w_offset = @intFromEnum(w_offset),
+                });
+
                 const tex_idx = self.atlas.get_idx_or_warn(tex_global_name);
 
-                faces_buf[i] = model_idx;
+                faces_buf[i] = entry.index;
                 tex_buf[i] = tex_idx;
             }
 
-            info.faces.put(face, faces_buf);
-            info.textures.put(face, tex_buf);
+            info.faces.put(direction, faces_buf);
+            info.textures.put(direction, tex_buf);
         }
 
         try self.blocks.blocks.put(self.blocks.arena.allocator(), info.name, info);
@@ -356,6 +401,44 @@ const ParsedBlock = struct {
     }
 
     const Tag = std.meta.Tag(Value);
+};
+
+const Size = enum(u4) {
+    @"1/16" = 0,
+    @"2/16",
+    @"3/16",
+    @"4/16",
+    @"5/16",
+    @"6/16",
+    @"7/16",
+    @"8/16",
+    @"9/16",
+    @"10/16",
+    @"11/16",
+    @"12/16",
+    @"13/16",
+    @"14/16",
+    @"15/16",
+    @"16/16",
+};
+
+const Offset = enum(u4) {
+    @"0/16" = 0,
+    @"1/16",
+    @"2/16",
+    @"3/16",
+    @"4/16",
+    @"5/16",
+    @"6/16",
+    @"7/16",
+    @"8/16",
+    @"9/16",
+    @"10/16",
+    @"11/16",
+    @"12/16",
+    @"13/16",
+    @"14/16",
+    @"15/16",
 };
 
 pub const Info = struct {
