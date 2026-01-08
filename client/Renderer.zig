@@ -68,25 +68,28 @@ pub fn init(self: *Renderer) !void {
 }
 
 fn init_settings(self: *Renderer) !void {
-    try self.lighting_pass.observe_settings(SSAO_SETTINGS ++ ".enable", bool, "u_ssao_enabled");
-    try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur");
-    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius");
-    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".bias", f32, "u_bias");
+    try self.lighting_pass.observe_settings(SSAO_SETTINGS ++ ".enable", bool, "u_ssao_enabled", @src());
+    try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur", @src());
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius", @src());
+    try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".bias", f32, "u_bias", @src());
 
     try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".enable",
         bool,
         "u_enable_fxaa",
+        @src(),
     );
     try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".contrast",
         f32,
         "u_fxaa_contrast",
+        @src(),
     );
     try self.postprocessing_pass.observe_settings(
         FXAA_SETTINGS ++ ".debug_outline",
         bool,
         "u_fxaa_debug_outline",
+        @src(),
     );
 }
 
@@ -408,7 +411,7 @@ fn init_screen(self: *Renderer) !void {
         .{ .name = "render_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         .{ .name = "render_frag", .sources = &.{lighting_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.lighting_pass = try .init(&render_sources);
+    self.lighting_pass = try .init(&render_sources, "lighting_pass");
     try self.lighting_pass.set_vec3("u_ambient", .{ 0.3, 0.3, 0.3 });
     try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 0.9 });
     try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
@@ -420,14 +423,14 @@ fn init_screen(self: *Renderer) !void {
         .{ .name = "post_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         .{ .name = "post_frag", .sources = &.{postprocessing_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.postprocessing_pass = try .init(&post_sources);
+    self.postprocessing_pass = try .init(&post_sources, "postprocessing_pass");
     try self.postprocessing_pass.set_int("u_rendered_tex", RENDERED_TEX_UNIFORM);
 
     var ssao_sources: [2]Shader.Source = .{
         .{ .name = "ssao_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         .{ .name = "ssao_frag", .sources = &.{ssao_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.ssao_pass = try .init(&ssao_sources);
+    self.ssao_pass = try .init(&ssao_sources, "ssao_pass");
     try self.ssao_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.ssao_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
     try self.ssao_pass.set_int("u_noise_tex", NOISE_TEX_UNIFORM);
@@ -436,10 +439,10 @@ fn init_screen(self: *Renderer) !void {
         .{ .name = "ssao_blur_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         .{ .name = "ssao_blur_frag", .sources = &.{blur_frag}, .kind = gl.FRAGMENT_SHADER },
     };
-    self.ssao_blur_pass = try .init(&ssao_blur_sources);
+    self.ssao_blur_pass = try .init(&ssao_blur_sources, "ssao_blur_pass");
     try self.ssao_blur_pass.set_int("u_tex", SSAO_TEX_UNIFORM);
 
-    for (0..SSAO_SAMPLES_COUNT) |i| {
+    inline for (0..SSAO_SAMPLES_COUNT) |i| {
         const phi = App.rng().float(f32) * std.math.pi * 0.4;
         const theta = App.rng().float(f32) * std.math.pi * 2.0;
         const r = App.rng().float(f32);
@@ -449,7 +452,7 @@ fn init_screen(self: *Renderer) !void {
             r * @cos(phi),
         });
         self.ssao_samples[i] = vec;
-        const name = try std.fmt.allocPrintSentinel(App.frame_alloc(), "u_ssao_samples[{d}]", .{i}, 0);
+        const name = std.fmt.comptimePrint("u_ssao_samples[{d}]", .{i});
         try self.ssao_pass.set_vec3(name, self.ssao_samples[i]);
     }
 }

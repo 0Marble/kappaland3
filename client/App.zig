@@ -40,12 +40,16 @@ pub const UnhandledError = std.mem.Allocator.Error || util.GlError;
 pub const Layer = struct {
     data: *anyopaque,
 
-    on_attatch: *const fn (*anyopaque) anyerror!void,
-    on_frame_start: *const fn (*anyopaque) UnhandledError!void,
-    on_update: *const fn (*anyopaque) UnhandledError!void,
-    on_frame_end: *const fn (*anyopaque) UnhandledError!void,
-    on_detatch: *const fn (*anyopaque) void,
-    on_resize: *const fn (*anyopaque, i32, i32) UnhandledError!void,
+    on_attatch: *const fn (*anyopaque) anyerror!void = noop,
+    on_frame_start: *const fn (*anyopaque) UnhandledError!void = noop,
+    on_update: *const fn (*anyopaque) UnhandledError!void = noop,
+    on_frame_end: *const fn (*anyopaque) UnhandledError!void = noop,
+    on_detatch: *const fn (*anyopaque) void = on_detatch_default,
+    on_resize: *const fn (*anyopaque, i32, i32) UnhandledError!void = on_resize_default,
+
+    fn on_resize_default(_: *anyopaque, _: i32, _: i32) UnhandledError!void {}
+    fn noop(_: *anyopaque) UnhandledError!void {}
+    fn on_detatch_default(_: *anyopaque) void {}
 };
 
 const App = @This();
@@ -237,6 +241,7 @@ pub fn run() UnhandledError!void {
             const layer = app.layers.items[j];
             try layer.on_frame_start(layer.data);
         }
+        try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
         app.events.process();
         for (0..app.layers.items.len) |i| {

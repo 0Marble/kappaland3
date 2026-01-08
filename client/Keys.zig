@@ -158,9 +158,15 @@ pub fn register_action(self: *Keys, name: []const u8) !void {
     entry.value_ptr.* = action;
 }
 
-pub fn on_action(self: *Keys, name: []const u8, comptime func: anytype, args: anytype) !void {
+pub fn on_action(
+    self: *Keys,
+    name: []const u8,
+    comptime func: anytype,
+    args: anytype,
+    src: std.builtin.SourceLocation,
+) !void {
     const action = self.actions.get(name) orelse return error.NoSuchAction;
-    _ = try App.event_manager().add_listener(action.event, func, args);
+    _ = try App.event_manager().add_listener(action.event, func, args, src);
 }
 
 pub fn bind_action(self: *Keys, name: []const u8, bind: Bind) !void {

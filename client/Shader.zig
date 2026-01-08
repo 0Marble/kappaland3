@@ -6,13 +6,15 @@ const gl_call = @import("util.zig").gl_call;
 const zm = @import("zm");
 
 program: gl.uint,
-uniforms: std.StringHashMapUnmanaged(gl.int) = .{},
+uniforms: std.StringHashMapUnmanaged(gl.int) = .empty,
+name: []const u8,
 
 pub fn observe_settings(
     self: *Shader,
     setting: []const u8,
     comptime T: type,
     comptime name: [:0]const u8,
+    src: std.builtin.SourceLocation,
 ) !void {
     const evt = try App.settings().settings_change_event(setting);
 
@@ -32,7 +34,7 @@ pub fn observe_settings(
         }
     };
 
-    _ = try App.event_manager().add_listener(evt, Callback.callback, .{self});
+    _ = try App.event_manager().add_listener(evt, Callback.callback, .{self}, src);
 }
 
 pub const Source = struct {
@@ -95,7 +97,7 @@ pub const Source = struct {
 };
 
 const Shader = @This();
-pub fn init(sources: []Source) !Shader {
+pub fn init(sources: []Source, name: []const u8) !Shader {
     const program = try gl_call(gl.CreateProgram());
     for (sources) |*s| {
         try s.ensure_compiled();
@@ -126,7 +128,7 @@ pub fn init(sources: []Source) !Shader {
         s.deinit();
     }
 
-    return Shader{ .program = program };
+    return Shader{ .program = program, .name = name };
 }
 
 pub fn deinit(self: *Shader) void {

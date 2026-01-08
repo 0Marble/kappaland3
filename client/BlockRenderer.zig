@@ -67,7 +67,7 @@ pub fn init(self: *Self) !void {
             .name = "block_frag",
         },
     };
-    self.block_pass = try .init(&sources);
+    self.block_pass = try .init(&sources, "block_pass");
     try self.block_pass.set_int("u_atlas", BLOCK_ATLAS_TEX);
     logger.debug("{*} Initialized block pass", .{self});
 
@@ -94,8 +94,8 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
-    try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao");
-    try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor");
+    try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao", @src());
+    try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor", @src());
 
     inline for (ChunkMesh.Ao.idx_to_ao, 0..) |ao, i| {
         const uni: [:0]const u8 = std.fmt.comptimePrint("u_idx_to_ao[{}]", .{i});

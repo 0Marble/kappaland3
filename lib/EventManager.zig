@@ -116,6 +116,7 @@ pub fn add_listener(
     evt: Event,
     comptime func: anytype,
     args: anytype,
+    src: std.builtin.SourceLocation,
 ) Error!EventListenerHandle {
     const Args = @TypeOf(args);
     const Fn = @TypeOf(func);
@@ -142,6 +143,7 @@ pub fn add_listener(
     const callback = Callback{
         .data = @ptrCast(closure),
         .fptr = @ptrCast(&Closure.callback),
+        .src = src,
     };
 
     try event_data.callbacks.append(self.gpa, callback);
@@ -174,6 +176,7 @@ pub const EventListenerHandle = struct {
 const Callback = struct {
     data: *anyopaque,
     fptr: *const anyopaque,
+    src: std.builtin.SourceLocation,
 };
 
 const EventData = struct {
@@ -224,11 +227,11 @@ test {
 
     var handler = Handler{};
 
-    _ = try events.add_listener(e1, Handler.on_e1, .{&handler});
-    _ = try events.add_listener(e2, Handler.on_e2, .{&handler});
+    _ = try events.add_listener(e1, Handler.on_e1, .{&handler}, @src());
+    _ = try events.add_listener(e2, Handler.on_e2, .{&handler}, @src());
     try std.testing.expectError(
         Error.EventBodyTypeMismatch,
-        events.add_listener(e1, Handler.on_e3, .{&handler}),
+        events.add_listener(e1, Handler.on_e3, .{&handler}, @src()),
     );
 
     events.process();
@@ -261,7 +264,7 @@ test "Multi arg" {
     };
 
     var res: u32 = 0;
-    _ = try events.add_listener(evt, Handler.callback, .{ &res, 69 });
+    _ = try events.add_listener(evt, Handler.callback, .{ &res, 69 }, @src());
 
     try events.emit(evt, @as(u32, 1));
     try events.emit(evt, @as(u32, 100));
