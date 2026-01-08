@@ -139,7 +139,9 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
 
     const camera = &Game.instance().camera;
     // try self.block_renderer.draw();
+    // if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.ToyCar")) |model| {
     if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.Buggy")) |model| {
+        // if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.2CylinderEngine")) |model| {
         try model.draw(camera);
     }
 

@@ -20,35 +20,25 @@ shader: Shader = undefined,
 var counter: usize = 0;
 
 pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !glTF {
-    counter += 1;
-
     var parser = try Parser.init(gpa, file);
     defer parser.arena.deinit();
 
-    const vert_defines = try std.fmt.allocPrintSentinel(
-        parser.arena.allocator(),
+    const vert = try std.fmt.allocPrintSentinel(parser.arena.allocator(),
         \\#version 460 core
         \\#define NODE_TREE {d}
         \\#define INSTANCE_DATA {d}
-    ,
-        .{ counter * 2, counter * 2 + 1 },
-        0,
-    );
-    const vert_shader = try std.mem.concatWithSentinel(
-        parser.arena.allocator(),
-        u8,
-        &.{ vert_defines, vert },
-        0,
-    );
+        \\{s}
+    , .{ counter * 2, counter * 2 + 1, vert_suffix }, 0);
 
     var self = glTF{};
-    try self.upload(gpa, &parser);
     var src: [2]Shader.Source = .{
-        Shader.Source{ .name = "vert", .sources = &.{vert_shader}, .kind = gl.VERTEX_SHADER },
+        Shader.Source{ .name = "vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         Shader.Source{ .name = "frag", .sources = &.{frag}, .kind = gl.FRAGMENT_SHADER },
     };
     self.shader = try .init(&src, "gltf_pass");
+    try self.upload(gpa, &parser);
 
+    counter += 1;
     return self;
 }
 
@@ -762,7 +752,7 @@ const locations = std.EnumArray(Mesh.Primitive.AttribMap.Attribute, u32).init(.{
 const NODE = 3;
 const INSTANCE = 4;
 
-const vert =
+const vert_suffix =
     \\
 ++ blk: {
     var str: []const u8 = "";
@@ -818,7 +808,7 @@ const vert =
     \\  uint cur_node = mesh_node + 1;
     \\  while (cur_node != 0) {
     \\    model = nodes[cur_node - 1].transform * model;
-    \\    cur_node = nodes[cur_node].parent;
+    \\    cur_node = nodes[cur_node - 1].parent;
     \\  }
     \\  return model;
     \\}
