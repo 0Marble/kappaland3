@@ -1,5 +1,11 @@
 .{
     .{
+        .type = .str,
+        .name = "tool",
+        .default = "game",
+        .desc = "which tool to open? game | block",
+    },
+    .{
         .type = .bool,
         .name = "gl_debug",
         .desc = "Enable OpenGL debug context",

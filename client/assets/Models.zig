@@ -104,7 +104,7 @@ fn add_model(self: *Models, ctx: *BuildCtx, file: *VFS.File) !void {
     defer _ = ctx.temp.reset(.retain_capacity);
 
     var gltf = try glTF.init(self.arena.allocator(), file);
-    errdefer gltf.deinit();
+    errdefer gltf.deinit(self.arena.allocator());
     try self.gltfs.put(
         self.arena.allocator(),
         try Assets.to_name(self.arena.allocator(), file.path),

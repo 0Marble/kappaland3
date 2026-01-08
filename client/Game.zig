@@ -28,11 +28,11 @@ const Instance = struct {
 pub fn layer() App.Layer {
     return App.Layer{
         .data = @ptrCast(&Instance.instance),
-        .on_attatch = @ptrCast(&on_attatch),
+        .on_attach = @ptrCast(&on_attach),
         .on_frame_start = @ptrCast(&on_frame_start),
         .on_update = @ptrCast(&on_update),
         .on_frame_end = @ptrCast(&on_frame_end),
-        .on_detatch = @ptrCast(&on_detatch),
+        .on_detach = @ptrCast(&on_detach),
         .on_resize = @ptrCast(&on_resize),
     };
 }
@@ -48,7 +48,7 @@ pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
     return .{ cam_chunk + LOAD_MIN, cam_chunk + LOAD_MAX };
 }
 
-fn on_attatch(self: *Game) !void {
+fn on_attach(self: *Game) !void {
     self.current_selected_block = Block.stone();
 
     logger.info("{*}: initializing camera", .{self});
@@ -125,7 +125,7 @@ fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
     self.camera.frustum.update_aspect(width / height);
 }
 
-fn on_detatch(self: *Game) void {
+fn on_detach(self: *Game) void {
     self.camera.deinit();
     self.renderer.deinit();
     self.chunk_manager.deinit();

@@ -63,8 +63,9 @@ pub fn to_name(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
     var w = buf.writer(gpa);
     while (it.next()) |s| try w.print(".{s}", .{s.name});
     try w.print(".{s}", .{std.fs.path.stem(path)});
+    try buf.append(gpa, 0);
 
-    return buf.items;
+    return buf.items[0 .. buf.items.len - 1];
 }
 
 pub fn get_vfs(self: *Assets) *VFS {

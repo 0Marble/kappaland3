@@ -137,9 +137,12 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.g_buffer_fbo));
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
-    try self.block_renderer.draw();
-
     const camera = &Game.instance().camera;
+    // try self.block_renderer.draw();
+    for (App.assets().get_models().gltfs.values()) |*model| {
+        try model.draw(camera);
+    }
+
     if (enable_ssao) {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
         try gl_call(gl.Disable(gl.DEPTH_TEST));

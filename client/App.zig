@@ -12,6 +12,7 @@ pub const DebugUi = @import("DebugUi.zig");
 pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
 pub const Assets = @import("Assets.zig");
+pub const ModelViewer = @import("ModelViewer.zig");
 
 const logger = std.log.scoped(.app);
 
@@ -40,11 +41,11 @@ pub const UnhandledError = std.mem.Allocator.Error || util.GlError;
 pub const Layer = struct {
     data: *anyopaque,
 
-    on_attatch: *const fn (*anyopaque) anyerror!void = noop,
+    on_attach: *const fn (*anyopaque) anyerror!void = noop,
     on_frame_start: *const fn (*anyopaque) UnhandledError!void = noop,
     on_update: *const fn (*anyopaque) UnhandledError!void = noop,
     on_frame_end: *const fn (*anyopaque) UnhandledError!void = noop,
-    on_detatch: *const fn (*anyopaque) void = on_detatch_default,
+    on_detach: *const fn (*anyopaque) void = on_detatch_default,
     on_resize: *const fn (*anyopaque, i32, i32) UnhandledError!void = on_resize_default,
 
     fn on_resize_default(_: *anyopaque, _: i32, _: i32) UnhandledError!void {}
@@ -74,14 +75,18 @@ pub fn init() !void {
     app.debug_ui = try .init(&app);
 
     app.layers = .empty;
-    try push_layer(Game.layer());
+    if (comptime std.mem.eql(u8, "game", Options.tool)) {
+        try push_layer(Game.layer());
+    } else if (comptime std.mem.eql(u8, "viewer", Options.tool)) {
+        try push_layer(ModelViewer.layer());
+    } else @compileError("Unknown tool: " ++ Options.tool);
 
     logger.info("Started the client", .{});
 }
 
 pub fn push_layer(layer: Layer) UnhandledError!void {
     try app.layers.append(App.gpa(), layer);
-    layer.on_attatch(layer.data) catch |err| switch (err) {
+    layer.on_attach(layer.data) catch |err| switch (err) {
         error.OutOfMemory, error.GlError => return @errorCast(err),
         else => {
             logger.err("Could not attatch layer! {}", .{err});
@@ -139,7 +144,7 @@ fn init_gl() !void {
         } else {
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT));
             try gl_call(gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS));
-            try gl_call(gl.DebugMessageCallback(&gl_debug_callback, null));
+            try gl_call(gl.DebugMessageCallback(@ptrCast(&GlDebug.callback), null));
             logger.info("Enabled OpenGL debug output", .{});
         }
     }
@@ -147,23 +152,59 @@ fn init_gl() !void {
     logger.info("Initialized OpenGL", .{});
 }
 
-fn gl_debug_callback(
-    source: gl.@"enum",
-    typ: gl.@"enum",
-    id: u32,
-    severity: gl.@"enum",
-    size: i32,
-    msg: [*:0]const u8,
-    _: ?*const anyopaque,
-) callconv(.c) void {
-    var msg_slice: [:0]const u8 = undefined;
-    msg_slice.ptr = msg;
-    msg_slice.len = @intCast(size);
+const GlDebug = struct {
+    const Source = enum(u32) {
+        API = gl.DEBUG_SOURCE_API,
+        APPLICATION = gl.DEBUG_SOURCE_APPLICATION,
+        OTHER = gl.DEBUG_SOURCE_OTHER,
+        SHADER_COMPILER = gl.DEBUG_SOURCE_SHADER_COMPILER,
+        THIRD_PARTY = gl.DEBUG_SOURCE_THIRD_PARTY,
+        WINDOW_SYSTEM = gl.DEBUG_SOURCE_WINDOW_SYSTEM,
+        _,
+    };
 
-    logger.warn("--------", .{});
-    logger.warn("{x}:{x}:{x}:{x}: {s}", .{ source, typ, id, severity, msg });
-    logger.warn("--------", .{});
-}
+    const Type = enum(u32) {
+        DEPRECATED_BEHAVIOR = gl.DEBUG_TYPE_DEPRECATED_BEHAVIOR,
+        ERROR = gl.DEBUG_TYPE_ERROR,
+        MARKER = gl.DEBUG_TYPE_MARKER,
+        OTHER = gl.DEBUG_TYPE_OTHER,
+        PERFORMANCE = gl.DEBUG_TYPE_PERFORMANCE,
+        POP_GROUP = gl.DEBUG_TYPE_POP_GROUP,
+        PORTABILITY = gl.DEBUG_TYPE_PORTABILITY,
+        PUSH_GROUP = gl.DEBUG_TYPE_PUSH_GROUP,
+        UNDEFINED_BEHAVIOR = gl.DEBUG_TYPE_UNDEFINED_BEHAVIOR,
+        _,
+    };
+
+    const Severity = enum(u32) {
+        HIGH = gl.DEBUG_SEVERITY_HIGH,
+        LOW = gl.DEBUG_SEVERITY_LOW,
+        MEDIUM = gl.DEBUG_SEVERITY_MEDIUM,
+        NOTIFICATION = gl.DEBUG_SEVERITY_NOTIFICATION,
+    };
+
+    fn callback(
+        source: Source,
+        typ: Type,
+        id: u32,
+        severity: Severity,
+        size: i32,
+        msg: [*:0]const u8,
+        _: ?*const anyopaque,
+    ) callconv(.c) void {
+        var msg_slice: [:0]const u8 = undefined;
+        msg_slice.ptr = msg;
+        msg_slice.len = @intCast(size);
+
+        logger.warn("--------", .{});
+        logger.warn("{}:{}:{x}:{}: {s}", .{ source, typ, id, severity, msg });
+        logger.warn("--------", .{});
+        if (source != .SHADER_COMPILER and severity == .HIGH) {
+            std.debug.dumpCurrentStackTrace(null);
+            logger.warn("--------", .{});
+        }
+    }
+};
 
 pub fn deinit() void {
     logger.info("Good bye!", .{});
@@ -171,7 +212,7 @@ pub fn deinit() void {
     for (0..app.layers.items.len) |i| {
         const j = app.layers.items.len - 1 - i;
         const layer = app.layers.items[j];
-        layer.on_detatch(layer.data);
+        layer.on_detach(layer.data);
     }
 
     app.debug_ui.deinit();
