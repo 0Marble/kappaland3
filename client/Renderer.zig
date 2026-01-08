@@ -138,7 +138,7 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
     const camera = &Game.instance().camera;
-    // try self.block_renderer.draw();
+    try self.block_renderer.draw();
     for (App.assets().get_models().gltfs.values()) |*model| {
         try model.draw(camera);
     }
@@ -408,7 +408,7 @@ fn init_screen(self: *Renderer) !void {
         .{ .pos = .{ .x = -1, .y = 1 }, .uv = .{ .u = 0, .v = 1 } },
         .{ .pos = .{ .x = 1, .y = 1 }, .uv = .{ .u = 1, .v = 1 } },
         .{ .pos = .{ .x = 1, .y = -1 }, .uv = .{ .u = 1, .v = 0 } },
-    }, &.{ 0, 1, 2, 0, 2, 3 }, gl.STATIC_DRAW);
+    }, &.{ 0, 3, 2, 0, 2, 1 }, gl.STATIC_DRAW);
 
     var render_sources: [2]Shader.Source = .{
         .{ .name = "render_vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },

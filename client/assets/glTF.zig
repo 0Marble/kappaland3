@@ -767,6 +767,7 @@ const vert =
     \\
     \\void main() {
     \\  mat4 model = mat4(1.0);
+    \\  model[3] = vec4(0, 16, 0, 1);
     \\  vec4 view_norm = u_view * inverse(transpose(model)) * vec4(vert_norm, 0);
     \\  vec4 view_pos = u_view * model * vec4(vert_pos, 1);
     \\  

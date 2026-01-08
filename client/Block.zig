@@ -55,7 +55,7 @@ pub fn is_air(self: Block) bool {
     return self.idx == air().idx;
 }
 
-pub const indices: []const u8 = &.{ 0, 1, 2, 0, 2, 3 };
+pub const indices: []const u8 = &.{ 0, 3, 2, 0, 2, 1 };
 
 pub const Direction = enum(u3) {
     front,
