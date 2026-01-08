@@ -10,7 +10,7 @@ const VFS = @import("VFS.zig");
 const logger = std.log.scoped(.texture_atlas);
 
 handle: gl.uint,
-images: std.StringArrayHashMapUnmanaged(usize),
+images: std.StringArrayHashMapUnmanaged(void),
 arena: std.heap.ArenaAllocator,
 img_width: usize,
 img_height: usize,
@@ -48,7 +48,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
         gl.RGB8,
         @intCast(self.img_width),
         @intCast(self.img_height),
-        @intCast(surfaces.items.len),
+        @intCast(surfaces.items.len + 1),
     ));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
@@ -56,7 +56,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE));
 
     try self.generate_missing();
-    for (surfaces.items, 0..) |kv, idx| {
+    for (surfaces.items) |kv| {
         const file, const surface = kv;
         defer c.SDL_DestroySurface(surface);
 
@@ -77,6 +77,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
         const sub_path = file.path[prefix.len..];
         const name = try Assets.to_name(self.arena.allocator(), sub_path);
 
+        const idx = self.images.count();
         try gl_call(gl.TexSubImage3D(
             gl.TEXTURE_2D_ARRAY,
             0, // level
@@ -91,7 +92,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !TextureAtlas {
             @ptrCast(pixels),
         ));
 
-        self.images.putAssumeCapacity(name, idx);
+        self.images.putAssumeCapacity(name, {});
         logger.info("registered texture {s}@{d}", .{ name, idx });
     }
 
@@ -114,7 +115,7 @@ pub fn get_idx(self: *TextureAtlas, name: []const u8) usize {
 }
 
 pub fn get_idx_or_warn(self: *TextureAtlas, name: []const u8) usize {
-    return self.images.get(name) orelse {
+    return self.images.getIndex(name) orelse {
         logger.warn("missing texture: {s}", .{name});
         return self.get_missing();
     };
@@ -180,12 +181,13 @@ fn generate_missing(self: *TextureAtlas) !void {
         }
     }
 
+    const idx = self.images.count();
     try gl_call(gl.TexSubImage3D(
         gl.TEXTURE_2D_ARRAY,
         0, // level
         0, // xoffset
         0, // yoffset
-        @intCast(self.images.count()), // zoffset
+        @intCast(idx), // zoffset
         @intCast(self.img_width), // width
         @intCast(self.img_height), // height
         1, // depth
@@ -193,6 +195,6 @@ fn generate_missing(self: *TextureAtlas) !void {
         gl.UNSIGNED_BYTE,
         @ptrCast(pixels),
     ));
-    self.images.putAssumeCapacity("missing", self.images.count());
-    logger.info("registered missing texture", .{});
+    self.images.putAssumeCapacity("missing", {});
+    logger.info("registered missing texture@{d}", .{idx});
 }
