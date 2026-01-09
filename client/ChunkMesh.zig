@@ -34,42 +34,12 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
     self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
     if (self.is_occluded) return self;
 
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{ 0, 0, @intCast(i) };
-        try self.build_layer_mesh(.front, start, gpa);
-    }
-
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{
-            CHUNK_SIZE - 1,
-            0,
-            @intCast(CHUNK_SIZE - 1 - i),
-        };
-        try self.build_layer_mesh(.back, start, gpa);
-    }
-
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{ @intCast(i), 0, CHUNK_SIZE - 1 };
-        try self.build_layer_mesh(.right, start, gpa);
-    }
-
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{ @intCast(CHUNK_SIZE - 1 - i), 0, 0 };
-        try self.build_layer_mesh(.left, start, gpa);
-    }
-
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{ 0, @intCast(i), CHUNK_SIZE - 1 };
-        try self.build_layer_mesh(.top, start, gpa);
-    }
-
-    for (0..CHUNK_SIZE) |i| {
-        const start: Coords = .{
-            CHUNK_SIZE - 1,
-            @intCast(CHUNK_SIZE - 1 - i),
-            CHUNK_SIZE - 1,
-        };
-        try self.build_layer_mesh(.bot, start, gpa);
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                try self.mesh_block(gpa, .{ x, y, z });
+            }
+        }
     }
 
     return self;
@@ -118,6 +88,44 @@ pub const Face = packed struct(u64) {
     }
 };
 
+fn mesh_block(self: *Mesh, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !void {
+    const pos: Coords = @intCast(xyz);
+    const block = self.chunk.get(pos);
+    if (block.is_air()) return;
+
+    for (std.enums.values(Block.Direction)) |side| {
+        const front = side.front_dir();
+        if (self.is_solid_neighbour_face(pos + front, side.flip())) continue;
+
+        const up = side.up_dir();
+        const down = -side.up_dir();
+        const left = side.left_dir();
+        const right = -side.left_dir();
+
+        const ao = Ao.pack(
+            @intFromBool(self.casts_ao(pos + front + left)),
+            @intFromBool(self.casts_ao(pos + front + right)),
+            @intFromBool(self.casts_ao(pos + front + up)),
+            @intFromBool(self.casts_ao(pos + front + down)),
+            @intFromBool(self.casts_ao(pos + front + left + up)),
+            @intFromBool(self.casts_ao(pos + front + right + up)),
+            @intFromBool(self.casts_ao(pos + front + left + down)),
+            @intFromBool(self.casts_ao(pos + front + right + down)),
+        );
+
+        for (block.get_textures(side), block.get_faces(side)) |tex, face| {
+            try self.faces[@intFromEnum(side)].append(gpa, .{
+                .ao = @intCast(Ao.ao_to_idx[ao]),
+                .model = @intCast(face),
+                .texture = @intCast(tex),
+                .x = @intCast(xyz[0]),
+                .y = @intCast(xyz[1]),
+                .z = @intCast(xyz[2]),
+            });
+        }
+    }
+}
+
 fn next_layer_solid(self: *Mesh, normal: Block.Direction, start: Coords) bool {
     const right = -normal.left_dir();
     const up = normal.up_dir();
@@ -137,60 +145,6 @@ fn next_layer_solid(self: *Mesh, normal: Block.Direction, start: Coords) bool {
     }
 
     return true;
-}
-
-fn build_layer_mesh(
-    self: *Mesh,
-    normal: Block.Direction,
-    start: Coords,
-    gpa: std.mem.Allocator,
-) !void {
-    const right = -normal.left_dir();
-    const left = -right;
-    const up = normal.up_dir();
-    const down = -up;
-    const front = normal.front_dir();
-
-    for (0..CHUNK_SIZE) |i| {
-        for (0..CHUNK_SIZE) |j| {
-            const u: i32 = @intCast(i);
-            const v: i32 = @intCast(j);
-
-            const pos = start +
-                @as(Coords, @splat(u)) * right +
-                @as(Coords, @splat(v)) * up;
-
-            const block = self.chunk.get(pos);
-            if (block.is_air() or
-                (self.is_solid_neighbour_face(pos + front, normal.flip()) and block.is_solid(normal)))
-            {
-                continue;
-            }
-
-            const ao = Ao.pack(
-                @intFromBool(self.casts_ao(pos + front + left)),
-                @intFromBool(self.casts_ao(pos + front + right)),
-                @intFromBool(self.casts_ao(pos + front + up)),
-                @intFromBool(self.casts_ao(pos + front + down)),
-                @intFromBool(self.casts_ao(pos + front + left + up)),
-                @intFromBool(self.casts_ao(pos + front + right + up)),
-                @intFromBool(self.casts_ao(pos + front + left + down)),
-                @intFromBool(self.casts_ao(pos + front + right + down)),
-            );
-
-            for (block.get_textures(normal), block.get_faces(normal)) |t, m| {
-                const face = Face{
-                    .x = @intCast(pos[0]),
-                    .y = @intCast(pos[1]),
-                    .z = @intCast(pos[2]),
-                    .ao = @intCast(Ao.ao_to_idx[ao]),
-                    .model = @intCast(m),
-                    .texture = @intCast(t),
-                };
-                try self.faces[@intFromEnum(normal)].append(gpa, face);
-            }
-        }
-    }
 }
 
 pub const Ao = struct {
