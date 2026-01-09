@@ -149,7 +149,7 @@ pub fn process(self: *ChunkManager) !void {
     try self.process_impl();
 
     for (self.meshes_to_apply.items) |mesh| {
-        try Game.instance().renderer.upload_chunk_mesh(mesh);
+        try Game.instance().block_renderer.upload_chunk_mesh(mesh);
     }
 
     self.meshes_to_apply.clearRetainingCapacity();
@@ -194,7 +194,7 @@ fn process_impl(self: *ChunkManager) !void {
                 for (to_remove.items) |coords| {
                     const old = self.chunks.fetchSwapRemove(coords).?;
                     self.chunk_pool.destroy(old.value);
-                    try Game.instance().renderer.destroy_chunk_mesh(coords);
+                    try Game.instance().block_renderer.destroy_chunk_mesh(coords);
                 }
 
                 for (0..size[0] + 1) |i| {

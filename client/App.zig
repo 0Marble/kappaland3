@@ -13,6 +13,7 @@ pub const Settings = @import("Settings.zig");
 pub const Game = @import("Game.zig");
 pub const Assets = @import("Assets.zig");
 pub const ModelViewer = @import("ModelViewer.zig");
+pub const Renderer = @import("Renderer.zig");
 
 const logger = std.log.scoped(.app);
 
@@ -30,6 +31,7 @@ random: std.Random.DefaultPrng,
 settings_store: Settings,
 keys_state: Keys,
 asset_manager: Assets,
+renderer: Renderer,
 
 layers: std.ArrayList(Layer),
 
@@ -73,6 +75,9 @@ pub fn init() !void {
     app.frame_data = .{ .start = std.time.timestamp() };
     try app.keys_state.init();
     app.debug_ui = try .init(&app);
+
+    logger.info("initializing renderer", .{});
+    try app.renderer.init();
 
     app.layers = .empty;
     if (comptime std.mem.eql(u8, "game", Options.tool)) {
@@ -219,6 +224,7 @@ pub fn deinit() void {
     app.events.deinit();
     app.keys_state.deinit();
     app.asset_manager.deinit();
+    app.renderer.deinit();
 
     gl.makeProcTableCurrent(null);
     _ = c.SDL_GL_MakeCurrent(app.win, null);
@@ -275,12 +281,14 @@ pub fn run() UnhandledError!void {
         try gui().add_to_frame(App, "Debug", &app, on_imgui, @src());
         try app.settings_store.on_imgui();
         try app.keys_state.on_frame_start();
+        try app.renderer.on_frame_start();
 
         for (0..app.layers.items.len) |i| {
             const j = app.layers.items.len - i - 1;
             const layer = app.layers.items[j];
             try layer.on_frame_start(layer.data);
         }
+
         try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
         app.events.process();
@@ -324,6 +332,7 @@ fn handle_events() !bool {
                     const layer = app.layers.items[j];
                     try layer.on_resize(layer.data, evt.window.data1, evt.window.data2);
                 }
+                try app.renderer.resize_framebuffers(evt.window.data1, evt.window.data2);
             },
             c.SDL_EVENT_KEY_DOWN => {
                 if (!io.WantCaptureKeyboard) try keys().emit_keydown(.from_sdl(evt.key.scancode));
@@ -396,6 +405,10 @@ pub fn gui() *DebugUi {
 
 pub fn assets() *Assets {
     return &app.asset_manager;
+}
+
+pub fn get_renderer() *Renderer {
+    return &app.renderer;
 }
 
 const FrameData = struct {

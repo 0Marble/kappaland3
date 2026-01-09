@@ -15,6 +15,7 @@ const Block = @import("Block.zig");
 const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
+const Camera = @import("Camera.zig");
 
 const logger = std.log.scoped(.block_renderer);
 
@@ -197,7 +198,7 @@ pub fn deinit(self: *Self) void {
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
 }
 
-pub fn draw(self: *Self) (OOM || GlError)!void {
+pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     if (self.had_realloc) {
         try gl_call(gl.BindVertexArray(self.block_vao));
         try gl_call(gl.BindVertexBuffer(
@@ -210,9 +211,7 @@ pub fn draw(self: *Self) (OOM || GlError)!void {
         self.had_realloc = false;
     }
 
-    const draw_count = try self.compute_drawn_chunk_data();
-
-    const cam = &Game.instance().camera;
+    const draw_count = try self.compute_drawn_chunk_data(cam);
 
     try self.block_pass.set_mat4("u_view", cam.view_mat());
     try self.block_pass.set_mat4("u_proj", cam.proj_mat());
@@ -339,7 +338,7 @@ const MeshOrder = struct {
     }
 };
 
-fn compute_drawn_chunk_data(self: *Self) !usize {
+fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     const do_frustum_culling = App.settings().get_value(
         bool,
         ".main.renderer.frustum_culling",
@@ -349,7 +348,6 @@ fn compute_drawn_chunk_data(self: *Self) !usize {
         ".main.renderer.occlusion_culling",
     );
 
-    const cam = &Game.instance().camera;
     const cam_chunk = cam.chunk_coords();
     var meshes: std.ArrayList(MeshOrder) = .empty;
     self.triangle_cnt = 0;

@@ -2,15 +2,15 @@ const App = @import("App.zig");
 const std = @import("std");
 const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
-const Renderer = @import("Renderer.zig");
 pub const ChunkManager = @import("ChunkManager.zig");
 const Options = @import("Build").Options;
 const Chunk = @import("Chunk.zig");
 const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 const Block = @import("Block.zig");
-const Model = @import("ModelRenderer.zig").Model;
 const zm = @import("zm");
+pub const ModelRenderer = @import("ModelRenderer.zig");
+pub const BlockRenderer = @import("BlockRenderer.zig");
 
 const logger = std.log.scoped(.game);
 
@@ -19,9 +19,9 @@ const WIDTH = Options.world_size;
 const HEIGHT = Options.world_height;
 
 camera: Camera,
-renderer: Renderer,
 chunk_manager: *ChunkManager,
 current_selected_block: Block,
+block_renderer: BlockRenderer,
 
 const Instance = struct {
     var instance: Game = undefined;
@@ -58,19 +58,22 @@ fn on_attach(self: *Game) !void {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
     errdefer self.camera.deinit();
-    logger.info("{*}: initializing renderer", .{self});
-    try self.renderer.init();
-    errdefer self.renderer.deinit();
     logger.info("{*}: initializing ChunkManager", .{self});
     self.chunk_manager = try ChunkManager.init(.{
         .thread_cnt = 4,
     });
     errdefer self.chunk_manager.deinit();
+
+    logger.info("{*}: initializing BlockRenderer", .{self});
+    try self.block_renderer.init();
+    try App.get_renderer().add_step(BlockRenderer.draw, .{&self.block_renderer});
+    try App.get_renderer().add_step(ModelRenderer.draw, .{});
+
     logger.info("{*}: Attatched", .{self});
 
     for (0..100) |x| {
         for (0..100) |z| {
-            const m = try Model.instantiate(".models.stuff.cup");
+            const m = try ModelRenderer.Model.instantiate(".models.stuff.cup");
             const mat = zm.Mat4f.translationVec3(.{
                 @floatFromInt(x * 3),
                 10.0,
@@ -117,7 +120,7 @@ fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Blocks", self, on_imgui_blocks, @src());
 
     try self.chunk_manager.on_imgui();
-    try self.renderer.on_frame_start();
+    try self.block_renderer.on_frame_start();
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {
@@ -125,7 +128,8 @@ fn on_update(self: *Game) App.UnhandledError!void {
     try self.chunk_manager.load_region(min, max);
 
     try self.chunk_manager.process();
-    try self.renderer.draw();
+
+    try App.get_renderer().draw(&self.camera);
 }
 
 fn on_frame_end(self: *Game) App.UnhandledError!void {
@@ -133,7 +137,6 @@ fn on_frame_end(self: *Game) App.UnhandledError!void {
 }
 
 fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
-    try self.renderer.resize_framebuffers(w, h);
     const width: f32 = @floatFromInt(w);
     const height: f32 = @floatFromInt(h);
     self.camera.frustum.update_aspect(width / height);
@@ -141,8 +144,8 @@ fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
 
 fn on_detach(self: *Game) void {
     self.camera.deinit();
-    self.renderer.deinit();
     self.chunk_manager.deinit();
+    self.block_renderer.deinit();
     logger.info("{*}: Detatched", .{self});
 }
 

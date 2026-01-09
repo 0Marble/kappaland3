@@ -1,8 +1,5 @@
-pub const BlockRenderer = @import("BlockRenderer.zig");
-pub const ModelRenderer = @import("ModelRenderer.zig");
-
 const App = @import("App.zig");
-const Game = @import("Game.zig");
+const Camera = @import("Camera.zig");
 const gl = @import("gl");
 const std = @import("std");
 const Chunk = @import("Chunk.zig");
@@ -36,8 +33,6 @@ const SSAO_TEX_UNIFORM = 3;
 const RENDERED_TEX_UNIFORM = 5;
 const NOISE_TEX_UNIFORM = 6;
 
-block_renderer: BlockRenderer,
-
 cur_width: i32,
 cur_height: i32,
 
@@ -60,17 +55,29 @@ ssao_pass: Shader,
 ssao_blur_pass: Shader,
 lighting_pass: Shader,
 ssao_samples: [SSAO_SAMPLES_COUNT]zm.Vec3f,
+steps: std.ArrayList(GeometryStep),
 
 const Renderer = @This();
+
+const GeometryStep = struct {
+    data: *anyopaque,
+    callback: *const fn (*anyopaque, *Camera) App.UnhandledError!void,
+};
+
 pub fn init(self: *Renderer) !void {
+    self.steps = .empty;
     try self.init_buffers();
-    try self.block_renderer.init();
     try self.init_screen();
     try self.init_settings();
 }
 
 fn init_settings(self: *Renderer) !void {
-    try self.lighting_pass.observe_settings(SSAO_SETTINGS ++ ".enable", bool, "u_ssao_enabled", @src());
+    try self.lighting_pass.observe_settings(
+        SSAO_SETTINGS ++ ".enable",
+        bool,
+        "u_ssao_enabled",
+        @src(),
+    );
     try self.ssao_blur_pass.observe_settings(SSAO_SETTINGS ++ ".blur", i32, "u_blur", @src());
     try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".radius", f32, "u_radius", @src());
     try self.ssao_pass.observe_settings(SSAO_SETTINGS ++ ".bias", f32, "u_bias", @src());
@@ -96,7 +103,6 @@ fn init_settings(self: *Renderer) !void {
 }
 
 pub fn deinit(self: *Renderer) void {
-    self.block_renderer.deinit();
     gl.DeleteFramebuffers(1, @ptrCast(&self.g_buffer_fbo));
     gl.DeleteFramebuffers(1, @ptrCast(&self.render_fbo));
     gl.DeleteFramebuffers(1, @ptrCast(&self.ssao_fbo));
@@ -120,17 +126,29 @@ pub fn deinit(self: *Renderer) void {
     self.ssao_blur_pass.deinit();
 }
 
-pub fn upload_chunk_mesh(self: *Renderer, mesh: ChunkMesh) !void {
-    try self.block_renderer.upload_chunk_mesh(mesh);
+pub fn add_step(self: *Renderer, comptime fptr: anytype, args: anytype) !void {
+    const Args = @TypeOf(args);
+    const Closure = struct {
+        args: Args,
+        fn callback(this: *@This(), camera: *Camera) App.UnhandledError!void {
+            try @call(.auto, fptr, this.args ++ .{camera});
+        }
+    };
+    const closure = try App.static_alloc().create(Closure);
+    closure.args = args;
+
+    try self.steps.append(App.static_alloc(), .{
+        .data = @ptrCast(closure),
+        .callback = @ptrCast(&Closure.callback),
+    });
 }
 
-pub fn destroy_chunk_mesh(self: *Renderer, coords: Chunk.Coords) !void {
-    try self.block_renderer.destroy_chunk_mesh(coords);
-}
-
-pub fn draw(self: *Renderer) (OOM || GlError)!void {
+pub fn draw(self: *Renderer, camera: *Camera) (OOM || GlError)!void {
     const enable_ssao = App.settings().get_value(bool, SSAO_SETTINGS ++ ".enable");
-    const render_size = zm.Vec2f{ @floatFromInt(self.cur_width), @floatFromInt(self.cur_height) };
+    const render_size = zm.Vec2f{
+        @floatFromInt(self.cur_width),
+        @floatFromInt(self.cur_height),
+    };
 
     try gl_call(gl.ClearDepth(0.0));
     try gl_call(gl.ClearColor(0, 0, 0, 1));
@@ -139,9 +157,7 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.g_buffer_fbo));
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
-    const camera = &Game.instance().camera;
-    try self.block_renderer.draw();
-    try ModelRenderer.draw(camera);
+    for (self.steps.items) |s| try s.callback(s.data, camera);
 
     if (enable_ssao) {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));
@@ -329,8 +345,6 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
 }
 
 pub fn on_frame_start(self: *Renderer) !void {
-    try self.block_renderer.on_frame_start();
-
     try App.gui().add_to_frame(Renderer, "FBO", self, draw_fbo_debug, @src());
 }
 
