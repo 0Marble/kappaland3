@@ -3,7 +3,6 @@
 - Work on the server (possibly wait till 0.16 with the new async IO?)
 - Lighting support 
 - Transparency support
-- Generic model rendering - for enemies/players/blocks with crazy models.
 
 # Non-critical
 
@@ -26,6 +25,22 @@
 - renderer: there is a maximum allocation size on the gpu, (around 4gigs or `-Dworld_size=128` on flat world).
 
 # Done
+
+- 09.01.2026:
+    1. Implemented glTF file loading! It was actually pretty easy, the std json parser is truly magical
+    2. Rendering basic gltf models, no materials or animations yet.
+    3. Started working on lighting. 
+    The basic idea is to create some sort of volumetric data structure on the gpu, where 
+    I can query each world coordinate for light value.
+    I will need an ssbo for light levels: light color (u12) + level (u4) + direction (u3).
+    Then, for each integer coordinate that is inside an air block, 
+    I will store a pair (start, length) indexing into the light level ssbo, 
+    using an extra per-chunk offset (i.e. block's light levels start at chunk.start + block.start).
+    I will also need to consider sparsity/some sort of gpu-side compression, there is no chance 
+    I will store a u32 (or a u64 idk yet) per each air block.
+    In addition, during meshing, I will have to write into neighbour chunk light level lists, 
+    so I have made it so meshing is done in stages, in every group of 2x2x2 chunks only one 
+    is being meshed at a time.
 
 - 06.01.2026:
     1. Worked a bunch on the new Assets system. 
