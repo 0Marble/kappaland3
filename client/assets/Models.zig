@@ -7,7 +7,7 @@ const glTF = @import("glTF.zig");
 const Models = @This();
 const logger = std.log.scoped(.models);
 
-gltfs: std.StringArrayHashMapUnmanaged(glTF),
+gltfs: std.StringArrayHashMapUnmanaged(*glTF),
 arena: std.heap.ArenaAllocator,
 prefix: []const u8,
 
@@ -38,25 +38,20 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir) !Models {
 }
 
 pub fn deinit(self: *Models) void {
+    for (self.gltfs.values()) |gltf| gltf.deinit();
     self.arena.deinit();
 }
 
-pub fn get_idx_or_warn(self: *Models, name: []const u8) usize {
-    if (self.name_to_model.get(name)) |x| return x;
-    logger.warn("missing model: {s}", .{name});
-    return self.missing_model();
-}
-
-pub fn missing_model(self: *Models) usize {
-    return self.name_to_model.get(".blocks.main.default").?;
+pub fn get(self: *Models, name: []const u8) ?*glTF {
+    return self.gltfs.get(name);
 }
 
 fn add_model(self: *Models, ctx: *BuildCtx, file: *VFS.File) !void {
     errdefer ctx.ok = false;
     defer _ = ctx.temp.reset(.retain_capacity);
 
-    var gltf = try glTF.init(self.arena.allocator(), file);
-    errdefer gltf.deinit(self.arena.allocator());
+    var gltf = try glTF.init(self.arena.child_allocator, file);
+    errdefer gltf.deinit();
     const name = try Assets.to_name(self.arena.allocator(), file.path);
     try self.gltfs.put(self.arena.allocator(), name, gltf);
     logger.info("registered model {s}", .{name});

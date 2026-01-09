@@ -1,4 +1,6 @@
 pub const BlockRenderer = @import("BlockRenderer.zig");
+pub const ModelRenderer = @import("ModelRenderer.zig");
+
 const App = @import("App.zig");
 const Game = @import("Game.zig");
 const gl = @import("gl");
@@ -138,12 +140,8 @@ pub fn draw(self: *Renderer) (OOM || GlError)!void {
     try gl_call(gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT));
 
     const camera = &Game.instance().camera;
-    // try self.block_renderer.draw();
-    // if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.ToyCar")) |model| {
-    if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.Buggy")) |model| {
-        // if (App.assets().get_models().gltfs.getPtr(".models.3rd-party.2CylinderEngine")) |model| {
-        try model.draw(camera);
-    }
+    try self.block_renderer.draw();
+    try ModelRenderer.draw(camera);
 
     if (enable_ssao) {
         try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.ssao_fbo));

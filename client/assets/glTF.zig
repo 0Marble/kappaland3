@@ -10,55 +10,168 @@ const glTF = @This();
 const logger = std.log.scoped(.gltf);
 const Renderer = @import("../Renderer.zig");
 
-primitives: []PrimitiveMesh = &.{},
+arena: std.heap.ArenaAllocator,
 
+primitives: []PrimitiveMesh = &.{},
 nodes_ssbo: gl.uint = 0,
 mesh_parents_vbo: gl.uint = 0,
 buffers: []gl.uint = &.{},
 shader: Shader = undefined,
 
-pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !glTF {
+instances: std.ArrayList(InstanceData) = .empty,
+free_instances: std.ArrayList(usize) = .empty,
+instance_ssbo_capacity: usize = 0,
+instance_ssbo: gl.uint = 0,
+updated: bool = false,
+
+pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !*glTF {
     var parser = try Parser.init(gpa, file);
     defer parser.arena.deinit();
 
-    var self = glTF{};
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const self = try arena.allocator().create(glTF);
+    self.* = glTF{ .arena = arena };
+
     var src: [2]Shader.Source = .{
         Shader.Source{ .name = "vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
         Shader.Source{ .name = "frag", .sources = &.{frag}, .kind = gl.FRAGMENT_SHADER },
     };
     self.shader = try .init(&src, "gltf_pass");
-    try self.upload(gpa, &parser);
+    try self.upload(&parser);
 
     return self;
 }
 
-pub fn deinit(self: *glTF, gpa: std.mem.Allocator) void {
+pub fn deinit(self: *glTF) void {
     gl.DeleteBuffers(@intCast(self.buffers.len), @ptrCast(self.buffers));
     gl.DeleteBuffers(1, @ptrCast(&self.mesh_parents_vbo));
+    gl.DeleteBuffers(1, @ptrCast(&self.instance_ssbo));
 
     for (self.primitives) |*p| p.deinit();
 
-    gpa.free(self.buffers);
-    gpa.free(self.primitives);
     self.shader.deinit();
+    self.arena.deinit();
 }
 
 pub fn draw(self: *glTF, cam: *GameCamera) !void {
+    if (self.instances.items.len == 0) return;
+
+    if (self.updated) {
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.instance_ssbo));
+        try gl_call(gl.BufferSubData(
+            gl.SHADER_STORAGE_BUFFER,
+            0,
+            @intCast(self.instances.items.len * @sizeOf(InstanceData)),
+            @ptrCast(self.instances.items),
+        ));
+        self.updated = false;
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
+    }
+
     try self.shader.bind();
     try self.shader.set_mat4("u_view", cam.view_mat());
     try self.shader.set_mat4("u_proj", cam.proj_mat());
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, @intCast(NODE_TREE), self.nodes_ssbo));
+    try self.shader.set_uint("u_instance_cnt", @intCast(self.instances.items.len));
 
-    for (self.primitives) |*p| try p.draw(1);
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(NODE_TREE),
+        self.nodes_ssbo,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(INSTANCE_DATA),
+        self.instance_ssbo,
+    ));
+
+    for (self.primitives) |*p| {
+        try p.draw(self.instances.items.len);
+    }
 }
 
-fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
+pub const InstanceId = enum(u32) { invalid = 0, _ };
+pub fn add_instance(self: *glTF) !InstanceId {
+    const idx = self.free_instances.pop() orelse blk: {
+        const idx = self.instances.items.len;
+        try self.instances.append(self.arena.allocator(), .{});
+        break :blk idx;
+    };
+    self.instances.items[idx] = .{};
+    self.updated = true;
+
+    if (self.instance_ssbo_capacity == 0) {
+        const initial_capacity = 10;
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.instance_ssbo));
+        try gl_call(gl.BufferData(
+            gl.SHADER_STORAGE_BUFFER,
+            @intCast(initial_capacity * @sizeOf(InstanceData)),
+            null,
+            gl.DYNAMIC_DRAW,
+        ));
+        self.instance_ssbo_capacity = initial_capacity;
+    }
+
+    if (self.instances.items.len >= self.instance_ssbo_capacity) {
+        const new_cap = self.instance_ssbo_capacity * 2;
+        var new_buf: gl.uint = 0;
+        try gl_call(gl.GenBuffers(1, @ptrCast(&new_buf)));
+        try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, new_buf));
+        try gl_call(gl.BufferData(
+            gl.SHADER_STORAGE_BUFFER,
+            @intCast(new_cap * @sizeOf(InstanceData)),
+            null,
+            gl.DYNAMIC_DRAW,
+        ));
+        try gl_call(gl.DeleteBuffers(1, @ptrCast(&self.instance_ssbo)));
+        self.instance_ssbo = new_buf;
+        self.instance_ssbo_capacity = new_cap;
+    }
+
+    return @enumFromInt(idx + 1);
+}
+
+pub fn remove_instance(self: *glTF, id: InstanceId) void {
+    logger.warn("remove_instance doesnt actually do anything right now", .{});
+
+    if (id == .invalid) {
+        logger.warn("{*}: attempted to remove invalid instance id!", .{self});
+        return;
+    }
+    self.free_instances.append(self.arena.allocator(), @intFromEnum(id) - 1) catch |err| {
+        logger.warn("{*}: leaking instance {}: {}", .{ self, id, err });
+    };
+}
+
+pub fn set_transform(self: *glTF, id: InstanceId, mat: zm.Mat4f) void {
+    if (id == .invalid) {
+        logger.warn("{*}: attempted to set transform on invalid instance id!", .{self});
+        return;
+    }
+    self.updated = true;
+    const idx: usize = @intFromEnum(id) - 1;
+    self.instances.items[idx].transform = mat.transpose().data;
+}
+
+const InstanceData = packed struct {
+    transform: @Vector(16, f32) = zm.Mat4f.identity().data,
+};
+
+fn upload(self: *glTF, parser: *Parser) !void {
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.instance_ssbo)));
+
+    const gpa = self.arena.allocator();
     self.buffers = try gpa.alloc(gl.uint, parser.buffers.items.len);
     try gl_call(gl.GenBuffers(@intCast(parser.buffers.items.len), @ptrCast(self.buffers)));
 
     for (parser.buffers.items, self.buffers) |data, buf| {
         try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, buf));
-        try gl_call(gl.BufferData(gl.ARRAY_BUFFER, @intCast(data.len), @ptrCast(data), gl.STATIC_DRAW));
+        try gl_call(gl.BufferData(
+            gl.ARRAY_BUFFER,
+            @intCast(data.len),
+            @ptrCast(data),
+            gl.STATIC_DRAW,
+        ));
         try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     }
 
@@ -66,7 +179,7 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
     const mesh_parents = try parser.arena.allocator().alloc(std.ArrayList(u32), meshes.len);
     const nodes = parser.root.nodes orelse &.{};
     const node_data = try parser.arena.allocator().alloc(NodeData, nodes.len);
-    for (node_data, nodes) |*data, n| {
+    for (node_data, nodes, 0..) |*data, n, idx| {
         const matrix = (zm.Mat4f{ .data = n.matrix }).transpose();
         const T = zm.Mat4f.translationVec3(n.translation);
         const R = zm.Mat4f.fromQuaternion(
@@ -75,7 +188,7 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
         const S = zm.Mat4f.scalingVec3(n.scale);
         const transform = matrix.multiply(T.multiply(R.multiply(S))).transpose();
 
-        data.* = .{ .transform = transform.data };
+        data.* = .{ .transform = transform.data, .parent = @intCast(idx) };
     }
 
     @memset(mesh_parents, .empty);
@@ -108,7 +221,11 @@ fn upload(self: *glTF, gpa: std.mem.Allocator, parser: *Parser) !void {
         @ptrCast(node_data),
         gl.STATIC_DRAW,
     ));
-    try gl_call(gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, @intCast(NODE_TREE), self.nodes_ssbo));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(NODE_TREE),
+        self.nodes_ssbo,
+    ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
     var prims = std.ArrayList(PrimitiveMesh).empty;
@@ -210,7 +327,10 @@ const Parser = struct {
                     const json = src[reader.seek .. reader.seek + length];
                     try reader.discardAll(length);
 
-                    var json_reader = std.json.Scanner.initCompleteInput(self.arena.allocator(), json);
+                    var json_reader = std.json.Scanner.initCompleteInput(
+                        self.arena.allocator(),
+                        json,
+                    );
                     var diag = std.json.Diagnostics{};
 
                     errdefer |err| {
@@ -225,10 +345,14 @@ const Parser = struct {
                         w.printAsciiChar('^', .{}) catch unreachable;
                         i += 1;
 
-                        logger.err(
-                            "{s}:{d}:{d} {}\n{s}\n{s}",
-                            .{ file.path, diag.getLine(), diag.getColumn(), err, ctx, buf[0..i] },
-                        );
+                        logger.err("{s}:{d}:{d} {}\n{s}\n{s}", .{
+                            file.path,
+                            diag.getLine(),
+                            diag.getColumn(),
+                            err,
+                            ctx,
+                            buf[0..i],
+                        });
                     }
                     json_reader.enableDiagnostics(&diag);
 
@@ -246,7 +370,10 @@ const Parser = struct {
                     );
                 },
                 else => {
-                    logger.err("invalid chunk header 0x{X:08} ({s})", .{ typ, std.mem.asBytes(&typ) });
+                    logger.err(
+                        "invalid chunk header 0x{X:08} ({s})",
+                        .{ typ, std.mem.asBytes(&typ) },
+                    );
                     return error.ChunkHeader;
                 },
             }
@@ -327,7 +454,13 @@ const PrimitiveMesh = struct {
 
         {
             try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, model.mesh_parents_vbo));
-            try gl_call(gl.VertexAttribIPointer(NODE, 1, gl.UNSIGNED_INT, 4, parent_node_byte_offset));
+            try gl_call(gl.VertexAttribIPointer(
+                NODE,
+                1,
+                gl.UNSIGNED_INT,
+                4,
+                parent_node_byte_offset,
+            ));
             try gl_call(gl.EnableVertexAttribArray(NODE));
             try gl_call(gl.VertexAttribDivisor(NODE, 1));
         }
@@ -339,6 +472,8 @@ const PrimitiveMesh = struct {
 
     fn draw(self: *PrimitiveMesh, model_instance_count: usize) !void {
         try gl_call(gl.BindVertexArray(self.vao));
+        try gl_call(gl.VertexAttribDivisor(NODE, @intCast(model_instance_count)));
+
         try gl_call(gl.DrawElementsInstanced(
             self.mode,
             @intCast(self.count),
@@ -346,6 +481,7 @@ const PrimitiveMesh = struct {
             self.index_start,
             @intCast(model_instance_count * self.per_model_instance_count),
         ));
+
         try gl_call(gl.BindVertexArray(0));
     }
 
@@ -737,7 +873,9 @@ const locations = std.EnumArray(Mesh.Primitive.AttribMap.Attribute, u32).init(.{
 });
 
 const NODE = 3;
+const INSTANCE = 4;
 const NODE_TREE = 10;
+const INSTANCE_DATA = 11;
 
 const vert =
     \\#version 460 core
@@ -754,13 +892,14 @@ const vert =
     break :blk str;
 } ++
     std.fmt.comptimePrint("\n#define NODE {d}", .{NODE}) ++
+    std.fmt.comptimePrint("\n#define INSTANCE {d}", .{INSTANCE}) ++
     std.fmt.comptimePrint("\n#define NODE_TREE {d}", .{NODE_TREE}) ++
+    std.fmt.comptimePrint("\n#define INSTANCE_DATA {d}", .{INSTANCE_DATA}) ++
     \\
     \\layout (location = POSITION) in vec3 vert_pos;
     \\layout (location = NORMAL) in vec3 vert_norm;
     \\layout (location = TEXCOORD_0) in vec2 vert_uv;
     \\
-    \\// per primitive 
     \\layout (location = NODE) in uint mesh_node; 
     \\
     \\out vec3 frag_pos;
@@ -769,14 +908,23 @@ const vert =
     \\
     \\uniform mat4 u_view;
     \\uniform mat4 u_proj;
+    \\uniform uint u_instance_cnt;
     \\
     \\struct Node {
     \\  uint parent;
     \\  mat4 transform;
     \\};
     \\
-    \\layout (std430, binding = NODE_TREE) buffer NodeTree {
+    \\layout (std430, binding = NODE_TREE) readonly buffer NodeTree {
     \\  Node nodes[];
+    \\};
+    \\
+    \\struct InstanceData {
+    \\  mat4 transform;
+    \\};
+    \\
+    \\layout (std430, binding = INSTANCE_DATA) readonly buffer InstanceDataBuf {
+    \\  InstanceData instance_data[];
     \\};
     \\
     \\mat4 compute_transform() {
@@ -791,10 +939,12 @@ const vert =
     \\}
     \\
     \\void main() {
-    \\  mat4 model = compute_transform();
+    \\  mat4 model = instance_data[gl_InstanceID % u_instance_cnt].transform * 
+    \\    compute_transform();
     \\  mat4 norm_transform = model;
     \\  norm_transform[3] = vec4(0, 0, 0, 1);
     \\  norm_transform = inverse(transpose(norm_transform));
+    \\
     \\  vec4 view_norm = u_view * norm_transform * vec4(vert_norm, 0);
     \\  vec4 view_pos = u_view * model * vec4(vert_pos, 1);
     \\  

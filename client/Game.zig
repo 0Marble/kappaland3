@@ -9,6 +9,8 @@ const Chunk = @import("Chunk.zig");
 const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 const Block = @import("Block.zig");
+const Model = @import("ModelRenderer.zig").Model;
+const zm = @import("zm");
 
 const logger = std.log.scoped(.game);
 
@@ -65,6 +67,18 @@ fn on_attach(self: *Game) !void {
     });
     errdefer self.chunk_manager.deinit();
     logger.info("{*}: Attatched", .{self});
+
+    for (0..100) |x| {
+        for (0..100) |z| {
+            const m = try Model.instantiate(".models.stuff.cup");
+            const mat = zm.Mat4f.translationVec3(.{
+                @floatFromInt(x * 3),
+                10.0,
+                @floatFromInt(z * 3),
+            });
+            try m.set_transform(mat);
+        }
+    }
 }
 
 fn on_imgui(self: *Game) !void {
