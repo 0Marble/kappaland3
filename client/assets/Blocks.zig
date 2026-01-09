@@ -104,8 +104,7 @@ const BuildCtx = struct {
         };
     }
 
-    const Error = OOM || error{ MissingData, TypeError, ValueTypeMismatch } || ParsedBlock.Error;
-    fn realize_block(self: *BuildCtx, block: ParsedBlock) Error!void {
+    fn realize_block(self: *BuildCtx, block: ParsedBlock) !void {
         const name = block.name;
         if (self.realized.contains(name)) return;
         const gpa = self.arena.allocator();
@@ -174,9 +173,14 @@ const BuildCtx = struct {
         var info = Info{
             .name = try self.blocks.arena.allocator().dupeZ(u8, b.name),
             .casts_ao = (try ParsedBlock.get_ensure_type(b.map.*, "casts_ao", .bool)).bool,
+            .light_color = null,
             .solid = .init(.{}),
             .faces = .init(.{}),
             .textures = .init(.{}),
+        };
+        if (b.map.get("light_color")) |color| switch (color.*) {
+            .u32 => |x| info.light_color = @intCast(x),
+            else => return error.TypeError,
         };
 
         const solid: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "solid", .map)).map;
@@ -286,9 +290,8 @@ const ParsedBlock = struct {
     name: []const u8,
     map: *Map,
 
-    const Error = OOM || error{ ExpectedStringLiteral, UnexpectedValue };
     const ZonNode = std.zig.Zoir.Node.Index;
-    fn zon_to_map(ctx: VFS.Zon, node: ZonNode, gpa: std.mem.Allocator) Error!*Value {
+    fn zon_to_map(ctx: VFS.Zon, node: ZonNode, gpa: std.mem.Allocator) !*Value {
         errdefer {
             const ast_node = node.getAstNode(ctx.zoir);
             const tok = ctx.ast.nodeMainToken(ast_node);
@@ -315,6 +318,18 @@ const ParsedBlock = struct {
                     );
                 }
                 val.* = .{ .map = map };
+            },
+            .int_literal => {
+                const num = try std.zon.parse.fromZoirNode(
+                    u32,
+                    gpa,
+                    ctx.ast,
+                    ctx.zoir,
+                    node,
+                    null,
+                    .{},
+                );
+                val.* = .{ .u32 = num };
             },
             .true => {
                 val.* = .{ .bool = true };
@@ -369,6 +384,7 @@ const ParsedBlock = struct {
         map: Map,
         str: []const u8,
         bool: bool,
+        u32: u32,
         key_list: []const []const u8,
 
         fn clone(self: *Value, gpa: std.mem.Allocator) !*Value {
@@ -444,6 +460,7 @@ const Offset = enum(u4) {
 pub const Info = struct {
     name: [:0]const u8,
     casts_ao: bool,
+    light_color: ?u24,
     solid: std.EnumMap(Block.Direction, bool) = .initFull(false),
     faces: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),
     textures: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),

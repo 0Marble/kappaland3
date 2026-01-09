@@ -71,8 +71,8 @@ fn on_attach(self: *Game) !void {
 
     logger.info("{*}: Attatched", .{self});
 
-    for (0..100) |x| {
-        for (0..100) |z| {
+    for (0..10) |x| {
+        for (0..10) |z| {
             const m = try ModelRenderer.Model.instantiate(".models.stuff.cup");
             const mat = zm.Mat4f.translationVec3(.{
                 @floatFromInt(x * 3),

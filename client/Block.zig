@@ -35,6 +35,11 @@ pub fn casts_ao(self: Block) bool {
     return info.casts_ao;
 }
 
+pub fn emits_light(self: Block) bool {
+    const info = App.assets().get_blocks().get_info(self);
+    return info.light_color != null;
+}
+
 pub fn air() Block {
     return App.assets().get_blocks().air;
 }

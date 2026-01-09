@@ -107,11 +107,16 @@ pub fn on_imgui(self: *ChunkManager) !void {
 }
 
 fn on_imgui_impl(self: *ChunkManager) !void {
+    const cur_cmd = if (self.cmd_queue.first) |cmd|
+        std.meta.activeTag(Command.from_link(cmd).body)
+    else
+        null;
+
     const str = try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
         \\Chunks:
         \\    active: {d} {}...{}
-        \\    work:   {d}:{d}
+        \\    work:   {d}:{d} ({?})
         \\    meshes: {d}:{d}
         \\    shared_mem: {f}
     ,
@@ -120,7 +125,8 @@ fn on_imgui_impl(self: *ChunkManager) !void {
             self.current_min,
             self.current_max,
             self.queue_size,
-            self.subtasks.items.len,
+            self.subtasks_left,
+            cur_cmd,
             self.chunks_to_mesh.count(),
             self.meshes_to_apply.items.len,
             MemoryUsage.from_bytes(self.shared_gpa.total_requested_bytes),
@@ -160,8 +166,9 @@ fn process_impl(self: *ChunkManager) !void {
     const cur = if (self.cmd_queue.first) |link|
         Command.from_link(link)
     else blk: {
+        if (self.chunks_to_mesh.count() == 0) return;
         const cmd: *Command = try self.cmd_pool.create();
-        cmd.* = .{ .link = .{}, .body = .mesh_chunks, .started = false };
+        cmd.* = .{ .link = .{}, .body = .{ .mesh_chunks = 7 }, .started = false };
         self.cmd_queue.prepend(&cmd.link);
         self.queue_size += 1;
         break :blk cmd;
@@ -232,30 +239,49 @@ fn process_impl(self: *ChunkManager) !void {
             }
         },
 
-        .mesh_chunks => {
+        .mesh_chunks => |stage| {
             if (!cur.started) {
                 std.debug.assert(self.subtasks.items.len == 0);
                 std.debug.assert(self.subtasks_left == 0);
 
-                cur.started = true;
+                var to_remove = std.ArrayList(Chunk.Coords).empty;
                 for (self.chunks_to_mesh.keys()) |coords| {
                     if (@reduce(.Or, coords < self.current_min) or
-                        @reduce(.Or, coords > self.current_max)) continue;
-                    if (!self.chunks.contains(coords)) continue;
+                        @reduce(.Or, coords > self.current_max) or
+                        !self.chunks.contains(coords))
+                    {
+                        try to_remove.append(App.frame_alloc(), coords);
+                        continue;
+                    }
 
+                    const two: @Vector(3, i32) = @splat(2);
+                    const x: @Vector(3, u3) = @intCast(@mod(coords, two));
+                    const y: u3 = (x[0] << 2) | (x[1] << 1) | (x[2] << 0);
+                    if (y != stage) continue;
+
+                    try to_remove.append(App.frame_alloc(), coords);
                     try self.subtasks.append(
                         App.gpa(),
                         .{ .coords = coords, .kind = .mesh_chunks },
                     );
+                    self.subtasks_left += 1;
                 }
-                self.subtasks_left = self.subtasks.items.len;
-                self.chunks_to_mesh.clearRetainingCapacity();
+
+                for (to_remove.items) |coords| {
+                    _ = self.chunks_to_mesh.swapRemove(coords);
+                }
+                cur.started = true;
             }
 
             if (self.subtasks_left == 0) {
-                _ = self.cmd_queue.popFirst();
-                self.cmd_pool.destroy(cur);
-                self.queue_size -= 1;
+                if (stage == 0) {
+                    _ = self.cmd_queue.popFirst();
+                    self.cmd_pool.destroy(cur);
+                    self.queue_size -= 1;
+                } else {
+                    cur.body.mesh_chunks -= 1;
+                    cur.started = false;
+                }
             }
         },
     }
@@ -356,7 +382,7 @@ const Command = struct {
 
     const Body = union(enum) {
         load_region: struct { Chunk.Coords, Chunk.Coords },
-        mesh_chunks: void,
+        mesh_chunks: u3,
         set_block: struct { Chunk.Coords, Block },
     };
 

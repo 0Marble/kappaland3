@@ -8,6 +8,9 @@ const Game = @import("Game.zig");
 chunk: *Chunk,
 faces: [std.enums.values(Block.Direction).len]std.ArrayList(Face),
 
+block_lighting: [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]std.ArrayList(BlockLighting),
+lights: std.ArrayList(u32),
+
 neighbour_cache: [26]?*Chunk,
 is_occluded: bool,
 
@@ -20,7 +23,11 @@ pub fn build(chunk: *Chunk, gpa: std.mem.Allocator) !Mesh {
         .faces = @splat(.empty),
         .neighbour_cache = @splat(null),
         .is_occluded = true,
+        .block_lighting = undefined,
+        .lights = .empty,
     };
+    // im pretty sure this results in all empty arrays
+    @memset(std.mem.asBytes(&self.block_lighting), 0);
 
     for (Chunk.neighbours2, &self.neighbour_cache) |d, *n| {
         n.* = Game.instance().chunk_manager.get_chunk(d + chunk.coords);
@@ -226,6 +233,12 @@ pub const Ao = struct {
             \\}}
         , .{ Ao.L, Ao.R, Ao.T, Ao.B, Ao.TL, Ao.TR, Ao.BL, Ao.BR });
     }
+};
+
+const BlockLighting = packed struct(u64) {
+    start: u32 = 0,
+    length: u16 = 0,
+    _unused: u16 = 0xbabe,
 };
 
 fn casts_ao(self: *Mesh, pos: Coords) bool {
