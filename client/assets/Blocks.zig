@@ -173,15 +173,17 @@ const BuildCtx = struct {
         var info = Info{
             .name = try self.blocks.arena.allocator().dupeZ(u8, b.name),
             .casts_ao = (try ParsedBlock.get_ensure_type(b.map.*, "casts_ao", .bool)).bool,
-            .light_color = null,
+            .light = null,
             .solid = .init(.{}),
             .faces = .init(.{}),
             .textures = .init(.{}),
         };
-        if (b.map.get("light_color")) |color| switch (color.*) {
-            .u32 => |x| info.light_color = @intCast(x),
-            else => return error.TypeError,
-        };
+        if (b.map.get("light")) |light| {
+            if (light.* != .map) return error.TypeError;
+            const color = (try ParsedBlock.get_ensure_type(light.map, "color", .u32)).u32;
+            const level = (try ParsedBlock.get_ensure_type(light.map, "level", .u32)).u32;
+            info.light = .{ .color = @intCast(color), .level = @intCast(level) };
+        }
 
         const solid: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "solid", .map)).map;
         const faces: ParsedBlock.Map = (try ParsedBlock.get_ensure_type(b.map.*, "faces", .map)).map;
@@ -457,10 +459,15 @@ const Offset = enum(u4) {
     @"15/16",
 };
 
+pub const LightInfo = struct {
+    color: u12,
+    level: u4,
+};
+
 pub const Info = struct {
     name: [:0]const u8,
     casts_ao: bool,
-    light_color: ?u24,
+    light: ?LightInfo,
     solid: std.EnumMap(Block.Direction, bool) = .initFull(false),
     faces: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),
     textures: std.EnumMap(Block.Direction, []const usize) = .initFull(&.{}),

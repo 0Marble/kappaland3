@@ -1,5 +1,5 @@
 .{
     .derives = ".main.basic",
     .textures = .{ .tex = ".blocks.main.light" },
-    .light_color = 0xF0F,
+    .light = .{ .color = 0xF0F, .level = 0xF },
 }
