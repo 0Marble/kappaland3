@@ -163,12 +163,27 @@ pub fn process(self: *ChunkManager) !void {
 }
 
 fn process_impl(self: *ChunkManager) !void {
+    const MESH_GROUP_SIZE: @Vector(3, i32) = @splat(3);
+    comptime {
+        const zero: @Vector(3, i32) = @splat(0);
+        std.debug.assert(@reduce(.And, MESH_GROUP_SIZE > zero));
+    }
+    const stride: @Vector(3, u32) = comptime @intCast(@Vector(3, i32){
+        MESH_GROUP_SIZE[1] * MESH_GROUP_SIZE[2],
+        MESH_GROUP_SIZE[2],
+        1,
+    });
+
     const cur = if (self.cmd_queue.first) |link|
         Command.from_link(link)
     else blk: {
         if (self.chunks_to_mesh.count() == 0) return;
         const cmd: *Command = try self.cmd_pool.create();
-        cmd.* = .{ .link = .{}, .body = .{ .mesh_chunks = 7 }, .started = false };
+        cmd.* = .{
+            .link = .{},
+            .body = .{ .mesh_chunks = @intCast(@reduce(.Mul, MESH_GROUP_SIZE) - 1) },
+            .started = false,
+        };
         self.cmd_queue.prepend(&cmd.link);
         self.queue_size += 1;
         break :blk cmd;
@@ -195,7 +210,8 @@ fn process_impl(self: *ChunkManager) !void {
                 var to_remove = std.ArrayList(Chunk.Coords).empty;
                 defer to_remove.deinit(App.frame_alloc());
                 for (self.chunks.keys()) |coords| {
-                    if (@reduce(.And, coords >= x[0]) and @reduce(.And, coords <= x[1])) continue;
+                    if (@reduce(.And, coords >= x[0]) and @reduce(.And, coords <= x[1]))
+                        continue;
                     try to_remove.append(App.frame_alloc(), coords);
                 }
                 for (to_remove.items) |coords| {
@@ -254,9 +270,8 @@ fn process_impl(self: *ChunkManager) !void {
                         continue;
                     }
 
-                    const two: @Vector(3, i32) = @splat(2);
-                    const x: @Vector(3, u3) = @intCast(@mod(coords, two));
-                    const y: u3 = (x[0] << 2) | (x[1] << 1) | (x[2] << 0);
+                    const x: @Vector(3, u32) = @intCast(@mod(coords, MESH_GROUP_SIZE));
+                    const y: u32 = @reduce(.Add, x * stride);
                     if (y != stage) continue;
 
                     try to_remove.append(App.frame_alloc(), coords);
@@ -382,7 +397,7 @@ const Command = struct {
 
     const Body = union(enum) {
         load_region: struct { Chunk.Coords, Chunk.Coords },
-        mesh_chunks: u3,
+        mesh_chunks: u32,
         set_block: struct { Chunk.Coords, Block },
     };
 
