@@ -12,29 +12,58 @@ pub const Z_OFFSET = CHUNK_SIZE;
 pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
 pub const Coords = @Vector(3, i32);
 
+// chunk lifetime
+// these steps all happen exactly in this order (unless there are bugs in ChunkManager)
+// and only after everything is complete the chunk may get invalidated
+//
+// init:
+//      1. sets coords
+//      2. block_lighting, light_source_ids are empty
+//      3. state = not_ready
+// generate:
+//      1. sets blocks
+// build_mesh:
+//      1. sets is_occluded
+//      2. sets neighbour_cache (invalid after this)
+//      3. faces is set on a thread-local arena
+//      4. temp_* are set on a thread-local arena
+// move_mesh_from_thread_memory:
+//      1. faces gets copied into a shared arena
+//      2. temp_this_chunk_lights is invalid
+//      3. temp_* get appended onto non-temp version (living on shared arena)
+// after ChunkManager.process():
+//      1. faces, block_lighting, light_source_ids, is_occluded are copied to the gpu and invalidated
+//      2. coords, blocks are valid until the chunk gets unloaded
+//      3. state = ready
+
 coords: Coords,
+state: State,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block,
+faces: [std.enums.values(Block.Direction).len]std.ArrayList(FaceMesh),
+is_occluded: bool,
+neighbour_cache: [26]?*Chunk,
+
+temp_this_chunk_lights: std.ArrayList(Coords),
+temp_block_lighting: [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]std.ArrayList(BlockLighting),
+temp_light_source_ids: std.AutoArrayHashMapUnmanaged(Coords, u12),
+
+block_lighting: [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]std.ArrayList(BlockLighting),
+light_source_ids: std.AutoArrayHashMapUnmanaged(Coords, void),
 
 const Chunk = @This();
+pub const State = enum { not_ready, ready };
 
 pub fn init(self: *Chunk, coords: Coords) void {
+    @memset(&self.blocks, Block.air());
     self.coords = coords;
+    self.block_lighting = @splat(@splat(@splat(.empty)));
+    self.light_source_ids = .empty;
+    self.state = .not_ready;
 }
 
 pub fn get(self: *Chunk, pos: Coords) Block {
     const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
     return self.blocks[@intCast(i)];
-}
-
-pub fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Direction) bool {
-    const b = self.get_safe(pos);
-    if (b == null) return false;
-    return b.?.is_solid(face);
-}
-
-pub fn casts_ao(self: *Chunk, pos: Coords) bool {
-    const b = self.get_safe(pos) orelse return false;
-    return b.casts_ao();
 }
 
 pub fn get_safe(self: *Chunk, pos: Coords) ?Block {
@@ -56,9 +85,140 @@ pub fn set(self: *Chunk, pos: Coords, block: Block) void {
     self.blocks[@intCast(i)] = block;
 }
 
+fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Direction) bool {
+    const world = self.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
+    const chunk = Chunk.world_to_chunk(world);
+    const block = Chunk.world_to_block(world);
+    if (@reduce(.And, chunk == self.coords)) return self.get(block).is_solid(face);
+
+    const d = chunk - self.coords;
+    const i: usize = @intCast(d[0] + 1);
+    const j: usize = @intCast(d[1] + 1);
+    const k: usize = @intCast(d[2] + 1);
+    const idx = Chunk.neighbours2_idx[i][j][k];
+    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
+    if (self.neighbour_cache[idx]) |other| return other.get(block).is_solid(face);
+    return false;
+}
+
+fn casts_ao(self: *Chunk, pos: Coords) bool {
+    const world = self.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
+    const chunk = Chunk.world_to_chunk(world);
+    const block = Chunk.world_to_block(world);
+    if (@reduce(.And, chunk == self.coords)) return self.get(block).casts_ao();
+
+    const d = chunk - self.coords;
+    const i: usize = @intCast(d[0] + 1);
+    const j: usize = @intCast(d[1] + 1);
+    const k: usize = @intCast(d[2] + 1);
+    const idx = Chunk.neighbours2_idx[i][j][k];
+    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
+    if (self.neighbour_cache[idx]) |other| return other.get(block).casts_ao();
+    return false;
+}
+
 pub fn generate(self: *Chunk) void {
     const fptr = @field(Chunk, "generate_" ++ Options.world_gen);
     @call(.auto, fptr, .{self});
+}
+
+pub fn build_mesh(self: *Chunk, gpa: std.mem.Allocator) !void {
+    self.faces = @splat(.empty);
+    self.is_occluded = false;
+
+    self.temp_block_lighting = @splat(@splat(@splat(.empty)));
+    self.temp_light_source_ids = .empty;
+    self.temp_this_chunk_lights = .empty;
+
+    for (Chunk.neighbours2, &self.neighbour_cache) |d, *n| {
+        n.* = ChunkManager.instance().get_chunk(d + self.coords);
+    }
+
+    self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
+    self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
+    self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
+    self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                try self.mesh_block(gpa, .{ x, y, z });
+            }
+        }
+    }
+}
+
+pub fn move_mesh_from_thread_memory(self: *Chunk, gpa: std.mem.Allocator) !void {
+    var new_faces: @FieldType(Chunk, "faces") = @splat(.empty);
+    for (&new_faces, self.faces) |*new, old| {
+        new.* = try old.clone(gpa);
+    }
+    self.faces = new_faces;
+}
+
+fn mesh_block(self: *Chunk, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !void {
+    const pos: Coords = @intCast(xyz);
+    const block = self.get(pos);
+    if (block.is_air()) return;
+    var visible = false;
+
+    for (std.enums.values(Block.Direction)) |side| {
+        const front = side.front_dir();
+        if (self.is_solid_face(pos + front, side.flip())) continue;
+
+        const up = side.up_dir();
+        const down = -side.up_dir();
+        const left = side.left_dir();
+        const right = -side.left_dir();
+
+        const ao = Ao.pack(
+            @intFromBool(self.casts_ao(pos + front + left)),
+            @intFromBool(self.casts_ao(pos + front + right)),
+            @intFromBool(self.casts_ao(pos + front + up)),
+            @intFromBool(self.casts_ao(pos + front + down)),
+            @intFromBool(self.casts_ao(pos + front + left + up)),
+            @intFromBool(self.casts_ao(pos + front + right + up)),
+            @intFromBool(self.casts_ao(pos + front + left + down)),
+            @intFromBool(self.casts_ao(pos + front + right + down)),
+        );
+
+        for (block.get_textures(side), block.get_faces(side)) |tex, face| {
+            try self.faces[@intFromEnum(side)].append(gpa, .{
+                .ao = @intCast(Ao.ao_to_idx[ao]),
+                .model = @intCast(face),
+                .texture = @intCast(tex),
+                .x = @intCast(xyz[0]),
+                .y = @intCast(xyz[1]),
+                .z = @intCast(xyz[2]),
+            });
+        }
+        visible = true;
+    }
+
+    if (visible and block.emits_light()) try self.temp_this_chunk_lights.append(gpa, pos);
+}
+
+fn next_layer_solid(self: *Chunk, normal: Block.Direction, start: Coords) bool {
+    const right = -normal.left_dir();
+    const up = normal.up_dir();
+    const front = normal.front_dir();
+
+    for (0..CHUNK_SIZE) |i| {
+        for (0..CHUNK_SIZE) |j| {
+            const u: i32 = @intCast(i);
+            const v: i32 = @intCast(j);
+
+            const pos = start +
+                @as(Coords, @splat(u)) * right +
+                @as(Coords, @splat(v)) * up;
+
+            if (!self.is_solid_face(pos + front, normal.flip())) return false;
+        }
+    }
+
+    return true;
 }
 
 fn generate_solid(self: *Chunk) void {
@@ -223,3 +383,126 @@ pub fn world_to_chunk(w: Coords) Coords {
 pub fn world_to_block(w: Coords) Coords {
     return @mod(w, @as(Coords, @splat(CHUNK_SIZE)));
 }
+
+pub const FaceMesh = packed struct(u64) {
+    // A:
+    x: u4,
+    y: u4,
+    z: u4,
+    ao: u6,
+    model: u10 = 0,
+    _unused2: u4 = 0b1010,
+    // B:
+    texture: u16,
+    _unused3: u16 = 0xdead,
+
+    pub fn define() [:0]const u8 {
+        return 
+        \\
+        \\struct Face {
+        \\  uvec3 pos;
+        \\  uint ao;
+        \\  uint model;
+        \\  uint texture;
+        \\};
+        \\
+        \\Face unpack_face(){
+        \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
+        \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
+        \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
+        \\  uint ao = (vert_face_a >> uint(12)) & uint(0x3F);
+        \\  uint model = (vert_face_a >> uint(18)) & uint(0x3FF);
+        \\  uint tex = (vert_face_b >> uint(0)) & uint(0xFFFF);
+        \\  return Face(uvec3(x, y, z), ao, model, tex);
+        \\}
+        ;
+    }
+};
+
+const BlockLighting = packed struct(u32) {
+    chunk_light_id: u12,
+    distance: u4,
+    relative_chunk: u5,
+    _unused: u11,
+};
+
+pub const Ao = struct {
+    const ao_to_idx = precalculated[1];
+    pub const idx_to_ao = precalculated[0];
+
+    const L = 0;
+    const R = 1;
+    const T = 2;
+    const B = 3;
+    const TL = 4;
+    const TR = 5;
+    const BL = 6;
+    const BR = 7;
+
+    fn normalize(x: u8) u8 {
+        const l = (x >> L) & 1;
+        const r = (x >> R) & 1;
+        const t = (x >> T) & 1;
+        const b = (x >> B) & 1;
+        const tl = (x >> TL) & 1;
+        const tr = (x >> TR) & 1;
+        const bl = (x >> BL) & 1;
+        const br = (x >> BR) & 1;
+        return pack(l, r, t, b, tl, tr, bl, br);
+    }
+
+    fn pack(l: u8, r: u8, t: u8, b: u8, tl: u8, tr: u8, bl: u8, br: u8) u8 {
+        return (l << L) |
+            (r << R) |
+            (t << T) |
+            (b << B) |
+            ((tl * (1 - l) * (1 - t)) << TL) |
+            ((tr * (1 - r) * (1 - t)) << TR) |
+            ((bl * (1 - l) * (1 - b)) << BL) |
+            ((br * (1 - r) * (1 - b)) << BR);
+    }
+
+    const precalculated = blk: {
+        @setEvalBranchQuota(std.math.maxInt(u32));
+        const UNIQUE_CNT = 47;
+        var to_ao: [UNIQUE_CNT]u8 = @splat(0);
+        var to_idx: [256]u8 = @splat(0);
+
+        var i: usize = 0;
+        for (0..256) |x| {
+            const y = normalize(x);
+            const k = l1: for (0..i) |j| {
+                if (to_ao[j] == y) break :l1 j;
+            } else l2: {
+                to_ao[i] = y;
+                i += 1;
+                break :l2 i - 1;
+            };
+            to_idx[x] = k;
+        }
+        std.debug.assert(i == UNIQUE_CNT);
+        break :blk .{ to_ao, to_idx };
+    };
+
+    pub fn define() [:0]const u8 {
+        return std.fmt.comptimePrint(
+            \\
+            \\float get_ao() {{
+            \\  #define GET(dir) float((frag_ao >> uint(dir)) & uint(1))
+            \\  #define CORNER(v) (1.0 - clamp(abs(frag_uv.x - (v).x) + abs(frag_uv.y - (v).y), 0, 1))
+            \\  float l = GET({}) * (1.0 - frag_uv.x);
+            \\  float r = GET({}) * (frag_uv.x);
+            \\  float t = GET({}) * (frag_uv.y);
+            \\  float b = GET({}) * (1.0 - frag_uv.y);
+            \\  float tl = GET({}) * CORNER(vec2(0, 1));
+            \\  float tr = GET({}) * CORNER(vec2(1, 1));
+            \\  float bl = GET({}) * CORNER(vec2(0, 0));
+            \\  float br = GET({}) * CORNER(vec2(1, 0));
+            \\  float ao = (l + r + t + b + tl + tr + bl + br) / 4.0;
+            \\  return smoothstep(0.0, 1.0, ao);
+            \\  #undef GET
+            \\  #undef CORNER
+            \\}}
+        , .{ Ao.L, Ao.R, Ao.T, Ao.B, Ao.TL, Ao.TR, Ao.BL, Ao.BR });
+    }
+};

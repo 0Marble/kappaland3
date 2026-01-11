@@ -2,7 +2,6 @@ const std = @import("std");
 const App = @import("App.zig");
 const Game = @import("Game.zig");
 const Chunk = @import("Chunk.zig");
-const ChunkMesh = @import("ChunkMesh.zig");
 const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const MemoryUsage = @import("util.zig").MemoryUsage;
@@ -35,7 +34,7 @@ subtasks: std.ArrayList(SubTask),
 // while len is updated when the task gets picked up
 subtasks_left: usize,
 
-meshes_to_apply: std.ArrayList(ChunkMesh),
+meshes_to_apply: std.ArrayList(*Chunk),
 chunks_to_mesh: std.AutoArrayHashMapUnmanaged(Chunk.Coords, void),
 
 const ChunkManager = @This();
@@ -366,8 +365,8 @@ pub fn set_block(self: *ChunkManager, coords: Chunk.Coords, block: Block) !void 
 
         for (0..i) |j| {
             const chunk_to_mesh = self.get_chunk(remeshed_chunks[j]).?;
-            const mesh = try ChunkMesh.build(chunk_to_mesh, self.shared_temp_arena.allocator());
-            try self.meshes_to_apply.append(self.shared_gpa.allocator(), mesh);
+            try chunk_to_mesh.build_mesh(self.shared_temp_arena.allocator());
+            try self.meshes_to_apply.append(self.shared_gpa.allocator(), chunk_to_mesh);
         }
         return;
     }
@@ -439,7 +438,7 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
                 .mesh_chunks => {
                     _ = scratch.reset(.retain_capacity);
                     const chunk = self.get_chunk(task.coords).?;
-                    const mesh = ChunkMesh.build(chunk, scratch.allocator()) catch |err| {
+                    chunk.build_mesh(scratch.allocator()) catch |err| {
                         logger.err(
                             "{*}: [Thread {d}]: could not build mesh {}: {}",
                             .{ self, tid, task.coords, err },
@@ -450,14 +449,14 @@ fn worker(self: *ChunkManager, gpa: std.mem.Allocator) void {
                     self.mutex.lock();
                     defer self.mutex.unlock();
 
-                    const duped = mesh.dupe(self.shared_temp_arena.allocator()) catch |err| {
+                    chunk.move_mesh_from_thread_memory(self.shared_temp_arena.allocator()) catch |err| {
                         logger.err(
                             "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
                             .{ self, tid, task.coords, err },
                         );
                         continue;
                     };
-                    self.meshes_to_apply.append(self.shared_gpa.allocator(), duped) catch |err| {
+                    self.meshes_to_apply.append(self.shared_gpa.allocator(), chunk) catch |err| {
                         logger.err(
                             "{*}: [Thread {d}]: couldnt dupe mesh {}: {}",
                             .{ self, tid, task.coords, err },

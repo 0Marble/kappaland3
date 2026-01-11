@@ -2,7 +2,6 @@ const std = @import("std");
 const App = @import("App.zig");
 const Game = @import("Game.zig");
 const Chunk = @import("Chunk.zig");
-const ChunkMesh = @import("ChunkMesh.zig");
 const Options = @import("ClientOptions");
 const gl = @import("gl");
 const zm = @import("zm");
@@ -98,7 +97,7 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao", @src());
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor", @src());
 
-    inline for (ChunkMesh.Ao.idx_to_ao, 0..) |ao, i| {
+    inline for (Chunk.Ao.idx_to_ao, 0..) |ao, i| {
         const uni: [:0]const u8 = std.fmt.comptimePrint("u_idx_to_ao[{}]", .{i});
         try self.block_pass.set_uint(uni, @intCast(ao));
     }
@@ -147,7 +146,7 @@ fn init_face_attribs(self: *Self) !void {
         FACE_DATA_BINDING,
         self.faces.buffer,
         0,
-        @sizeOf(ChunkMesh.Face),
+        @sizeOf(Chunk.FaceMesh),
     ));
 
     try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_A));
@@ -205,7 +204,7 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
             FACE_DATA_BINDING,
             self.faces.buffer,
             0,
-            @sizeOf(ChunkMesh.Face),
+            @sizeOf(Chunk.FaceMesh),
         ));
         try gl_call(gl.BindVertexArray(0));
         self.had_realloc = false;
@@ -236,13 +235,13 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(0));
 }
 
-pub fn upload_chunk_mesh(self: *Self, mesh_obj: ChunkMesh) !void {
+pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     const old_buf = self.faces.buffer;
 
-    const mesh = if (self.meshes.get(mesh_obj.chunk.coords)) |mesh| blk: {
-        for (&mesh.handles, mesh_obj.faces) |*handle, faces| {
+    const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
+        for (&mesh.handles, chunk.faces) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
-            const new_size = faces.items.len * @sizeOf(ChunkMesh.Face);
+            const new_size = faces.items.len * @sizeOf(Chunk.FaceMesh);
 
             try gl_call(gl.InvalidateBufferSubData(
                 self.faces.buffer,
@@ -252,26 +251,26 @@ pub fn upload_chunk_mesh(self: *Self, mesh_obj: ChunkMesh) !void {
             handle.* = try self.faces.realloc(
                 handle.*,
                 new_size,
-                std.mem.Alignment.of(ChunkMesh.Face),
+                std.mem.Alignment.of(Chunk.FaceMesh),
             );
         }
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
-        for (&mesh.handles, mesh_obj.faces) |*handle, faces| {
-            const new_size = faces.items.len * @sizeOf(ChunkMesh.Face);
+        for (&mesh.handles, chunk.faces) |*handle, faces| {
+            const new_size = faces.items.len * @sizeOf(Chunk.FaceMesh);
             handle.* = try self.faces.alloc(
                 new_size,
-                std.mem.Alignment.of(ChunkMesh.Face),
+                std.mem.Alignment.of(Chunk.FaceMesh),
             );
         }
-        try self.meshes.put(App.gpa(), mesh_obj.chunk.coords, mesh);
+        try self.meshes.put(App.gpa(), chunk.coords, mesh);
         break :blk mesh;
     };
 
-    mesh.is_occluded = mesh_obj.is_occluded;
-    mesh.coords = mesh_obj.chunk.coords;
-    for (&mesh.face_counts, mesh_obj.faces, mesh.handles, 0..) |*cnt, faces, handle, i| {
+    mesh.is_occluded = chunk.is_occluded;
+    mesh.coords = chunk.coords;
+    for (&mesh.face_counts, chunk.faces, mesh.handles, 0..) |*cnt, faces, handle, i| {
         cnt.* = faces.items.len;
 
         const range = self.faces.get_range(handle).?;
@@ -384,7 +383,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
             indirect[i * BLOCK_FACE_CNT + j] = Indirect{
                 .count = 6,
                 .instance_count = @intCast(mesh.mesh.face_counts[j]),
-                .base_instance = @intCast(@divExact(range.offset, @sizeOf(ChunkMesh.Face))),
+                .base_instance = @intCast(@divExact(range.offset, @sizeOf(Chunk.FaceMesh))),
                 .base_vertex = 0,
                 .first_index = 0,
             };
@@ -542,9 +541,9 @@ const block_vert =
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
-++ ChunkMesh.Face.define() ++
+++ Chunk.FaceMesh.define() ++
     \\
-++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{ChunkMesh.Ao.idx_to_ao.len}) ++
+++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Chunk.Ao.idx_to_ao.len}) ++
     \\struct Chunk {
     \\  int x;
     \\  int y;
@@ -639,7 +638,7 @@ const block_frag =
     \\uniform bool u_enable_face_ao = true;
     \\uniform float u_ao_factor = 0.7;
     \\uniform sampler2DArray u_atlas;
-++ ChunkMesh.Ao.define() ++
+++ Chunk.Ao.define() ++
     \\
     \\void main() {
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
