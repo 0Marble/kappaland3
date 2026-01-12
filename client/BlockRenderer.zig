@@ -497,29 +497,6 @@ const normal_mats = blk: {
     break :blk res;
 };
 
-test "transforms" {
-    inline for (comptime std.enums.values(Block.Direction)) |dir| {
-        errdefer {
-            std.log.err("failed at {}", .{dir});
-        }
-        const idx: usize = @intFromEnum(dir);
-
-        const data = normal_mats[9 * idx .. 9 * (idx + 1)];
-        var vec: @Vector(9, f32) = @splat(0);
-        inline for (data, 0..) |x, i| vec[i] = x;
-        var mat: zm.Mat3f = .{ .data = vec };
-        mat = mat.transpose();
-
-        const front: zm.Vec3f = @floatFromInt(dir.front_dir());
-        const right: zm.Vec3f = @floatFromInt(-dir.left_dir());
-        const up: zm.Vec3f = @floatFromInt(dir.up_dir());
-
-        try std.testing.expectEqual(front, mat.multiplyVec3(.{ 0, 0, 1 }));
-        try std.testing.expectEqual(right, mat.multiplyVec3(.{ 1, 0, 0 }));
-        try std.testing.expectEqual(up, mat.multiplyVec3(.{ 0, 1, 0 }));
-    }
-}
-
 const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;

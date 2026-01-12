@@ -5,12 +5,14 @@ const Options = @import("Build").Options;
 const Handle = @import("GpuAlloc.zig").Handle;
 const Block = @import("Block.zig");
 const ChunkManager = @import("ChunkManager.zig");
+const Queue = @import("libmine").Queue;
 
 pub const CHUNK_SIZE = 16;
-pub const X_OFFSET = 1;
-pub const Z_OFFSET = CHUNK_SIZE;
-pub const Y_OFFSET = CHUNK_SIZE * CHUNK_SIZE;
+pub const X_STRIDE = 1;
+pub const Z_STRIDE = CHUNK_SIZE;
+pub const Y_STRIDE = CHUNK_SIZE * CHUNK_SIZE;
 pub const Coords = @Vector(3, i32);
+const logger = std.log.scoped(.chunk);
 
 // chunk lifetime
 // these steps all happen exactly in this order (unless there are bugs in ChunkManager)
@@ -18,37 +20,34 @@ pub const Coords = @Vector(3, i32);
 //
 // init:
 //      1. sets coords
-//      2. block_lighting, light_source_ids are empty
 //      3. state = not_ready
 // generate:
 //      1. sets blocks
+//      2. this_chunk_lights is filled with light coordinates
 // build_mesh:
 //      1. sets is_occluded
-//      2. sets neighbour_cache (invalid after this)
+//      2. sets neighbour_cache
 //      3. faces is set on a thread-local arena
-//      4. temp_* are set on a thread-local arena
 // move_mesh_from_thread_memory:
 //      1. faces gets copied into a shared arena
-//      2. temp_this_chunk_lights is invalid
-//      3. temp_* get appended onto non-temp version (living on shared arena)
+// compute_light_sources:
+//      1.
 // after ChunkManager.process():
-//      1. faces, block_lighting, light_source_ids, is_occluded are copied to the gpu and invalidated
-//      2. coords, blocks are valid until the chunk gets unloaded
-//      3. state = ready
+//      1. faces, is_occluded are copied to the gpu and invalidated
+//      2. neighbour_cache may be invalid
+//      3. coords, blocks are valid until the chunk gets unloaded
+//      4. state = ready
 
 coords: Coords,
 state: State,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block,
+
 faces: [std.enums.values(Block.Direction).len]std.ArrayList(FaceMesh),
 is_occluded: bool,
-neighbour_cache: [26]?*Chunk,
-
-temp_this_chunk_lights: std.ArrayList(Coords),
-temp_block_lighting: [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]std.ArrayList(BlockLighting),
-temp_light_source_ids: std.AutoArrayHashMapUnmanaged(Coords, u12),
-
-block_lighting: [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]std.ArrayList(BlockLighting),
-light_source_ids: std.AutoArrayHashMapUnmanaged(Coords, void),
+neighbour_cache: [Neighbours(3).NEIGHBOURS_CNT]?*Chunk,
+this_chunk_lights_buf: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Coords,
+light_sources: std.ArrayList(Coords),
+outgoing_light: std.AutoArrayHashMapUnmanaged(LightMaterial, OutgoingLight),
 
 const Chunk = @This();
 pub const State = enum { not_ready, ready };
@@ -56,19 +55,17 @@ pub const State = enum { not_ready, ready };
 pub fn init(self: *Chunk, coords: Coords) void {
     @memset(&self.blocks, Block.air());
     self.coords = coords;
-    self.block_lighting = @splat(@splat(@splat(.empty)));
-    self.light_source_ids = .empty;
     self.state = .not_ready;
 }
 
 pub fn get(self: *Chunk, pos: Coords) Block {
-    const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+    const i = @reduce(.Add, pos * Coords{ X_STRIDE, Y_STRIDE, Z_STRIDE });
     return self.blocks[@intCast(i)];
 }
 
 pub fn get_safe(self: *Chunk, pos: Coords) ?Block {
     const size = Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE };
-    const stride = Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET };
+    const stride = Coords{ X_STRIDE, Y_STRIDE, Z_STRIDE };
     const zero = zm.vec.zero(3, i32);
     const a = pos < size;
     const b = pos >= zero;
@@ -81,43 +78,13 @@ pub fn get_safe(self: *Chunk, pos: Coords) ?Block {
 }
 
 pub fn set(self: *Chunk, pos: Coords, block: Block) void {
-    const i = @reduce(.Add, pos * Coords{ X_OFFSET, Y_OFFSET, Z_OFFSET });
+    const i = @reduce(.Add, pos * Coords{ X_STRIDE, Y_STRIDE, Z_STRIDE });
     self.blocks[@intCast(i)] = block;
 }
 
-fn is_solid_face(self: *Chunk, pos: Coords, face: Block.Direction) bool {
-    const world = self.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
-    const chunk = Chunk.world_to_chunk(world);
-    const block = Chunk.world_to_block(world);
-    if (@reduce(.And, chunk == self.coords)) return self.get(block).is_solid(face);
-
-    const d = chunk - self.coords;
-    const i: usize = @intCast(d[0] + 1);
-    const j: usize = @intCast(d[1] + 1);
-    const k: usize = @intCast(d[2] + 1);
-    const idx = Chunk.neighbours2_idx[i][j][k];
-    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
-    if (self.neighbour_cache[idx]) |other| return other.get(block).is_solid(face);
-    return false;
-}
-
-fn casts_ao(self: *Chunk, pos: Coords) bool {
-    const world = self.coords * Chunk.Coords{ CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE } + pos;
-    const chunk = Chunk.world_to_chunk(world);
-    const block = Chunk.world_to_block(world);
-    if (@reduce(.And, chunk == self.coords)) return self.get(block).casts_ao();
-
-    const d = chunk - self.coords;
-    const i: usize = @intCast(d[0] + 1);
-    const j: usize = @intCast(d[1] + 1);
-    const k: usize = @intCast(d[2] + 1);
-    const idx = Chunk.neighbours2_idx[i][j][k];
-    std.debug.assert(@reduce(.And, Chunk.neighbours2[idx] == d));
-    if (self.neighbour_cache[idx]) |other| return other.get(block).casts_ao();
-    return false;
-}
-
 pub fn generate(self: *Chunk) void {
+    self.light_sources = .initBuffer(&self.this_chunk_lights_buf);
+
     const fptr = @field(Chunk, "generate_" ++ Options.world_gen);
     @call(.auto, fptr, .{self});
 }
@@ -125,14 +92,12 @@ pub fn generate(self: *Chunk) void {
 pub fn build_mesh(self: *Chunk, gpa: std.mem.Allocator) !void {
     self.faces = @splat(.empty);
     self.is_occluded = false;
+    self.light_sources.clearRetainingCapacity();
 
-    self.temp_block_lighting = @splat(@splat(@splat(.empty)));
-    self.temp_light_source_ids = .empty;
-    self.temp_this_chunk_lights = .empty;
-
-    for (Chunk.neighbours2, &self.neighbour_cache) |d, *n| {
+    for (Neighbours(3).deltas, &self.neighbour_cache) |d, *n| {
         n.* = ChunkManager.instance().get_chunk(d + self.coords);
     }
+    std.debug.assert(self.neighbour_cache[Neighbours(3).SELF_RELATIVE_IDX] == self);
 
     self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
     self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
@@ -158,6 +123,49 @@ pub fn move_mesh_from_thread_memory(self: *Chunk, gpa: std.mem.Allocator) !void 
     self.faces = new_faces;
 }
 
+pub fn compute_outgoing_light(self: *Chunk, gpa: std.mem.Allocator) !void {
+    self.outgoing_light = .empty;
+    var queue: Queue(Coords) = .empty;
+
+    for (self.light_sources.items) |pos| {
+        queue.clear();
+        const color: u22 = @intCast(self.get(pos).emitted_light_color().?);
+        const entry = try self.outgoing_light.getOrPut(gpa, color);
+        if (!entry.found_existing) entry.value_ptr.* = .init(color);
+
+        try self.compute_outgoing_light_from_block(gpa, pos, entry.value_ptr, &queue);
+    }
+}
+
+fn compute_outgoing_light_from_block(
+    self: *Chunk,
+    gpa: std.mem.Allocator,
+    start: Coords,
+    mesh: *OutgoingLight,
+    queue: *Queue(Coords),
+) !void {
+    const start_level = self.get(start).emitted_light_level().?;
+
+    try queue.push(gpa, start);
+    const ref = &mesh.verts[OutgoingLight.to_index(self.coords, start)];
+    ref.level = start_level;
+
+    while (queue.pop()) |pos| {
+        const level = mesh.verts[OutgoingLight.to_index(self.coords, pos)].level;
+        if (level == 1) continue;
+
+        for (std.enums.values(Block.Direction)) |dir| {
+            const next = pos + dir.front_dir();
+            if (self.is_solid_face_relative(next, dir)) continue;
+            const next_level = &mesh.verts[OutgoingLight.to_index(self.coords, next)].level;
+            if (next_level.* < level - 1) {
+                next_level.* = level - 1;
+                try queue.push(gpa, next);
+            }
+        }
+    }
+}
+
 fn mesh_block(self: *Chunk, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !void {
     const pos: Coords = @intCast(xyz);
     const block = self.get(pos);
@@ -166,7 +174,7 @@ fn mesh_block(self: *Chunk, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !voi
 
     for (std.enums.values(Block.Direction)) |side| {
         const front = side.front_dir();
-        if (self.is_solid_face(pos + front, side.flip())) continue;
+        if (self.is_solid_face_relative(pos + front, side.flip())) continue;
 
         const up = side.up_dir();
         const down = -side.up_dir();
@@ -174,14 +182,14 @@ fn mesh_block(self: *Chunk, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !voi
         const right = -side.left_dir();
 
         const ao = Ao.pack(
-            @intFromBool(self.casts_ao(pos + front + left)),
-            @intFromBool(self.casts_ao(pos + front + right)),
-            @intFromBool(self.casts_ao(pos + front + up)),
-            @intFromBool(self.casts_ao(pos + front + down)),
-            @intFromBool(self.casts_ao(pos + front + left + up)),
-            @intFromBool(self.casts_ao(pos + front + right + up)),
-            @intFromBool(self.casts_ao(pos + front + left + down)),
-            @intFromBool(self.casts_ao(pos + front + right + down)),
+            @intFromBool(self.casts_ao_relative(pos + front + left)),
+            @intFromBool(self.casts_ao_relative(pos + front + right)),
+            @intFromBool(self.casts_ao_relative(pos + front + up)),
+            @intFromBool(self.casts_ao_relative(pos + front + down)),
+            @intFromBool(self.casts_ao_relative(pos + front + left + up)),
+            @intFromBool(self.casts_ao_relative(pos + front + right + up)),
+            @intFromBool(self.casts_ao_relative(pos + front + left + down)),
+            @intFromBool(self.casts_ao_relative(pos + front + right + down)),
         );
 
         for (block.get_textures(side), block.get_faces(side)) |tex, face| {
@@ -197,7 +205,7 @@ fn mesh_block(self: *Chunk, gpa: std.mem.Allocator, xyz: @Vector(3, usize)) !voi
         visible = true;
     }
 
-    if (visible and block.emits_light()) try self.temp_this_chunk_lights.append(gpa, pos);
+    if (visible and block.emits_light()) self.light_sources.appendAssumeCapacity(pos);
 }
 
 fn next_layer_solid(self: *Chunk, normal: Block.Direction, start: Coords) bool {
@@ -214,7 +222,7 @@ fn next_layer_solid(self: *Chunk, normal: Block.Direction, start: Coords) bool {
                 @as(Coords, @splat(u)) * right +
                 @as(Coords, @splat(v)) * up;
 
-            if (!self.is_solid_face(pos + front, normal.flip())) return false;
+            if (!self.is_solid_face_relative(pos + front, normal.flip())) return false;
         }
     }
 
@@ -270,7 +278,7 @@ fn generate_balls(self: *Chunk) void {
                 } + self.coords * size;
                 const xyz = @as(zm.Vec3f, @floatFromInt(pos)) * scale;
 
-                const idx = i * X_OFFSET + j * Y_OFFSET + k * Z_OFFSET;
+                const idx = i * X_STRIDE + j * Y_STRIDE + k * Z_STRIDE;
                 const w = @abs(@sin(xyz[0]) + @cos(xyz[2]) + @sin(xyz[1]));
 
                 if (w < 3 * 0.4) {
@@ -331,46 +339,27 @@ fn generate_wavy(self: *Chunk) void {
     }
 }
 
-pub const neighbours: [6]Coords = .{
-    .{ 0, 0, 1 },
-    .{ 0, 0, -1 },
-    .{ 1, 0, 0 },
-    .{ -1, 0, 0 },
-    .{ 0, 1, 0 },
-    .{ 0, -1, 0 },
-};
+fn get_neighbour(self: *Chunk, coords: Coords) ?*Chunk {
+    return self.neighbour_cache[Neighbours(3).neighbour_index(self.coords, coords)];
+}
 
-const Neighbours = struct {
-    n: [26]Coords = std.mem.zeroes([26]Coords),
-    idx: [3][3][3]usize = std.mem.zeroes([3][3][3]usize),
+fn is_solid_face_relative(self: *Chunk, pos: Coords, face: Block.Direction) bool {
+    const world = world_from_chunk_and_block(self.coords, pos);
+    const chunk = world_to_chunk(world);
+    const block = world_to_block(world);
 
-    const instance: Neighbours = blk: {
-        var self = Neighbours{};
-        const zero: Coords = @splat(0);
+    if (self.get_neighbour(chunk)) |other| return other.get(block).is_solid(face);
+    return false;
+}
 
-        var l: usize = 0;
-        for (0..3) |i| {
-            for (0..3) |j| {
-                for (0..3) |k| {
-                    const pos: Coords = .{
-                        @as(i32, @intCast(i)) - 1,
-                        @as(i32, @intCast(j)) - 1,
-                        @as(i32, @intCast(k)) - 1,
-                    };
-                    if (@reduce(.And, pos == zero)) continue;
-                    self.n[l] = pos;
-                    self.idx[i][j][k] = l;
-                    l += 1;
-                }
-            }
-        }
+fn casts_ao_relative(self: *Chunk, pos: Coords) bool {
+    const world = world_from_chunk_and_block(self.coords, pos);
+    const chunk = world_to_chunk(world);
+    const block = world_to_block(world);
 
-        break :blk self;
-    };
-};
-
-pub const neighbours2 = Neighbours.instance.n;
-pub const neighbours2_idx = Neighbours.instance.idx;
+    if (self.get_neighbour(chunk)) |other| return other.get(block).casts_ao();
+    return false;
+}
 
 pub fn to_world_coord(pos: zm.Vec3f) Coords {
     return @intFromFloat(@floor(pos));
@@ -382,6 +371,11 @@ pub fn world_to_chunk(w: Coords) Coords {
 
 pub fn world_to_block(w: Coords) Coords {
     return @mod(w, @as(Coords, @splat(CHUNK_SIZE)));
+}
+
+pub fn world_from_chunk_and_block(chunk: Coords, block: Coords) Coords {
+    const size: Coords = @splat(CHUNK_SIZE);
+    return block + chunk * size;
 }
 
 pub const FaceMesh = packed struct(u64) {
@@ -417,13 +411,6 @@ pub const FaceMesh = packed struct(u64) {
         \\}
         ;
     }
-};
-
-const BlockLighting = packed struct(u32) {
-    chunk_light_id: u12,
-    distance: u4,
-    relative_chunk: u5,
-    _unused: u11,
 };
 
 pub const Ao = struct {
@@ -504,5 +491,79 @@ pub const Ao = struct {
             \\  #undef CORNER
             \\}}
         , .{ Ao.L, Ao.R, Ao.T, Ao.B, Ao.TL, Ao.TR, Ao.BL, Ao.BR });
+    }
+};
+
+pub fn Neighbours(comptime size: comptime_int) type {
+    std.debug.assert(size > 0);
+    std.debug.assert(size % 2 == 1);
+    const half_size: Coords = .{ size / 2, size / 2, size / 2 };
+
+    const deltas_arr, const to_idx_arr = blk: {
+        var deltas_arr = std.mem.zeroes([size * size * size]Coords);
+        var to_idx_arr = std.mem.zeroes([size][size][size]usize);
+        var cnt: usize = 0;
+
+        for (0..size) |x| {
+            for (0..size) |y| {
+                for (0..size) |z| {
+                    deltas_arr[cnt] = @intCast(@as(@Vector(3, usize), .{ x, y, z }));
+                    deltas_arr[cnt] -= half_size;
+                    to_idx_arr[x][y][z] = cnt;
+                    cnt += 1;
+                }
+            }
+        }
+        break :blk .{ deltas_arr, to_idx_arr };
+    };
+
+    return struct {
+        pub const deltas = deltas_arr;
+        pub const to_idx = to_idx_arr;
+        pub const NEIGHBOURS_CNT = size * size * size;
+        pub const SELF_RELATIVE_IDX = neighbour_index(@splat(0), @splat(0));
+
+        pub fn neighbour_index(origin: Coords, chunk: Coords) usize {
+            const delta = chunk - origin + half_size;
+            const i: usize = @intCast(delta[0]);
+            const j: usize = @intCast(delta[1]);
+            const k: usize = @intCast(delta[2]);
+            return to_idx[i][j][k];
+        }
+
+        pub fn block_neighbour_index(origin: Coords, block: Coords) usize {
+            const chunk = world_to_chunk(world_from_chunk_and_block(origin, block));
+            return neighbour_index(origin, chunk);
+        }
+    };
+}
+
+const LightMaterial = u28;
+const LightLevel = u4;
+const BlockLighting = packed struct(u32) {
+    light_material: LightMaterial,
+    level: LightLevel = 0,
+};
+
+const OutgoingLight = struct {
+    material: LightMaterial,
+    verts: [(3 * CHUNK_SIZE) * (3 * CHUNK_SIZE) * (3 * CHUNK_SIZE)]BlockLighting,
+
+    pub fn init(material: LightMaterial) OutgoingLight {
+        return .{
+            .material = material,
+            .verts = @splat(.{ .light_material = material }),
+        };
+    }
+
+    const CHUNK_STRIDE = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+
+    fn to_index(origin: Coords, pos: Coords) usize {
+        const world = world_from_chunk_and_block(origin, pos);
+        const block = world_to_block(world);
+        const chunk = world_to_chunk(world);
+        const chunk_idx = Neighbours(3).neighbour_index(origin, chunk);
+        const size: Coords = .{ X_STRIDE, Y_STRIDE, Z_STRIDE };
+        return chunk_idx * CHUNK_STRIDE + @as(usize, @intCast(@reduce(.Add, block * size)));
     }
 };

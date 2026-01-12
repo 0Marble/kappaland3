@@ -40,6 +40,18 @@ pub fn emits_light(self: Block) bool {
     return info.light != null;
 }
 
+pub fn emitted_light_level(self: Block) ?u4 {
+    const info = App.assets().get_blocks().get_info(self);
+    if (info.light) |light| return light.level;
+    return null;
+}
+
+pub fn emitted_light_color(self: Block) ?u12 {
+    const info = App.assets().get_blocks().get_info(self);
+    if (info.light) |light| return light.color;
+    return null;
+}
+
 pub fn air() Block {
     return App.assets().get_blocks().air;
 }
