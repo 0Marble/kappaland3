@@ -32,10 +32,18 @@ pub fn init() !*World {
     self.chunk_pool = .init(self.get_gpa());
     try self.renderer.init();
     self.chunk_manager = try ChunkManager.init(self, .{ .thread_count = 4 });
+
+    try App.get_renderer().add_step(BlockRenderer.draw, .{&self.renderer});
+
     return self;
 }
 
 pub fn deinit(self: *World) void {
+    for (self.chunks.values()) |chunk| {
+        chunk.deinit(self.chunk_manager.shared_gpa.allocator());
+    }
+    self.chunks.deinit(self.get_gpa());
+
     self.chunk_manager.deinit();
 
     self.chunk_pool.deinit();
@@ -72,6 +80,11 @@ pub fn load_around(self: *World, chunk: Coords) !void {
 
 pub fn update(self: *World) App.UnhandledError!void {
     try self.chunk_manager.process();
+}
+
+pub fn on_frame_start(self: *World) App.UnhandledError!void {
+    try self.renderer.on_frame_start();
+    try self.chunk_manager.on_frame_start();
 }
 
 pub fn world_to_chunk(w: Coords) Coords {

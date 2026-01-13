@@ -40,7 +40,8 @@ chunk_data_ssbo: gl.uint,
 indirect_buf: gl.uint,
 
 drawn_chunks_cnt: usize,
-triangle_cnt: usize,
+shown_triangle_count: usize,
+total_triangle_count: usize,
 cur_chunk_data_ssbo_size: usize,
 
 meshes: std.AutoArrayHashMapUnmanaged(Coords, *Mesh),
@@ -51,7 +52,8 @@ pub fn init(self: *Self) !void {
 
     self.had_realloc = false;
     self.drawn_chunks_cnt = 0;
-    self.triangle_cnt = 0;
+    self.shown_triangle_count = 0;
+    self.total_triangle_count = 0;
     self.meshes = .empty;
     self.mesh_pool = .init(App.gpa());
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
@@ -240,7 +242,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     const old_buf = self.faces.buffer;
 
     const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
-        for (&mesh.handles, chunk.faces) |*handle, faces| {
+        for (&mesh.handles, &chunk.faces.values) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
             const new_size = faces.items.len * @sizeOf(FaceMesh);
 
@@ -258,7 +260,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
-        for (&mesh.handles, chunk.faces) |*handle, faces| {
+        for (&mesh.handles, &chunk.faces.values) |*handle, faces| {
             const new_size = faces.items.len * @sizeOf(FaceMesh);
             handle.* = try self.faces.alloc(
                 new_size,
@@ -271,8 +273,9 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
 
     mesh.is_occluded = chunk.is_occluded;
     mesh.coords = chunk.coords;
-    for (&mesh.face_counts, chunk.faces, mesh.handles, 0..) |*cnt, faces, handle, i| {
+    for (&mesh.face_counts, &chunk.faces.values, mesh.handles, 0..) |*cnt, faces, handle, i| {
         cnt.* = faces.items.len;
+        self.total_triangle_count += faces.items.len * 2;
 
         const range = self.faces.get_range(handle).?;
         logger.debug(
@@ -294,12 +297,14 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
 }
 
 pub fn destroy_chunk_mesh(self: *Self, coords: Coords) !void {
-    const mesh = self.meshes.fetchSwapRemove(coords) orelse return;
-    for (mesh.value.handles) |handle| {
+    const kv = self.meshes.fetchSwapRemove(coords) orelse return;
+    const mesh = kv.value;
+    for (mesh.handles, mesh.face_counts) |handle, cnt| {
+        self.total_triangle_count -= cnt * 2;
         self.faces.free(handle);
     }
 
-    self.mesh_pool.destroy(mesh.value);
+    self.mesh_pool.destroy(mesh);
 }
 
 fn on_imgui(self: *Self) !void {
@@ -308,7 +313,7 @@ fn on_imgui(self: *Self) !void {
         \\Meshes: 
         \\    total:     {d}
         \\    drawn:     {d}
-        \\    triangles: {d}
+        \\    triangles: {d}/{d}
         \\GPU Memory:
         \\    faces:      {f}
         \\    chunk_ssbo: {f}
@@ -316,7 +321,8 @@ fn on_imgui(self: *Self) !void {
         .{
             self.meshes.count(),
             self.drawn_chunks_cnt,
-            self.triangle_cnt,
+            self.shown_triangle_count,
+            self.total_triangle_count,
             util.MemoryUsage.from_bytes(self.faces.size),
             util.MemoryUsage.from_bytes(self.cur_chunk_data_ssbo_size),
         },
@@ -350,7 +356,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
 
     const cam_chunk = cam.chunk_coords();
     var meshes: std.ArrayList(MeshOrder) = .empty;
-    self.triangle_cnt = 0;
+    self.shown_triangle_count = 0;
 
     for (self.meshes.values()) |mesh| {
         const bound = mesh.bounding_sphere();
@@ -394,7 +400,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
                 .z = mesh.mesh.coords[2],
                 .normal = j,
             };
-            self.triangle_cnt += mesh.mesh.face_counts[j] * 2;
+            self.shown_triangle_count += mesh.mesh.face_counts[j] * 2;
         }
     }
 

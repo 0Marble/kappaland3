@@ -87,6 +87,7 @@ fn on_imgui_blocks(self: *Game) !void {
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
     try App.gui().add_to_frame(Game, "Blocks", self, on_imgui_blocks, @src());
+    try self.world.on_frame_start();
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {

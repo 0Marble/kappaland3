@@ -4,6 +4,10 @@ const World = @import("../World.zig");
 const logger = std.log.scoped(.chunk_manager);
 const Block = @import("../Block.zig");
 const Coords = World.Coords;
+const App = @import("../App.zig");
+const util = @import("../util.zig");
+const c = @import("../c.zig").c;
+const c_str = @import("../c.zig").c_str;
 
 //*self: world.gpa
 
@@ -22,6 +26,7 @@ completed_tasks: std.ArrayList(*Task) = .empty, // shared_gpa
 tasks_left: usize = 0,
 task_pool: std.heap.MemoryPool(Task), // world.gpa
 phase_queue: std.DoublyLinkedList = .{}, // world.gpa
+phase_queue_len: usize = 0,
 phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
 chunks_to_mesh: std.AutoHashMapUnmanaged(Coords, void) = .empty,
@@ -107,6 +112,7 @@ pub fn schedule_load_region(self: *ChunkManager, center: Coords, radius: Coords)
         .body = .{ .loading = .{ center, radius } },
     };
     self.phase_queue.append(&phase.link);
+    self.phase_queue_len += 1;
 }
 
 pub fn schedule_set_block(
@@ -141,17 +147,23 @@ pub fn schedule_set_block(
             } },
         };
         self.phase_queue.append(&phase.link);
+        self.phase_queue_len += 1;
     }
 }
 
 pub fn process(self: *ChunkManager) !void {
     self.mutex.lock();
-    defer self.mutex.unlock();
+    defer {
+        self.mutex.unlock();
+        self.cond.broadcast();
+    }
 
     try self.process_phase();
 
     for (self.completed_tasks.items) |task| {
-        if (task.body == .meshing) {}
+        if (task.body == .meshing) {
+            try self.world.renderer.upload_chunk_mesh(task.chunk);
+        }
         self.task_pool.destroy(task);
     }
     self.completed_tasks.clearRetainingCapacity();
@@ -165,6 +177,7 @@ fn process_phase(self: *ChunkManager) !void {
         const phase: *Phase = try self.phase_pool.create();
         phase.* = .{ .body = .meshing };
         self.phase_queue.prepend(&phase.link);
+        self.phase_queue_len += 1;
         break :blk phase;
     } else return;
 
@@ -179,6 +192,7 @@ fn process_phase(self: *ChunkManager) !void {
                     "{*}: attempted to set block at an inactive chunk {}",
                     .{ self, chunk_coords },
                 );
+                self.phase_queue_len -= 1;
                 _ = self.phase_queue.popFirst();
                 self.phase_pool.destroy(cur_phase);
                 return try self.process_phase();
@@ -199,6 +213,7 @@ fn process_phase(self: *ChunkManager) !void {
 
             _ = self.phase_queue.popFirst();
             self.phase_pool.destroy(cur_phase);
+            self.phase_queue_len -= 1;
         },
 
         .meshing => {
@@ -220,6 +235,7 @@ fn process_phase(self: *ChunkManager) !void {
             }
 
             if (self.tasks_left == 0) {
+                self.phase_queue_len -= 1;
                 _ = self.phase_queue.popFirst();
                 self.phase_pool.destroy(cur_phase);
             }
@@ -230,6 +246,7 @@ fn process_phase(self: *ChunkManager) !void {
             if (@reduce(.And, center == self.cur_center) and
                 @reduce(.And, radius == self.cur_radius))
             {
+                self.phase_queue_len -= 1;
                 _ = self.phase_queue.popFirst();
                 self.phase_pool.destroy(cur_phase);
                 return try self.process_phase();
@@ -298,10 +315,11 @@ fn process_phase(self: *ChunkManager) !void {
                                 {
                                     continue;
                                 }
+                                try self.world.renderer.destroy_chunk_mesh(pos);
 
                                 const kv = self.world.chunks.fetchSwapRemove(pos).?;
                                 const chunk = kv.value;
-                                chunk.deinit();
+                                chunk.deinit(self.shared_gpa.allocator());
 
                                 for (Block.Neighbours(3).deltas) |d| {
                                     try self.chunks_to_mesh.put(
@@ -319,6 +337,7 @@ fn process_phase(self: *ChunkManager) !void {
             }
 
             if (self.tasks_left == 0) {
+                self.phase_queue_len -= 1;
                 _ = self.phase_queue.popFirst();
                 self.phase_pool.destroy(cur_phase);
                 self.cur_center = center;
@@ -337,6 +356,7 @@ const Phase = struct {
         loading: struct { Coords, Coords },
         meshing: void,
         set_block: struct { Coords, Block },
+        const Tag = std.meta.Tag(Body);
     };
 
     fn from_link(link: *std.DoublyLinkedList.Node) *Phase {
@@ -351,6 +371,7 @@ const Task = struct {
         loading: void,
         meshing: void,
         set_block: struct { Coords, Block },
+        const Tag = std.meta.Tag(Body);
     };
 };
 
@@ -411,8 +432,8 @@ pub const Worker = struct {
         while (true) {
             while (self.parent.pending_tasks.pop()) |task| {
                 logger.debug(
-                    "{*}: picked up task {*}@{}",
-                    .{ self, task, task.chunk.coords },
+                    "{*}: picked up task {} {*}@{}",
+                    .{ self, @as(Task.Body.Tag, task.body), task, task.chunk.coords },
                 );
                 if (!self.parent.is_running) break;
 
@@ -429,7 +450,7 @@ pub const Worker = struct {
 
                 self.parent.mutex.lock();
                 if (ok) {
-                    logger.info(
+                    logger.debug(
                         "{*}: finished task {*}@{}",
                         .{ self, task, task.chunk.coords },
                     );
@@ -450,7 +471,7 @@ pub const Worker = struct {
         _ = self.arena.reset(.retain_capacity);
         switch (task.body) {
             .loading => try task.chunk.generate(self),
-            .meshing => {},
+            .meshing => try task.chunk.build_mesh(self),
             .set_block => |x| try task.chunk.set_block_and_propagate_updates(x[0], x[1], self),
         }
     }
@@ -458,4 +479,46 @@ pub const Worker = struct {
 
 fn main_worker(self: *ChunkManager) *Worker {
     return self.workers.getPtr(self.main_tid).?;
+}
+
+pub fn on_frame_start(self: *ChunkManager) App.UnhandledError!void {
+    try App.gui().add_to_frame(ChunkManager, "Debug", self, on_imgui, @src());
+}
+
+fn on_imgui(self: *ChunkManager) !void {
+    const cur_phase = if (self.phase_queue.first) |link|
+        @as(Phase.Body.Tag, Phase.from_link(link).body)
+    else
+        null;
+
+    const text1 = try std.fmt.allocPrintSentinel(App.frame_alloc(),
+        \\Chunk Work:
+        \\    phase:  {?}
+        \\    work:   {d}:{d}:{d}
+        \\    meshes: {d}
+        \\Chunk Memory:
+        \\    world:  {f}
+        \\    shared: {f}
+    , .{
+        cur_phase,
+        self.phase_queue_len,
+        self.tasks_left,
+        self.completed_tasks.items.len,
+        self.chunks_to_mesh.count(),
+
+        util.MemoryUsage.from_bytes(self.world.gpa.total_requested_bytes),
+        util.MemoryUsage.from_bytes(self.unsafe_shared_gpa.total_requested_bytes),
+    }, 0);
+
+    c.igText("%s", @as(c_str, text1));
+
+    for (self.workers.values()) |*worker| {
+        const text2 = try std.fmt.allocPrintSentinel(App.frame_alloc(),
+            \\    {*}: {f}
+        , .{
+            worker,
+            util.MemoryUsage.from_bytes(worker.gpa.total_requested_bytes),
+        }, 0);
+        c.igText("%s", @as(c_str, text2));
+    }
 }

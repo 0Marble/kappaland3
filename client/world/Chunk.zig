@@ -20,7 +20,7 @@ world: *World,
 coords: Coords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block = undefined,
 neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
-
+is_occluded: bool = false,
 light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,
 faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.FaceMesh)) = .initFill(.empty),
@@ -39,13 +39,18 @@ pub fn init(world: *World, coords: Coords) OOM!*Chunk {
     return self;
 }
 
-pub fn deinit(self: *Chunk) void {
+pub fn deinit(self: *Chunk, shared_gpa: std.mem.Allocator) void {
     var it = self.neighbours.iterator();
     while (it.next()) |entry| {
         const dir = entry.key;
         const other = entry.value.*;
         other.neighbours.remove(dir);
     }
+    for (&self.faces.values) |*faces| {
+        faces.deinit(shared_gpa);
+    }
+    self.light_sources.deinit(shared_gpa);
+    self.light_levels.deinit(shared_gpa);
 }
 
 pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
@@ -72,6 +77,16 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
             }
         }
     }
+}
+
+pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
+    try self.faces.getPtr(.top).append(worker.shared(), .{
+        .x = 0,
+        .y = 8,
+        .z = 0,
+        .ao = 0,
+        .texture = 0,
+    });
 }
 
 pub fn set_block_and_propagate_updates(
