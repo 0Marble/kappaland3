@@ -5,6 +5,7 @@ const Options = @import("Build").Options;
 const BlockRenderer = @import("BlockRenderer.zig");
 const ChunkManager = @import("ChunkManager.zig");
 const Queue = @import("libmine").Queue;
+const App = @import("../App.zig");
 
 const Chunk = @This();
 const Coords = World.Coords;
@@ -91,7 +92,7 @@ pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
     // self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
     // self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
     // self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
-    // if (self.is_occluded) return;
+    if (self.is_occluded) return;
 
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |y| {
@@ -240,6 +241,7 @@ fn propagate_light(
     while (queue.pop()) |cur| {
         const chunk, const pos = cur;
         const level = chunk.get_light_level(pos, color);
+        std.log.info("{} {} {} {x}", .{ chunk.coords, pos, level, color });
         std.debug.assert(level > 1);
 
         for (std.enums.values(Block.Direction)) |d| {
@@ -280,10 +282,24 @@ fn mesh_block(self: *Chunk, xyz: @Vector(3, usize), worker: *ChunkManager.Worker
     const pos: Coords = @intCast(xyz);
     const block = self.get(pos);
     if (block.is_air()) return;
+    const light_names = comptime blk: {
+        var res = std.mem.zeroes([16][]const u8);
+        for (0..std.math.maxInt(u4) + 1) |lvl| {
+            res[lvl] = std.fmt.comptimePrint(".blocks.main.debug.light_level_{d}", .{lvl});
+        }
+        break :blk res;
+    };
 
     for (std.enums.values(Block.Direction)) |side| {
         const front = side.front_dir();
         if (self.is_solid_neighbour_face(pos + front, side.flip())) continue;
+
+        var light_lvl_tex: usize = 0;
+        if (self.get_chunk_block(pos + side.front_dir())) |next| {
+            const next_chunk, const next_pos = next;
+            const tex_name = light_names[next_chunk.get_light_level(next_pos, 0xF0F)];
+            light_lvl_tex = App.assets().get_blocks_atlas().get_idx_or_warn(tex_name);
+        }
 
         const up = side.up_dir();
         const down = -side.up_dir();
@@ -302,9 +318,10 @@ fn mesh_block(self: *Chunk, xyz: @Vector(3, usize), worker: *ChunkManager.Worker
         };
 
         for (block.get_textures(side), block.get_faces(side)) |tex, face| {
+            _ = tex;
             try self.faces.getPtr(side).append(worker.temp(), .init(
                 pos,
-                tex,
+                light_lvl_tex,
                 face,
                 ao,
             ));

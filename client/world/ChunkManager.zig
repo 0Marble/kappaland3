@@ -8,6 +8,7 @@ const App = @import("../App.zig");
 const util = @import("../util.zig");
 const c = @import("../c.zig").c;
 const c_str = @import("../c.zig").c_str;
+const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 
 //*self: world.gpa
 
@@ -124,31 +125,29 @@ pub fn schedule_set_block(
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    const immediate = false;
+    // if (immediate) {
+    //     const task1: *Task = try self.task_pool.create();
+    //     task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
+    //     try self.main_worker().run_task(task1);
+    //
+    //     for (Block.Neighbours(3).deltas) |d| {
+    //         const next = chunk.get_chunk_block(d + pos) orelse continue;
+    //         const next_chunk, _ = next;
+    //         const task2: *Task = try self.task_pool.create();
+    //         task2.* = .{ .chunk = next_chunk, .body = .meshing };
+    //         try self.main_worker().run_task(task2);
+    //     }
+    // }
 
-    if (immediate) {
-        const task1: *Task = try self.task_pool.create();
-        task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
-        try self.main_worker().run_task(task1);
-
-        for (Block.Neighbours(3).deltas) |d| {
-            const next = chunk.get_chunk_block(d + pos) orelse continue;
-            const next_chunk, _ = next;
-            const task2: *Task = try self.task_pool.create();
-            task2.* = .{ .chunk = next_chunk, .body = .meshing };
-            try self.main_worker().run_task(task2);
-        }
-    } else {
-        const phase: *Phase = try self.phase_pool.create();
-        phase.* = .{
-            .body = .{ .set_block = .{
-                pos + chunk.coords * @as(Coords, @splat(Chunk.CHUNK_SIZE)),
-                block,
-            } },
-        };
-        self.phase_queue.append(&phase.link);
-        self.phase_queue_len += 1;
-    }
+    const phase: *Phase = try self.phase_pool.create();
+    phase.* = .{
+        .body = .{ .set_block = .{
+            pos + chunk.coords * @as(Coords, @splat(Chunk.CHUNK_SIZE)),
+            block,
+        } },
+    };
+    self.phase_queue.append(&phase.link);
+    self.phase_queue_len += 1;
 }
 
 pub fn process(self: *ChunkManager) !void {
@@ -203,8 +202,15 @@ fn process_phase(self: *ChunkManager) !void {
                 .set_block = .{ block_coords, block },
             } };
             try self.main_worker().run_task(task1);
+            try self.completed_tasks.append(self.shared_gpa.allocator(), task1);
             for (Block.Neighbours(3).deltas) |d| {
-                try self.chunks_to_mesh.put(self.world.get_gpa(), d + chunk.coords, {});
+                // const world_coords = d + block_coords + @as(Coords, @splat(CHUNK_SIZE)) * chunk_coords;
+                // try self.chunks_to_mesh.put(
+                //     self.world.get_gpa(),
+                //     World.world_to_chunk(world_coords),
+                //     {},
+                // );
+                try self.chunks_to_mesh.put(self.world.get_gpa(), d + chunk_coords, {});
             }
 
             _ = self.phase_queue.popFirst();
@@ -427,10 +433,6 @@ pub const Worker = struct {
 
         while (true) {
             while (self.parent.pending_tasks.pop()) |task| {
-                logger.debug(
-                    "{*}: picked up task {} {*}@{}",
-                    .{ self, @as(Task.Body.Tag, task.body), task, task.chunk.coords },
-                );
                 if (!self.parent.is_running) break;
 
                 self.parent.mutex.unlock();
@@ -464,6 +466,10 @@ pub const Worker = struct {
     }
 
     fn run_task(self: *Worker, task: *Task) !void {
+        logger.debug(
+            "{*}: picked up task {} {*}@{}",
+            .{ self, @as(Task.Body.Tag, task.body), task, task.chunk.coords },
+        );
         _ = self.arena.reset(.retain_capacity);
         switch (task.body) {
             .loading => try task.chunk.generate(self),

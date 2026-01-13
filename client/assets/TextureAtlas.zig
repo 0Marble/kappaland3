@@ -111,12 +111,12 @@ pub fn deinit(self: *TextureAtlas) void {
 }
 
 pub fn get_idx(self: *TextureAtlas, name: []const u8) usize {
-    return self.images.get(name) orelse self.get_missing();
+    return self.images.getIndex(name) orelse self.get_missing();
 }
 
 pub fn get_idx_or_warn(self: *TextureAtlas, name: []const u8) usize {
     return self.images.getIndex(name) orelse {
-        logger.warn("missing texture: {s}", .{name});
+        logger.warn("missing texture: '{s}'", .{name});
         return self.get_missing();
     };
 }
