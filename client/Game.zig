@@ -4,23 +4,17 @@ const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
 pub const World = @import("World.zig");
 const Options = @import("Build").Options;
-const Coords = @import("Chunk.zig").Coords;
-const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 const Block = @import("Block.zig");
 const zm = @import("zm");
 pub const ModelRenderer = @import("ModelRenderer.zig");
-pub const BlockRenderer = @import("BlockRenderer.zig");
 
 const logger = std.log.scoped(.game);
 
 const Game = @This();
-const WIDTH = Options.world_size;
-const HEIGHT = Options.world_height;
 
 camera: Camera,
 world: *World,
 current_selected_block: Block,
-block_renderer: BlockRenderer,
 
 const Instance = struct {
     var instance: Game = undefined;
@@ -42,13 +36,6 @@ pub fn instance() *Game {
     return &Instance.instance;
 }
 
-const LOAD_MIN = -Chunk.Coords{ WIDTH / 2, HEIGHT / 2, WIDTH / 2 };
-const LOAD_MAX = Chunk.Coords{ WIDTH / 2, HEIGHT / 2, WIDTH / 2 };
-pub fn get_load_range(self: *Game) struct { Chunk.Coords, Chunk.Coords } {
-    const cam_chunk = self.camera.chunk_coords();
-    return .{ cam_chunk + LOAD_MIN, cam_chunk + LOAD_MAX };
-}
-
 fn on_attach(self: *Game) !void {
     self.current_selected_block = Block.stone();
 
@@ -58,24 +45,7 @@ fn on_attach(self: *Game) !void {
     };
     errdefer self.camera.deinit();
 
-    logger.info("{*}: initializing BlockRenderer", .{self});
-    try self.block_renderer.init();
-    try App.get_renderer().add_step(BlockRenderer.draw, .{&self.block_renderer});
-    try App.get_renderer().add_step(ModelRenderer.draw, .{});
-
     logger.info("{*}: Attatched", .{self});
-
-    for (0..10) |x| {
-        for (0..10) |z| {
-            const m = try ModelRenderer.Model.instantiate(".models.stuff.cup");
-            const mat = zm.Mat4f.translationVec3(.{
-                @floatFromInt(x * 3),
-                10.0,
-                @floatFromInt(z * 3),
-            });
-            try m.set_transform(mat);
-        }
-    }
 }
 
 fn on_imgui(self: *Game) !void {
@@ -95,7 +65,9 @@ fn on_imgui(self: *Game) !void {
 
 fn on_imgui_blocks(self: *Game) !void {
     const block_names = App.assets().get_blocks().blocks.keys();
-    const cur_name: [:0]const u8 = App.assets().get_blocks().get_info(self.current_selected_block).name;
+    const cur_name: [:0]const u8 = App.assets().get_blocks().get_info(
+        self.current_selected_block,
+    ).name;
 
     if (c.igBeginCombo("Placed Block", @ptrCast(cur_name), 0)) {
         defer c.igEndCombo();
@@ -112,17 +84,11 @@ fn on_imgui_blocks(self: *Game) !void {
 fn on_frame_start(self: *Game) App.UnhandledError!void {
     try App.gui().add_to_frame(Game, "Debug", self, on_imgui, @src());
     try App.gui().add_to_frame(Game, "Blocks", self, on_imgui_blocks, @src());
-
-    try self.chunk_manager.on_imgui();
-    try self.block_renderer.on_frame_start();
 }
 
 fn on_update(self: *Game) App.UnhandledError!void {
-    const min, const max = self.get_load_range();
-    try self.chunk_manager.load_region(min, max);
-
-    try self.chunk_manager.process();
-
+    try self.world.load_around(self.camera.chunk_coords());
+    try self.world.update();
     try App.get_renderer().draw(&self.camera);
 }
 
@@ -138,12 +104,6 @@ fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
 
 fn on_detach(self: *Game) void {
     self.camera.deinit();
-    self.chunk_manager.deinit();
-    self.block_renderer.deinit();
+    self.world.deinit();
     logger.info("{*}: Detatched", .{self});
-}
-
-pub fn get_block(self: *Game, coords: Coords) ?Block {
-    const chunk = self.chunk_manager.get_chunk(Chunk.world_to_chunk(coords)) orelse return null;
-    return chunk.get(Chunk.world_to_block(coords));
 }

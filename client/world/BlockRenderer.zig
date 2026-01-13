@@ -1,20 +1,21 @@
 const std = @import("std");
-const App = @import("App.zig");
-const Game = @import("Game.zig");
+const App = @import("../App.zig");
+const Game = @import("../Game.zig");
 const Chunk = @import("Chunk.zig");
-const Options = @import("ClientOptions");
+const World = @import("../World.zig");
+const Coords = World.Coords;
 const gl = @import("gl");
 const zm = @import("zm");
-const GpuAlloc = @import("GpuAlloc.zig");
-const Shader = @import("Shader.zig");
-const Renderer = @import("Renderer.zig");
-const util = @import("util.zig");
+const GpuAlloc = @import("../GpuAlloc.zig");
+const Shader = @import("../Shader.zig");
+const Renderer = @import("../Renderer.zig");
+const util = @import("../util.zig");
 const gl_call = util.gl_call;
-const Block = @import("Block.zig");
-const c = @import("c.zig").c;
+const Block = @import("../Block.zig");
+const c = @import("../c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
-const Camera = @import("Camera.zig");
+const Camera = @import("../Camera.zig");
 
 const logger = std.log.scoped(.block_renderer);
 
@@ -42,7 +43,7 @@ drawn_chunks_cnt: usize,
 triangle_cnt: usize,
 cur_chunk_data_ssbo_size: usize,
 
-meshes: std.AutoArrayHashMapUnmanaged(Chunk.Coords, *Mesh),
+meshes: std.AutoArrayHashMapUnmanaged(Coords, *Mesh),
 mesh_pool: std.heap.MemoryPool(Mesh),
 
 pub fn init(self: *Self) !void {
@@ -97,7 +98,7 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao", @src());
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor", @src());
 
-    inline for (Chunk.Ao.idx_to_ao, 0..) |ao, i| {
+    inline for (Ao.idx_to_ao, 0..) |ao, i| {
         const uni: [:0]const u8 = std.fmt.comptimePrint("u_idx_to_ao[{}]", .{i});
         try self.block_pass.set_uint(uni, @intCast(ao));
     }
@@ -146,7 +147,7 @@ fn init_face_attribs(self: *Self) !void {
         FACE_DATA_BINDING,
         self.faces.buffer,
         0,
-        @sizeOf(Chunk.FaceMesh),
+        @sizeOf(FaceMesh),
     ));
 
     try gl_call(gl.EnableVertexAttribArray(FACE_DATA_LOCATION_A));
@@ -204,7 +205,7 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
             FACE_DATA_BINDING,
             self.faces.buffer,
             0,
-            @sizeOf(Chunk.FaceMesh),
+            @sizeOf(FaceMesh),
         ));
         try gl_call(gl.BindVertexArray(0));
         self.had_realloc = false;
@@ -241,7 +242,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
         for (&mesh.handles, chunk.faces) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
-            const new_size = faces.items.len * @sizeOf(Chunk.FaceMesh);
+            const new_size = faces.items.len * @sizeOf(FaceMesh);
 
             try gl_call(gl.InvalidateBufferSubData(
                 self.faces.buffer,
@@ -251,17 +252,17 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
             handle.* = try self.faces.realloc(
                 handle.*,
                 new_size,
-                std.mem.Alignment.of(Chunk.FaceMesh),
+                std.mem.Alignment.of(FaceMesh),
             );
         }
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
         for (&mesh.handles, chunk.faces) |*handle, faces| {
-            const new_size = faces.items.len * @sizeOf(Chunk.FaceMesh);
+            const new_size = faces.items.len * @sizeOf(FaceMesh);
             handle.* = try self.faces.alloc(
                 new_size,
-                std.mem.Alignment.of(Chunk.FaceMesh),
+                std.mem.Alignment.of(FaceMesh),
             );
         }
         try self.meshes.put(App.gpa(), chunk.coords, mesh);
@@ -292,7 +293,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     self.had_realloc |= old_buf != self.faces.buffer;
 }
 
-pub fn destroy_chunk_mesh(self: *Self, coords: Chunk.Coords) !void {
+pub fn destroy_chunk_mesh(self: *Self, coords: Coords) !void {
     const mesh = self.meshes.fetchSwapRemove(coords) orelse return;
     for (mesh.value.handles) |handle| {
         self.faces.free(handle);
@@ -383,7 +384,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
             indirect[i * BLOCK_FACE_CNT + j] = Indirect{
                 .count = 6,
                 .instance_count = @intCast(mesh.mesh.face_counts[j]),
-                .base_instance = @intCast(@divExact(range.offset, @sizeOf(Chunk.FaceMesh))),
+                .base_instance = @intCast(@divExact(range.offset, @sizeOf(FaceMesh))),
                 .base_vertex = 0,
                 .first_index = 0,
             };
@@ -452,7 +453,7 @@ const Indirect = extern struct {
 const Mesh = struct {
     handles: [BLOCK_FACE_CNT]GpuAlloc.Handle,
     face_counts: [BLOCK_FACE_CNT]usize,
-    coords: Chunk.Coords,
+    coords: Coords,
     is_occluded: bool,
 
     pub fn bounding_sphere(self: *Mesh) zm.Vec4f {
@@ -518,9 +519,25 @@ const block_vert =
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
     \\layout (location = FACE_DATA_LOCATION_B) in uint vert_face_b;
-++ Chunk.FaceMesh.define() ++
     \\
-++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Chunk.Ao.idx_to_ao.len}) ++
+    \\struct Face {
+    \\  uvec3 pos;
+    \\  uint ao;
+    \\  uint model;
+    \\  uint texture;
+    \\};
+    \\
+    \\Face unpack_face(){
+    \\  uint x = (vert_face_a >> uint(0)) & uint(0x0F);
+    \\  uint y = (vert_face_a >> uint(4)) & uint(0x0F);
+    \\  uint z = (vert_face_a >> uint(8)) & uint(0x0F);
+    \\  uint ao = (vert_face_a >> uint(12)) & uint(0x3F);
+    \\  uint model = (vert_face_a >> uint(18)) & uint(0x3FF);
+    \\  uint tex = (vert_face_b >> uint(0)) & uint(0xFFFF);
+    \\  return Face(uvec3(x, y, z), ao, model, tex);
+    \\}
+    \\
+++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Ao.idx_to_ao.len}) ++
     \\struct Chunk {
     \\  int x;
     \\  int y;
@@ -615,7 +632,26 @@ const block_frag =
     \\uniform bool u_enable_face_ao = true;
     \\uniform float u_ao_factor = 0.7;
     \\uniform sampler2DArray u_atlas;
-++ Chunk.Ao.define() ++
+++ std.fmt.comptimePrint(
+    \\
+    \\float get_ao() {{
+    \\  #define GET(dir) float((frag_ao >> uint(dir)) & uint(1))
+    \\  #define CORNER(v) (1.0 - clamp(abs(frag_uv.x - (v).x) + abs(frag_uv.y - (v).y), 0, 1))
+    \\  float l = GET({}) * (1.0 - frag_uv.x);
+    \\  float r = GET({}) * (frag_uv.x);
+    \\  float t = GET({}) * (frag_uv.y);
+    \\  float b = GET({}) * (1.0 - frag_uv.y);
+    \\  float tl = GET({}) * CORNER(vec2(0, 1));
+    \\  float tr = GET({}) * CORNER(vec2(1, 1));
+    \\  float bl = GET({}) * CORNER(vec2(0, 0));
+    \\  float br = GET({}) * CORNER(vec2(1, 0));
+    \\  float ao = (l + r + t + b + tl + tr + bl + br) / 4.0;
+    \\  return smoothstep(0.0, 1.0, ao);
+    \\  #undef GET
+    \\  #undef CORNER
+    \\}}
+    \\
+, .{ Ao.L, Ao.R, Ao.T, Ao.B, Ao.TL, Ao.TR, Ao.BL, Ao.BR }) ++
     \\
     \\void main() {
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
@@ -626,6 +662,74 @@ const block_frag =
     \\}
 ;
 
-pub const Face = packed struct(u64) {
-    _unused: u64,
+pub const FaceMesh = packed struct(u64) {
+    // A:
+    x: u4,
+    y: u4,
+    z: u4,
+    ao: u6,
+    model: u10 = 0,
+    _unused2: u4 = 0b1010,
+    // B:
+    texture: u16,
+    _unused3: u16 = 0xdead,
+};
+
+pub const Ao = struct {
+    const ao_to_idx = precalculated[1];
+    pub const idx_to_ao = precalculated[0];
+
+    const L = 0;
+    const R = 1;
+    const T = 2;
+    const B = 3;
+    const TL = 4;
+    const TR = 5;
+    const BL = 6;
+    const BR = 7;
+
+    fn normalize(x: u8) u8 {
+        const l = (x >> L) & 1;
+        const r = (x >> R) & 1;
+        const t = (x >> T) & 1;
+        const b = (x >> B) & 1;
+        const tl = (x >> TL) & 1;
+        const tr = (x >> TR) & 1;
+        const bl = (x >> BL) & 1;
+        const br = (x >> BR) & 1;
+        return pack(l, r, t, b, tl, tr, bl, br);
+    }
+
+    fn pack(l: u8, r: u8, t: u8, b: u8, tl: u8, tr: u8, bl: u8, br: u8) u8 {
+        return (l << L) |
+            (r << R) |
+            (t << T) |
+            (b << B) |
+            ((tl * (1 - l) * (1 - t)) << TL) |
+            ((tr * (1 - r) * (1 - t)) << TR) |
+            ((bl * (1 - l) * (1 - b)) << BL) |
+            ((br * (1 - r) * (1 - b)) << BR);
+    }
+
+    const precalculated = blk: {
+        @setEvalBranchQuota(std.math.maxInt(u32));
+        const UNIQUE_CNT = 47;
+        var to_ao: [UNIQUE_CNT]u8 = @splat(0);
+        var to_idx: [256]u8 = @splat(0);
+
+        var i: usize = 0;
+        for (0..256) |x| {
+            const y = normalize(x);
+            const k = l1: for (0..i) |j| {
+                if (to_ao[j] == y) break :l1 j;
+            } else l2: {
+                to_ao[i] = y;
+                i += 1;
+                break :l2 i - 1;
+            };
+            to_idx[x] = k;
+        }
+        std.debug.assert(i == UNIQUE_CNT);
+        break :blk .{ to_ao, to_idx };
+    };
 };

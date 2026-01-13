@@ -1,8 +1,8 @@
 const std = @import("std");
 const Game = @import("Game.zig");
-const Chunk = @import("Chunk.zig");
-const Coords = Chunk.Coords;
-const CHUNK_SIZE = Chunk.CHUNK_SIZE;
+const World = @import("World.zig");
+const Coords = World.Coords;
+const CHUNK_SIZE = World.CHUNK_SIZE;
 const Block = @import("Block.zig");
 const zm = @import("zm");
 
@@ -26,7 +26,7 @@ pub fn raycast(ray: zm.Rayf, max_t: f32) ?Raycast {
             mul[i] = -1;
         }
     }
-    var prev_block = Chunk.to_world_coord(ray.origin);
+    var prev_block = World.to_world_coord(ray.origin);
 
     var iter_cnt: usize = 0;
     while (cur_t <= max_t) : (iter_cnt += 1) {
@@ -47,8 +47,8 @@ pub fn raycast(ray: zm.Rayf, max_t: f32) ?Raycast {
         if (dt[j] > dt[2]) j = 2;
         dt[j] += eps;
 
-        const cur_block = Chunk.to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
-        const block = Game.instance().get_block(cur_block);
+        const cur_block = World.to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
+        const block = Game.instance().world.get_block_safe(cur_block);
 
         if (block != null and !block.?.is_air()) {
             return Raycast{

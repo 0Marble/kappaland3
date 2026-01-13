@@ -23,18 +23,20 @@ neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
 
 light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,
-faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.Face)) = .initFill(.empty),
+faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.FaceMesh)) = .initFill(.empty),
 
 const OOM = std.mem.Allocator.Error;
 pub fn init(world: *World, coords: Coords) OOM!*Chunk {
     const self: *Chunk = try world.chunk_pool.create();
-    self = .{ .coords = coords, .world = world };
+    self.* = Chunk{ .coords = coords, .world = world };
+
     for (std.enums.values(Block.Direction)) |dir| {
         if (world.chunks.get(coords + dir.front_dir())) |other| {
             self.neighbours.put(dir, other);
             other.neighbours.put(dir.flip(), self);
         }
     }
+    return self;
 }
 
 pub fn deinit(self: *Chunk) void {
@@ -61,7 +63,7 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
             for (0..CHUNK_SIZE) |z| {
                 const pos: Coords = @intCast(@Vector(3, usize){ x, y, z });
                 const block = switch (y) {
-                    0...5 => Block.stone(),
+                    0...4 => Block.stone(),
                     5...7 => Block.dirt(),
                     8 => Block.grass(),
                     else => Block.air(),
@@ -110,38 +112,42 @@ pub fn get(self: *Chunk, pos: Coords) Block {
 // always a rect
 pub fn get_chunk(self: *Chunk, chunk_coords: Coords) ?*Chunk {
     const CHUNK_NEAR = 10;
-    const delta = chunk_coords - self.coords;
+    var delta = chunk_coords - self.coords;
     if (@reduce(.Add, delta) > CHUNK_NEAR) return self.world.chunks.get(chunk_coords);
 
     var cur = self;
 
+    const one_x: Coords = .{ 1, 0, 0 };
+    const one_y: Coords = .{ 0, 1, 0 };
+    const one_z: Coords = .{ 0, 0, 1 };
+
     while (delta[0] != 0) {
         if (delta[0] > 0) {
             cur = cur.neighbours.get(.right) orelse return null;
-            delta[0] -= 1;
+            delta -= one_x;
         } else {
             cur = cur.neighbours.get(.left) orelse return null;
-            delta[0] += 1;
+            delta += one_x;
         }
     }
 
     while (delta[1] != 0) {
         if (delta[1] > 0) {
             cur = cur.neighbours.get(.top) orelse return null;
-            delta[1] -= 1;
+            delta -= one_y;
         } else {
             cur = cur.neighbours.get(.bot) orelse return null;
-            delta[1] += 1;
+            delta += one_y;
         }
     }
 
     while (delta[2] != 0) {
         if (delta[2] > 0) {
             cur = cur.neighbours.get(.front) orelse return null;
-            delta[2] -= 1;
+            delta -= one_z;
         } else {
             cur = cur.neighbours.get(.back) orelse return null;
-            delta[2] += 1;
+            delta += one_z;
         }
     }
 
@@ -225,7 +231,7 @@ fn propagate_dark(
         light_levels.levels[idx] = 0;
 
         for (std.enums.values(Block.Direction)) |dir| {
-            const chunk, const pos = self.get_chunk_block(start + dir.front_dir());
+            const chunk, const pos = self.get_chunk_block(start + dir.front_dir()) orelse continue;
             try queue.push(worker.temp(), .{ chunk, pos, 0 });
         }
     }
@@ -243,7 +249,7 @@ fn propagate_dark(
         for (std.enums.values(Block.Direction)) |dir| {
             const other = chunk.get_chunk_block(pos + dir.front_dir()) orelse continue;
             const other_chunk, const other_pos = other;
-            const other_level = other_chunk.get_light_level(other_pos, color);
+            const other_level = other_chunk.get_light_level(other_pos, color) orelse continue;
 
             if (other_level > cur_level) {
                 std.debug.assert(other_level == cur_level + 1);

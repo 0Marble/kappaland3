@@ -5,10 +5,9 @@ const Scancode = @import("Keys.zig").Scancode;
 const c = @import("c.zig").c;
 const Keys = @import("Keys.zig");
 pub const Frustum = @import("Frustum.zig");
-const Options = @import("ClientOptions");
-const Chunk = @import("Chunk.zig");
 const Raycast = @import("Raycast.zig");
 const Game = @import("Game.zig");
+const World = @import("World.zig");
 
 const MAX_REACH = 10;
 
@@ -73,12 +72,12 @@ fn interact(self: *Camera, button: Keys.MouseButton, _: []const u8) void {
     const raycast = Raycast.raycast(ray, MAX_REACH) orelse return;
 
     if (button == .left) {
-        Game.instance().chunk_manager.set_block(raycast.hit_coords, .air()) catch |err| {
+        Game.instance().world.set_block(raycast.hit_coords, .air()) catch |err| {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     } else if (button == .right) {
         const block_to_place = Game.instance().current_selected_block;
-        Game.instance().chunk_manager.set_block(raycast.prev_coords, block_to_place) catch |err| {
+        Game.instance().world.set_block(raycast.prev_coords, block_to_place) catch |err| {
             std.log.warn("{*}: Could not place block: {}", .{ self, err });
         };
     }
@@ -178,8 +177,8 @@ pub fn sphere_in_frustum(self: *Camera, center: zm.Vec3f, radius: f32) bool {
     return self.frustum_for_occlusion.sphere_in_frustum(center, radius);
 }
 
-pub fn chunk_coords(self: *Camera) Chunk.Coords {
-    var cam_chunk: Chunk.Coords = @intFromFloat(self.frustum_for_occlusion.pos);
-    cam_chunk = @divFloor(cam_chunk, @as(Chunk.Coords, @splat(Chunk.CHUNK_SIZE)));
+pub fn chunk_coords(self: *Camera) World.Coords {
+    var cam_chunk: World.Coords = @intFromFloat(self.frustum_for_occlusion.pos);
+    cam_chunk = @divFloor(cam_chunk, @as(World.Coords, @splat(World.CHUNK_SIZE)));
     return cam_chunk;
 }

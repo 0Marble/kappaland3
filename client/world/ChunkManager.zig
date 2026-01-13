@@ -50,11 +50,11 @@ pub fn init(world: *World, opts: Options) !*ChunkManager {
         .main_tid = std.Thread.getCurrentId(),
         .unsafe_shared_gpa = .init,
         .shared_gpa = undefined,
-        .phase_queue = .init(world.get_gpa()),
+        .phase_pool = .init(world.get_gpa()),
         .task_pool = .init(world.get_gpa()),
         .threads = try world.get_gpa().alloc(std.Thread, thread_count),
     };
-    self.workers.ensureTotalCapacity(world.get_gpa(), thread_count + 1);
+    try self.workers.ensureTotalCapacity(world.get_gpa(), thread_count + 1);
     _ = Worker.init(self);
 
     self.shared_gpa = .{ .child_allocator = self.unsafe_shared_gpa.allocator() };
@@ -83,9 +83,8 @@ pub fn deinit(self: *ChunkManager) void {
 
     self.pending_tasks.deinit(self.shared_gpa.allocator());
     self.completed_tasks.deinit(self.shared_gpa.allocator());
-    self.phase_queue.deinit(self.world.get_gpa());
     self.task_pool.deinit();
-    self.phase_queue.deinit();
+    self.phase_pool.deinit();
     _ = self.unsafe_shared_gpa.deinit();
 
     self.world.get_gpa().destroy(self);
@@ -122,14 +121,14 @@ pub fn schedule_set_block(
     const immediate = true;
 
     if (immediate) {
-        const task1: *Task = self.task_pool.create();
+        const task1: *Task = try self.task_pool.create();
         task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
         try self.main_worker().run_task(task1);
 
         for (Block.Neighbours(3).deltas) |d| {
             const next = chunk.get_chunk_block(d + pos) orelse continue;
             const next_chunk, _ = next;
-            const task2: *Task = self.task_pool.create();
+            const task2: *Task = try self.task_pool.create();
             task2.* = .{ .chunk = next_chunk, .body = .meshing };
             try self.main_worker().run_task(task2);
         }
@@ -185,7 +184,7 @@ fn process_phase(self: *ChunkManager) !void {
                 return try self.process_phase();
             };
 
-            const task1: *Task = self.task_pool.create();
+            const task1: *Task = try self.task_pool.create();
             task1.* = .{ .chunk = chunk, .body = .{
                 .set_block = .{ block_coords, block },
             } };
@@ -193,7 +192,7 @@ fn process_phase(self: *ChunkManager) !void {
             for (Block.Neighbours(3).deltas) |d| {
                 const next = chunk.get_chunk_block(d + block_coords) orelse continue;
                 const next_chunk, _ = next;
-                const task2: *Task = self.task_pool.create();
+                const task2: *Task = try self.task_pool.create();
                 task2.* = .{ .chunk = next_chunk, .body = .meshing };
                 try self.main_worker().run_task(task2);
             }
@@ -208,10 +207,10 @@ fn process_phase(self: *ChunkManager) !void {
                 std.debug.assert(self.tasks_left == 0);
                 cur_phase.started = true;
 
-                var it = self.chunks_to_mesh.iterator();
+                var it = self.chunks_to_mesh.keyIterator();
                 while (it.next()) |coords| {
-                    const chunk = self.world.chunks.get(coords) orelse continue;
-                    const task: *Task = self.task_pool.create();
+                    const chunk = self.world.chunks.get(coords.*) orelse continue;
+                    const task: *Task = try self.task_pool.create();
                     task.* = .{ .chunk = chunk, .body = .meshing };
                     try self.pending_tasks.append(self.shared_gpa.allocator(), task);
                 }
@@ -264,7 +263,7 @@ fn process_phase(self: *ChunkManager) !void {
                                     const chunk = try Chunk.init(self.world, pos);
                                     entry.value_ptr.* = chunk;
 
-                                    const task: *Task = self.task_pool.create();
+                                    const task: *Task = try self.task_pool.create();
                                     task.* = .{ .chunk = chunk, .body = .loading };
                                     try self.pending_tasks.append(
                                         self.shared_gpa.allocator(),
@@ -341,7 +340,7 @@ const Phase = struct {
     };
 
     fn from_link(link: *std.DoublyLinkedList.Node) *Phase {
-        return @fieldParentPtr("link", link);
+        return @alignCast(@fieldParentPtr("link", link));
     }
 };
 
@@ -440,12 +439,12 @@ pub const Worker = struct {
                 self.parent.tasks_left -= 1;
             }
 
-            if (self.is_running) {
-                self.cond.wait(&self.mutex);
+            if (self.parent.is_running) {
+                self.parent.cond.wait(&self.parent.mutex);
             } else break;
         }
 
-        logger.info("{*}: joined", .{});
+        logger.info("{*}: joined", .{self});
     }
 
     fn run_task(self: *Worker, task: *Task) !void {

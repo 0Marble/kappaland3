@@ -2,7 +2,6 @@ const App = @import("App.zig");
 const Camera = @import("Camera.zig");
 const gl = @import("gl");
 const std = @import("std");
-const Chunk = @import("Chunk.zig");
 const World = @import("World.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
