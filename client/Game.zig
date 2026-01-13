@@ -45,6 +45,9 @@ fn on_attach(self: *Game) !void {
     };
     errdefer self.camera.deinit();
 
+    logger.info("{*}: initializing world", .{self});
+    self.world = try World.init();
+
     logger.info("{*}: Attatched", .{self});
 }
 

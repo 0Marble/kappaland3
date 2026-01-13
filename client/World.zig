@@ -36,9 +36,10 @@ pub fn init() !*World {
 }
 
 pub fn deinit(self: *World) void {
+    self.chunk_manager.deinit();
+
     self.chunk_pool.deinit();
     self.renderer.deinit();
-    self.chunk_manager.deinit();
     var gpa = self.gpa;
     gpa.allocator().destroy(self);
 }

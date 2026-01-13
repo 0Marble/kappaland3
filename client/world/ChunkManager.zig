@@ -37,7 +37,7 @@ pub const Options = struct {
 };
 
 pub fn init(world: *World, opts: Options) !*ChunkManager {
-    logger.info("creating a chunk manager", .{});
+    logger.info("creating chunk manager", .{});
     errdefer |err| {
         logger.err("could not create chunk manager: {}", .{err});
     }
@@ -54,16 +54,16 @@ pub fn init(world: *World, opts: Options) !*ChunkManager {
         .task_pool = .init(world.get_gpa()),
         .threads = try world.get_gpa().alloc(std.Thread, thread_count),
     };
+    self.shared_gpa = .{ .child_allocator = self.unsafe_shared_gpa.allocator() };
+
     try self.workers.ensureTotalCapacity(world.get_gpa(), thread_count + 1);
     _ = Worker.init(self);
-
-    self.shared_gpa = .{ .child_allocator = self.unsafe_shared_gpa.allocator() };
 
     for (self.threads) |*thread| {
         thread.* = try .spawn(.{}, Worker.init_and_run, .{self});
     }
 
-    logger.info("created a chunk manager", .{});
+    logger.info("created chunk manager", .{});
 
     return self;
 }
@@ -396,7 +396,6 @@ pub const Worker = struct {
 
     fn init_and_run(parent: *ChunkManager) void {
         const self = Worker.init(parent);
-        defer self.deinit();
 
         self.run() catch |err| {
             logger.err("{*}: fatal error while running: {}", .{ self, err });
