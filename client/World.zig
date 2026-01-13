@@ -1,256 +1,60 @@
-const Ecs = @import("libmine").Ecs;
 const std = @import("std");
-const zm = @import("zm");
-const util = @import("util.zig");
 const App = @import("App.zig");
-const Options = @import("ClientOptions");
-const Chunk = @import("Chunk.zig");
-const c = @import("c.zig").c;
-
-pub const CHUNK_SIZE = 16;
-pub const DIM: comptime_int = Options.world_size;
-pub const HEIGHT: comptime_int = Options.world_height;
-
-active: std.AutoArrayHashMapUnmanaged(ChunkCoords, *Chunk),
-freelist: std.ArrayListUnmanaged(*Chunk),
-
-finished_work: std.ArrayListUnmanaged(*Chunk),
-work_lock: std.Thread.Mutex,
-work_alloc: std.heap.DebugAllocator(.{ .enable_memory_limit = true }),
-active_rw: std.Thread.RwLock,
-
+const Block = @import("Block.zig");
+const ChunkManager = @import("world/ChunkManager.zig");
+const BlockRenderer = @import("world/BlockRenderer.zig");
+const Options = @import("Build").Options;
+const Chunk = @import("world/Chunk.zig");
 const World = @This();
-pub fn init(self: *World) !void {
-    self.active = .empty;
-    self.freelist = .empty;
-    self.work_lock = .{};
-    self.active_rw = .{};
-    self.work_alloc = .init;
-    self.finished_work = .empty;
+const logger = std.log.scoped(.world);
+const zm = @import("zm");
+pub const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 
-    try self.init_chunks();
+chunk_manager: *ChunkManager,
+renderer: *BlockRenderer,
+chunk_pool: std.heap.MemoryPool(Chunk),
+chunks: std.AutoArrayHashMapUnmanaged(Coords, *Chunk),
+gpa: Gpa,
+temp: std.heap.ArenaAllocator,
+load_radius: Coords = .{
+    Options.world_size / 2,
+    Options.world_height / 2,
+    Options.world_size / 2,
+},
+
+const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
+
+pub const Coords = @Vector(3, i32);
+
+pub fn get_block(self: *World, world_pos: Coords) Block {
+    const block = world_to_block(world_pos);
+    if (self.chunks.get(world_to_chunk(world_pos))) |chunk| return chunk.get(block);
+    unreachable;
 }
 
-pub fn deinit(self: *World) void {
-    self.finished_work.deinit(self.work_alloc.allocator());
-    _ = self.work_alloc.deinit();
-}
-
-pub fn request_load_chunk(self: *World, coords: ChunkCoords) !void {
-    std.log.debug( "{*}: request_load_chunk({})", .{ self, coords });
-    if (self.active.contains(coords)) return;
-
-    const chunk = if (self.freelist.pop()) |chunk| blk: {
-        chunk.coords = coords;
-        break :blk chunk;
-    } else try Chunk.init(coords);
-
-    try App.pool().spawn(load_chunk_task, .{ self, chunk });
-}
-
-fn load_chunk_task(self: *World, chunk: *Chunk) void {
-    chunk.generate();
-
-    self.work_lock.lock();
-    defer self.work_lock.unlock();
-
-    self.finished_work.append(self.work_alloc.allocator(), chunk) catch |err| {
-        std.log.warn( "{*}: could not load chunk {}: {}", .{ self, chunk.coords, err });
-    };
-}
-
-pub fn set_block(self: *World, coords: WorldCoords, id: BlockId) !void {
-    const chunk_coords = world_to_chunk(coords);
-    const block_coords = world_to_block(coords);
-    const chunk = self.active.get(chunk_coords) orelse {
-        std.log.warn( "{*}: set_block in inactive chunk {}", .{ self, chunk_coords });
+pub fn set_block(self: *World, world_pos: Coords, block: Block) !void {
+    const chunk_coords = world_to_chunk(world_pos);
+    const block_coords = world_to_block(world_pos);
+    const chunk = self.chunks.get(chunk_coords) orelse {
+        logger.warn("{*} attempted to set block at inactive chunk {}", .{ self, chunk_coords });
         return;
     };
-    chunk.set(block_coords, id);
-    try App.renderer().request_draw_chunk(chunk);
-    for (Chunk.neighbours2) |d| {
-        const other = self.active.get(chunk.coords + d) orelse continue;
-        try App.renderer().request_draw_chunk(other);
-    }
+    try self.chunk_manager.schedule_set_block(chunk, block_coords, block);
 }
 
-pub fn on_frame_start(self: *World) !void {
-    try App.gui().add_to_frame(World, "Debug", self, struct {
-        fn callback(this: *World) !void {
-            c.igText("Chunks Active: %zu", this.active.count());
-        }
-    }.callback, @src());
+pub fn load_around(self: *World, world_pos: zm.Vec3f) !void {
+    const chunk_coords = world_to_chunk(@intFromFloat(world_pos));
+    try self.chunk_manager.schedule_load_region(chunk_coords, self.load_radius);
 }
 
-pub fn to_world_coord(pos: zm.Vec3f) WorldCoords {
-    return @intFromFloat(@floor(pos));
+pub fn world_to_chunk(w: Coords) Coords {
+    return @divFloor(w, @as(Coords, @splat(CHUNK_SIZE)));
 }
 
-pub fn world_to_chunk(w: WorldCoords) ChunkCoords {
-    return @divFloor(w, @as(WorldCoords, @splat(CHUNK_SIZE)));
+pub fn world_to_block(w: Coords) Coords {
+    return @mod(w, @as(Coords, @splat(CHUNK_SIZE)));
 }
 
-pub fn world_to_block(w: WorldCoords) BlockCoords {
-    return @mod(w, @as(WorldCoords, @splat(CHUNK_SIZE)));
-}
-
-pub fn world_coords(chunk: ChunkCoords, block: BlockCoords) WorldCoords {
-    return chunk + block * @as(BlockCoords, @splat(CHUNK_SIZE));
-}
-
-const RaycastResult = struct {
-    t: f32,
-    hit_coords: WorldCoords,
-    prev_coords: WorldCoords,
-    block: BlockId,
-};
-pub fn raycast(self: *World, ray: zm.Rayf, max_t: f32) ?RaycastResult {
-    const one: zm.Vec3f = @splat(1);
-
-    var cur_t: f32 = 0;
-    var r = ray;
-    var mul = one;
-    for (0..3) |i| {
-        if (r.direction[i] < 0) {
-            r.direction[i] *= -1;
-            r.origin[i] *= -1;
-            mul[i] = -1;
-        }
-    }
-    var prev_block = to_world_coord(ray.origin);
-
-    var iter_cnt: usize = 0;
-    while (cur_t <= max_t) : (iter_cnt += 1) {
-        if (iter_cnt >= 100) {
-            std.log.warn( "The raycasting bug: {}", .{ray});
-            std.log.warn( "Goodbye!", .{});
-            std.debug.assert(false);
-        }
-
-        const cur_pos = r.at(cur_t);
-
-        const dx = @select(f32, @ceil(cur_pos) == cur_pos, one, @ceil(cur_pos) - cur_pos);
-        var dt = dx / r.direction;
-
-        const eps = 1e-4;
-        var j: usize = 0;
-        if (dt[j] > dt[1]) j = 1;
-        if (dt[j] > dt[2]) j = 2;
-        dt[j] += eps;
-
-        const cur_block = to_world_coord(r.at(cur_t + 0.5 * dt[j]) * mul);
-        const block = self.get_block(cur_block);
-        if (block != null and block.? != .air) {
-            return RaycastResult{
-                .t = cur_t,
-                .block = block.?,
-                .hit_coords = cur_block,
-                .prev_coords = prev_block,
-            };
-        }
-
-        cur_t += dt[j];
-        prev_block = cur_block;
-    }
-    return null;
-}
-
-pub fn get_block(self: *World, coords: WorldCoords) ?BlockId {
-    self.active_rw.lockShared();
-    defer self.active_rw.unlockShared();
-
-    const chunk = self.active.get(world_to_chunk(coords)) orelse return null;
-    return chunk.get(world_to_block(coords));
-}
-
-pub fn process_work(self: *World) !void {
-    self.work_lock.lock();
-    defer self.work_lock.unlock();
-    if (self.finished_work.items.len == 0) return;
-
-    self.active_rw.lock();
-    defer self.active_rw.unlock();
-    for (self.finished_work.items) |chunk| {
-        try self.active.put(App.static_alloc(), chunk.coords, chunk);
-        try App.renderer().request_draw_chunk(chunk);
-        for (Chunk.neighbours2) |d| {
-            const other = self.active.get(chunk.coords + d) orelse continue;
-            try App.renderer().request_draw_chunk(other);
-        }
-    }
-
-    self.finished_work.clearRetainingCapacity();
-}
-
-pub const BlockId = enum(u16) { air = 0, stone = 1, dirt = 2, grass = 3, _ };
-pub const BlockFace = enum(u3) {
-    front,
-    back,
-    right,
-    left,
-    top,
-    bot,
-
-    pub const list: []const BlockFace = @ptrCast(std.meta.tags(@This()));
-
-    pub fn flip(self: BlockFace) BlockFace {
-        return switch (self) {
-            .front => .back,
-            .back => .front,
-            .right => .left,
-            .left => .right,
-            .top => .bot,
-            .bot => .top,
-        };
-    }
-
-    pub fn front_dir(self: BlockFace) WorldCoords {
-        return switch (self) {
-            .front => .{ 0, 0, 1 },
-            .back => .{ 0, 0, -1 },
-            .right => .{ 1, 0, 0 },
-            .left => .{ -1, 0, 0 },
-            .top => .{ 0, 1, 0 },
-            .bot => .{ 0, -1, 0 },
-        };
-    }
-
-    pub fn left_dir(self: BlockFace) WorldCoords {
-        return switch (self) {
-            .front => .{ -1, 0, 0 },
-            .back => .{ 1, 0, 0 },
-            .right => .{ 0, 0, 1 },
-            .left => .{ 0, 0, -1 },
-            .top => .{ -1, 0, 0 },
-            .bot => .{ 1, 0, 0 },
-        };
-    }
-
-    pub fn up_dir(self: BlockFace) WorldCoords {
-        return switch (self) {
-            .front => .{ 0, 1, 0 },
-            .back => .{ 0, 1, 0 },
-            .right => .{ 0, 1, 0 },
-            .left => .{ 0, 1, 0 },
-            .top => .{ 0, 0, 1 },
-            .bot => .{ 0, 0, 1 },
-        };
-    }
-};
-
-pub const WorldCoords = @Vector(3, i32);
-pub const ChunkCoords = @Vector(3, i32);
-pub const BlockCoords = @Vector(3, i32);
-
-fn init_chunks(self: *World) !void {
-    for (0..World.DIM) |i| {
-        for (0..World.DIM) |j| {
-            for (0..World.HEIGHT) |k| {
-                const x = @as(i32, @intCast(i)) - DIM / 2;
-                const y = @as(i32, @intCast(k)) - HEIGHT + 1;
-                const z = @as(i32, @intCast(j)) - DIM / 2;
-                try self.request_load_chunk(.{ x, y, z });
-            }
-        }
-    }
+pub fn get_gpa(self: *World) std.mem.Allocator {
+    return self.gpa.allocator();
 }

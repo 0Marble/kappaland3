@@ -2,9 +2,8 @@ const App = @import("App.zig");
 const std = @import("std");
 const Camera = @import("Camera.zig");
 const c = @import("c.zig").c;
-pub const ChunkManager = @import("ChunkManager.zig");
+pub const World = @import("World.zig");
 const Options = @import("Build").Options;
-const Chunk = @import("Chunk.zig");
 const Coords = @import("Chunk.zig").Coords;
 const CHUNK_SIZE = @import("Chunk.zig").CHUNK_SIZE;
 const Block = @import("Block.zig");
@@ -19,7 +18,7 @@ const WIDTH = Options.world_size;
 const HEIGHT = Options.world_height;
 
 camera: Camera,
-chunk_manager: *ChunkManager,
+world: *World,
 current_selected_block: Block,
 block_renderer: BlockRenderer,
 
@@ -58,11 +57,6 @@ fn on_attach(self: *Game) !void {
         std.debug.panic("TODO: controls should be set up in Settings/Keys: {}", .{err});
     };
     errdefer self.camera.deinit();
-    logger.info("{*}: initializing ChunkManager", .{self});
-    self.chunk_manager = try ChunkManager.init(.{
-        .thread_cnt = 4,
-    });
-    errdefer self.chunk_manager.deinit();
 
     logger.info("{*}: initializing BlockRenderer", .{self});
     try self.block_renderer.init();

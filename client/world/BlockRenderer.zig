@@ -625,3 +625,7 @@ const block_frag =
     \\  out_norm = vec4(frag_norm, 1);
     \\}
 ;
+
+pub const Face = packed struct(u64) {
+    _unused: u64,
+};

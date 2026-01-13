@@ -1,5 +1,5 @@
 const std = @import("std");
-const Coords = @import("Chunk.zig").Coords;
+const Coords = @import("World.zig").Coords;
 const App = @import("App.zig");
 
 idx: u16,
@@ -135,3 +135,33 @@ pub const Face = packed struct(u32) {
     w_offset: u4 = 0,
     _unused: u12 = 0xeba,
 };
+
+pub fn Neighbours(size: comptime_int) type {
+    std.debug.assert(size % 2 == 1);
+    std.debug.assert(size > 0);
+    const offset: Coords = @splat(size / 2);
+    const strides: Coords = .{ size * size, size, 1 };
+
+    return struct {
+        pub const deltas: [size * size * size]Coords = blk: {
+            var res = std.mem.zeroes([size * size * size]Coords);
+
+            for (0..size) |x| {
+                for (0..size) |y| {
+                    for (0..size) |z| {
+                        const xyz: Coords = @intCast(@Vector(3, usize){ x, y, z });
+                        const idx: usize = @intCast(@reduce(.Add, xyz * strides));
+                        res[idx] = xyz - offset;
+                    }
+                }
+            }
+
+            break :blk res;
+        };
+
+        pub fn index(origin: Coords, target: Coords) usize {
+            const delta = target - origin;
+            return @intCast(@reduce(.Add, delta * strides));
+        }
+    };
+}
