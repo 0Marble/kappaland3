@@ -70,7 +70,10 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
                 const block = switch (y) {
                     0...4 => Block.stone(),
                     5...7 => Block.dirt(),
-                    8 => Block.grass(),
+                    8 => if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE)
+                        Block.planks()
+                    else
+                        Block.grass(),
                     else => Block.air(),
                 };
                 self.set(pos, block);
@@ -80,13 +83,25 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
 }
 
 pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
-    try self.faces.getPtr(.top).append(worker.shared(), .{
-        .x = 0,
-        .y = 8,
-        .z = 0,
-        .ao = 0,
-        .texture = 0,
-    });
+    for (&self.faces.values) |*faces| faces.clearAndFree(worker.shared());
+
+    // self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
+    // self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
+    // self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+    // self.is_occluded &= self.next_layer_solid(.left, .{ 0, 0, 0 });
+    // self.is_occluded &= self.next_layer_solid(.top, .{ 0, CHUNK_SIZE - 1, CHUNK_SIZE - 1 });
+    // self.is_occluded &= self.next_layer_solid(.bot, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
+    // if (self.is_occluded) return;
+
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                try self.mesh_block(.{ x, y, z }, worker);
+            }
+        }
+    }
+
+    for (&self.faces.values) |*faces| faces.* = try faces.clone(worker.shared());
 }
 
 pub fn set_block_and_propagate_updates(
@@ -279,4 +294,50 @@ fn propagate_dark(
 
         try queue.push(worker.temp(), .{ chunk, pos, 0 });
     }
+}
+
+fn mesh_block(self: *Chunk, xyz: @Vector(3, usize), worker: *ChunkManager.Worker) !void {
+    const pos: Coords = @intCast(xyz);
+    const block = self.get(pos);
+    if (block.is_air()) return;
+
+    for (std.enums.values(Block.Direction)) |side| {
+        const front = side.front_dir();
+        if (self.is_solid_neighbour_face(pos + front, side.flip())) continue;
+
+        const up = side.up_dir();
+        const down = -side.up_dir();
+        const left = side.left_dir();
+        const right = -side.left_dir();
+
+        const ao = [_]bool{
+            self.casts_ao(pos + front + left),
+            self.casts_ao(pos + front + right),
+            self.casts_ao(pos + front + up),
+            self.casts_ao(pos + front + down),
+            self.casts_ao(pos + front + left + up),
+            self.casts_ao(pos + front + right + up),
+            self.casts_ao(pos + front + left + down),
+            self.casts_ao(pos + front + right + down),
+        };
+
+        for (block.get_textures(side), block.get_faces(side)) |tex, face| {
+            try self.faces.getPtr(side).append(worker.temp(), .init(
+                pos,
+                tex,
+                face,
+                ao,
+            ));
+        }
+    }
+}
+
+fn is_solid_neighbour_face(self: *Chunk, pos: Coords, face: Block.Direction) bool {
+    const chunk, const block = self.get_chunk_block(pos) orelse return false;
+    return chunk.get(block).is_solid(face);
+}
+
+fn casts_ao(self: *Chunk, pos: Coords) bool {
+    const chunk, const block = self.get_chunk_block(pos) orelse return false;
+    return chunk.get(block).casts_ao();
 }

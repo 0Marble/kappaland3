@@ -17,6 +17,7 @@ air: Block = undefined,
 dirt: Block = undefined,
 stone: Block = undefined,
 grass: Block = undefined,
+planks: Block = undefined,
 
 pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas) !Blocks {
     logger.info("loading block data from {s}", .{dir.path});
@@ -42,6 +43,7 @@ pub fn init(gpa: std.mem.Allocator, dir: *VFS.Dir, atlas: *TextureAtlas) !Blocks
     self.stone = self.get_block(".main.stone:block");
     self.dirt = self.get_block(".main.dirt");
     self.grass = self.get_block(".main.grass");
+    self.planks = self.get_block(".main.planks:block");
 
     if (ctx.ok) {
         logger.info("loading blocks: ok!", .{});

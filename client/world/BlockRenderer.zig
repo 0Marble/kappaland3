@@ -100,7 +100,7 @@ pub fn init(self: *Self) !void {
     try self.block_pass.observe_settings(".main.renderer.face_ao", bool, "u_enable_face_ao", @src());
     try self.block_pass.observe_settings(".main.renderer.face_ao_factor", f32, "u_ao_factor", @src());
 
-    inline for (Ao.idx_to_ao, 0..) |ao, i| {
+    inline for (Ao.from_idx, 0..) |ao, i| {
         const uni: [:0]const u8 = std.fmt.comptimePrint("u_idx_to_ao[{}]", .{i});
         try self.block_pass.set_uint(uni, @intCast(ao));
     }
@@ -543,7 +543,7 @@ const block_vert =
     \\  return Face(uvec3(x, y, z), ao, model, tex);
     \\}
     \\
-++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Ao.idx_to_ao.len}) ++
+++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Ao.from_idx.len}) ++
     \\struct Chunk {
     \\  int x;
     \\  int y;
@@ -679,11 +679,26 @@ pub const FaceMesh = packed struct(u64) {
     // B:
     texture: u16,
     _unused3: u16 = 0xdead,
+
+    pub fn init(pos: Coords, texture: usize, model: usize, ao: [8]bool) FaceMesh {
+        const Tuple = std.meta.Tuple(&(.{u8} ** 8));
+        var tuple: Tuple = undefined;
+        inline for (tuple, 0..) |_, i| tuple[i] = @intFromBool(ao[i]);
+
+        return .{
+            .x = @intCast(pos[0]),
+            .y = @intCast(pos[1]),
+            .z = @intCast(pos[2]),
+            .model = @intCast(model),
+            .texture = @intCast(texture),
+            .ao = Ao.to_idx[@call(.auto, Ao.pack, tuple)],
+        };
+    }
 };
 
 pub const Ao = struct {
-    const ao_to_idx = precalculated[1];
-    pub const idx_to_ao = precalculated[0];
+    const to_idx = precalculated[1];
+    pub const from_idx = precalculated[0];
 
     const L = 0;
     const R = 1;
@@ -721,7 +736,7 @@ pub const Ao = struct {
         @setEvalBranchQuota(std.math.maxInt(u32));
         const UNIQUE_CNT = 47;
         var to_ao: [UNIQUE_CNT]u8 = @splat(0);
-        var to_idx: [256]u8 = @splat(0);
+        var from_ao: [256]u6 = @splat(0);
 
         var i: usize = 0;
         for (0..256) |x| {
@@ -733,9 +748,9 @@ pub const Ao = struct {
                 i += 1;
                 break :l2 i - 1;
             };
-            to_idx[x] = k;
+            from_ao[x] = @intCast(k);
         }
         std.debug.assert(i == UNIQUE_CNT);
-        break :blk .{ to_ao, to_idx };
+        break :blk .{ to_ao, from_ao };
     };
 };

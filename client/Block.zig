@@ -68,6 +68,10 @@ pub fn grass() Block {
     return App.assets().get_blocks().grass;
 }
 
+pub fn planks() Block {
+    return App.assets().get_blocks().planks;
+}
+
 pub fn is_air(self: Block) bool {
     return self.idx == air().idx;
 }

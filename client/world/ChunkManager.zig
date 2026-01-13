@@ -124,7 +124,7 @@ pub fn schedule_set_block(
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    const immediate = true;
+    const immediate = false;
 
     if (immediate) {
         const task1: *Task = try self.task_pool.create();
@@ -204,11 +204,7 @@ fn process_phase(self: *ChunkManager) !void {
             } };
             try self.main_worker().run_task(task1);
             for (Block.Neighbours(3).deltas) |d| {
-                const next = chunk.get_chunk_block(d + block_coords) orelse continue;
-                const next_chunk, _ = next;
-                const task2: *Task = try self.task_pool.create();
-                task2.* = .{ .chunk = next_chunk, .body = .meshing };
-                try self.main_worker().run_task(task2);
+                try self.chunks_to_mesh.put(self.world.get_gpa(), d + chunk.coords, {});
             }
 
             _ = self.phase_queue.popFirst();
