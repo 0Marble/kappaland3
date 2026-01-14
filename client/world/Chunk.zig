@@ -22,6 +22,7 @@ coords: Coords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block = undefined,
 neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
 is_occluded: bool = false,
+active: bool = false,
 
 light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,

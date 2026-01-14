@@ -145,20 +145,30 @@ pub fn schedule_set_block(
 
     var buf = std.mem.zeroes([1024]u8);
     var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var seen = std.AutoHashMap(*Chunk, void).init(fba.allocator());
+    var seen = std.AutoArrayHashMap(*Chunk, void).init(fba.allocator());
     seen.ensureTotalCapacity(27) catch unreachable;
 
-    if (true) {
+    var immediate = true;
+    for (Block.Neighbours(3).deltas) |d| {
+        const next = chunk.get_chunk_block(d + pos) orelse {
+            immediate = false;
+            break;
+        };
+        const next_chunk, _ = next;
+        if (!next_chunk.active) {
+            immediate = false;
+            break;
+        }
+        if (seen.getOrPutAssumeCapacity(next_chunk).found_existing) continue;
+    }
+
+    if (immediate) {
         const task1: *Task = try self.task_pool.create();
         task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
         try self.main_worker().run_task(task1);
         try self.completed_tasks.append(self.shared_gpa(), task1);
 
-        for (Block.Neighbours(3).deltas) |d| {
-            const next = chunk.get_chunk_block(d + pos) orelse continue;
-            const next_chunk, _ = next;
-            if (seen.getOrPutAssumeCapacity(next_chunk).found_existing) continue;
-
+        for (seen.keys()) |next_chunk| {
             const task2: *Task = try self.task_pool.create();
             task2.* = .{ .chunk = next_chunk, .body = .meshing };
             try self.main_worker().run_task(task2);
@@ -192,6 +202,7 @@ pub fn process(self: *ChunkManager) !void {
         switch (task.body) {
             .meshing => {
                 try self.world.renderer.upload_chunk_mesh(task.chunk);
+                task.chunk.active = true;
             },
             .loading => {
                 for (Block.Neighbours(3).deltas) |d| {
