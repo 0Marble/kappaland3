@@ -122,6 +122,11 @@ pub fn schedule_set_block(
     self.mutex.lock();
     defer self.mutex.unlock();
 
+    var buf = std.mem.zeroes([1024]u8);
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var seen = std.AutoHashMap(*Chunk, void).init(fba.allocator());
+    seen.ensureTotalCapacity(27) catch unreachable;
+
     if (true) {
         const task1: *Task = try self.task_pool.create();
         task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
@@ -131,6 +136,8 @@ pub fn schedule_set_block(
         for (Block.Neighbours(3).deltas) |d| {
             const next = chunk.get_chunk_block(d + pos) orelse continue;
             const next_chunk, _ = next;
+            if (seen.getOrPutAssumeCapacity(next_chunk).found_existing) continue;
+
             const task2: *Task = try self.task_pool.create();
             task2.* = .{ .chunk = next_chunk, .body = .meshing };
             try self.main_worker().run_task(task2);
