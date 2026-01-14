@@ -77,4 +77,10 @@
         .desc = "Directory that stores all settings templates within assets",
         .default = "settings",
     },
+    .{
+        .type = .bool,
+        .name = "light_debug",
+        .desc = "use light debug textures",
+        .default = false,
+    },
 }
