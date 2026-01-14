@@ -29,10 +29,25 @@ phase_queue_len: usize = 0,
 phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
 tasks_per_second: util.AmountPerSecond = .{},
-chunks_to_mesh: std.AutoHashMapUnmanaged(Coords, void) = .empty, // world.gpa
+chunks_to_mesh: std.HashMapUnmanaged(
+    Coords,
+    void,
+    ChunksToMeshCtx,
+    std.hash_map.default_max_load_percentage,
+) = .empty, // world.gpa
 
 cur_center: Coords = @splat(0),
 cur_radius: Coords = @splat(0),
+
+const ChunksToMeshCtx = struct {
+    pub fn eql(_: @This(), x: Coords, y: Coords) bool {
+        return @reduce(.And, x == y);
+    }
+    pub fn hash(_: @This(), key: Coords) u64 {
+        const a: u96 = @bitCast(key);
+        return @truncate(std.hash.int(a));
+    }
+};
 
 const ChunkManager = @This();
 const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
@@ -103,6 +118,12 @@ pub fn schedule_load_region(self: *ChunkManager, center: Coords, radius: Coords)
             last_phase.body.loading = .{ center, radius };
             return;
         }
+    } else if (self.phase_queue.first == null) {
+        if (@reduce(.And, self.cur_center == center) and
+            @reduce(.And, self.cur_radius == radius))
+        {
+            return;
+        }
     }
 
     const phase: *Phase = try self.phase_pool.create();
@@ -168,8 +189,16 @@ pub fn process(self: *ChunkManager) !void {
     self.tasks_per_second.add(self.completed_tasks.items.len);
 
     for (self.completed_tasks.items) |task| {
-        if (task.body == .meshing) {
-            try self.world.renderer.upload_chunk_mesh(task.chunk);
+        switch (task.body) {
+            .meshing => {
+                try self.world.renderer.upload_chunk_mesh(task.chunk);
+            },
+            .loading => {
+                for (Block.Neighbours(3).deltas) |d| {
+                    try self.chunks_to_mesh.put(self.world.get_gpa(), d + task.chunk.coords, {});
+                }
+            },
+            .set_block => {},
         }
         self.task_pool.destroy(task);
     }
@@ -271,73 +300,63 @@ fn process_phase(self: *ChunkManager) !void {
                 const tgt_max = center + radius;
 
                 {
-                    const x_size: usize = @intCast(radius[0] * 2 + 1);
-                    const y_size: usize = @intCast(radius[1] * 2 + 1);
-                    const z_size: usize = @intCast(radius[2] * 2 + 1);
+                    const x_size: usize = @intCast(self.cur_radius[0] * 2 + 1);
+                    const y_size: usize = @intCast(self.cur_radius[1] * 2 + 1);
+                    const z_size: usize = @intCast(self.cur_radius[2] * 2 + 1);
 
-                    for (0..x_size) |x| {
-                        for (0..y_size) |y| {
-                            for (0..z_size) |z| {
-                                const xyz: Coords = @intCast(@Vector(3, usize){ x, y, z });
-                                const pos = xyz + tgt_min;
+                    for (0..x_size * y_size * z_size) |i| {
+                        const x = (i / y_size / z_size) % x_size;
+                        const y = (i / z_size) % y_size;
+                        const z = i % z_size;
 
-                                const entry = try self.world.chunks.getOrPut(
-                                    self.world.get_gpa(),
-                                    pos,
-                                );
-                                if (!entry.found_existing) {
-                                    const chunk = try Chunk.init(self.world, pos);
-                                    entry.value_ptr.* = chunk;
+                        const xyz: Coords = @intCast(@Vector(3, usize){ x, y, z });
+                        const pos = xyz + cur_min;
+                        if (@reduce(.And, pos >= tgt_min) and @reduce(.And, pos <= tgt_max)) {
+                            continue;
+                        }
+                        try self.world.renderer.destroy_chunk_mesh(pos);
 
-                                    const task: *Task = try self.task_pool.create();
-                                    task.* = .{ .chunk = chunk, .body = .loading };
-                                    try self.pending_tasks.append(
-                                        self.shared_gpa(),
-                                        task,
-                                    );
+                        const kv = self.world.chunks.fetchSwapRemove(pos).?;
+                        const chunk = kv.value;
+                        chunk.deinit(self.shared_gpa());
+                        self.world.chunk_pool.destroy(chunk);
 
-                                    for (Block.Neighbours(3).deltas) |d| {
-                                        try self.chunks_to_mesh.put(
-                                            self.world.get_gpa(),
-                                            d + pos,
-                                            {},
-                                        );
-                                    }
-                                }
-                            }
+                        for (Block.Neighbours(3).deltas) |d| {
+                            try self.chunks_to_mesh.put(
+                                self.world.get_gpa(),
+                                d + pos,
+                                {},
+                            );
                         }
                     }
                 }
 
                 {
-                    const x_size: usize = @intCast(self.cur_radius[0] * 2 + 1);
-                    const y_size: usize = @intCast(self.cur_radius[1] * 2 + 1);
-                    const z_size: usize = @intCast(self.cur_radius[2] * 2 + 1);
+                    const x_size: usize = @intCast(radius[0] * 2 + 1);
+                    const y_size: usize = @intCast(radius[1] * 2 + 1);
+                    const z_size: usize = @intCast(radius[2] * 2 + 1);
 
-                    for (0..x_size) |x| {
-                        for (0..y_size) |y| {
-                            for (0..z_size) |z| {
-                                const xyz: Coords = @intCast(@Vector(3, usize){ x, y, z });
-                                const pos = xyz + cur_min;
-                                if (@reduce(.And, pos >= tgt_min) and
-                                    @reduce(.And, pos <= tgt_max))
-                                {
-                                    continue;
-                                }
-                                try self.world.renderer.destroy_chunk_mesh(pos);
+                    for (0..x_size * y_size * z_size) |i| {
+                        const x = (i / y_size / z_size) % x_size;
+                        const y = (i / z_size) % y_size;
+                        const z = i % z_size;
+                        const xyz: Coords = @intCast(@Vector(3, usize){ x, y, z });
+                        const pos = xyz + tgt_min;
 
-                                const kv = self.world.chunks.fetchSwapRemove(pos).?;
-                                const chunk = kv.value;
-                                chunk.deinit(self.shared_gpa());
+                        const entry = try self.world.chunks.getOrPut(
+                            self.world.get_gpa(),
+                            pos,
+                        );
+                        if (!entry.found_existing) {
+                            const chunk = try Chunk.init(self.world, pos);
+                            entry.value_ptr.* = chunk;
 
-                                for (Block.Neighbours(3).deltas) |d| {
-                                    try self.chunks_to_mesh.put(
-                                        self.world.get_gpa(),
-                                        d + pos,
-                                        {},
-                                    );
-                                }
-                            }
+                            const task: *Task = try self.task_pool.create();
+                            task.* = .{ .chunk = chunk, .body = .loading };
+                            try self.pending_tasks.append(
+                                self.shared_gpa(),
+                                task,
+                            );
                         }
                     }
                 }
