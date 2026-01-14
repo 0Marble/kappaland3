@@ -235,7 +235,7 @@ pub fn deinit() void {
     app.layers.deinit(App.gpa());
     app.frame_memory.deinit();
     app.static_memory.deinit();
-    _ = App.main_alloc.deinit();
+    std.debug.assert(App.main_alloc.deinit() == .ok);
 }
 
 pub fn gpa() std.mem.Allocator {

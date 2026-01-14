@@ -14,7 +14,11 @@ chunk_manager: *ChunkManager = undefined,
 renderer: BlockRenderer = undefined,
 chunk_pool: std.heap.MemoryPool(Chunk) = undefined,
 chunks: std.AutoArrayHashMapUnmanaged(Coords, *Chunk) = .empty,
-gpa: Gpa,
+
+normal_gpa: std.mem.Allocator,
+shared_gpa_base: Gpa = .init,
+shared_gpa: std.heap.ThreadSafeAllocator = undefined,
+
 load_radius: Coords = .{
     Options.world_size / 2,
     Options.world_height / 2,
@@ -25,31 +29,37 @@ const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
 
 pub const Coords = @Vector(3, i32);
 
-pub fn init() !*World {
-    var gpa = Gpa.init;
-    const self = try gpa.allocator().create(World);
-    self.* = .{ .gpa = gpa };
+pub fn init(gpa: std.mem.Allocator) !*World {
+    const self: *World = try gpa.create(World);
+    logger.info("{*}: initializing", .{self});
+
+    self.* = .{ .normal_gpa = gpa };
+    self.shared_gpa = .{ .child_allocator = self.shared_gpa_base.allocator() };
+
     self.chunk_pool = .init(self.get_gpa());
     try self.renderer.init();
     self.chunk_manager = try ChunkManager.init(self, .{ .thread_count = 4 });
 
     try App.get_renderer().add_step(BlockRenderer.draw, .{&self.renderer});
 
+    logger.info("{*}: initialized!", .{self});
+
     return self;
 }
 
 pub fn deinit(self: *World) void {
+    logger.info("{*}: destroying", .{self});
+    self.chunk_manager.deinit();
+
     for (self.chunks.values()) |chunk| {
-        chunk.deinit(self.chunk_manager.shared_gpa.allocator());
+        chunk.deinit(self.shared_gpa.allocator());
     }
     self.chunks.deinit(self.get_gpa());
 
-    self.chunk_manager.deinit();
-
     self.chunk_pool.deinit();
     self.renderer.deinit();
-    var gpa = self.gpa;
-    gpa.allocator().destroy(self);
+    std.debug.assert(self.shared_gpa_base.deinit() == .ok);
+    self.get_gpa().destroy(self);
 }
 
 pub fn get_block(self: *World, world_pos: Coords) Block {
@@ -96,7 +106,7 @@ pub fn world_to_block(w: Coords) Coords {
 }
 
 pub fn get_gpa(self: *World) std.mem.Allocator {
-    return self.gpa.allocator();
+    return self.normal_gpa;
 }
 
 pub fn to_world_coord(pos: zm.Vec3f) Coords {

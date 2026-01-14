@@ -22,6 +22,7 @@ coords: Coords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block = undefined,
 neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
 is_occluded: bool = false,
+
 light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,
 faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.FaceMesh)) = .initFill(.empty),
@@ -84,7 +85,7 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
 }
 
 pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
-    for (&self.faces.values) |*faces| faces.clearAndFree(worker.shared());
+    for (&self.faces.values) |*faces| faces.clearRetainingCapacity();
 
     self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
     self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
@@ -101,8 +102,6 @@ pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
             }
         }
     }
-
-    for (&self.faces.values) |*faces| faces.* = try faces.clone(worker.shared());
 }
 
 pub fn set_block_and_propagate_updates(
@@ -418,7 +417,7 @@ fn mesh_block(self: *Chunk, xyz: @Vector(3, usize), worker: *ChunkManager.Worker
                     ao,
                 ));
             } else {
-                try self.faces.getPtr(side).append(worker.temp(), .init(pos, tex, face, ao));
+                try self.faces.getPtr(side).append(worker.shared(), .init(pos, tex, face, ao));
             }
         }
     }

@@ -16,8 +16,6 @@ world: *World,
 main_tid: std.Thread.Id,
 threads: []std.Thread, // world.gpa
 workers: std.AutoArrayHashMapUnmanaged(std.Thread.Id, Worker) = .empty, // world.gpa
-unsafe_shared_gpa: Gpa,
-shared_gpa: std.heap.ThreadSafeAllocator,
 
 mutex: std.Thread.Mutex = .{},
 cond: std.Thread.Condition = .{},
@@ -30,7 +28,7 @@ phase_queue: std.DoublyLinkedList = .{}, // world.gpa
 phase_queue_len: usize = 0,
 phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
-chunks_to_mesh: std.AutoHashMapUnmanaged(Coords, void) = .empty,
+chunks_to_mesh: std.AutoHashMapUnmanaged(Coords, void) = .empty, // world.gpa
 
 cur_center: Coords = @splat(0),
 cur_radius: Coords = @splat(0),
@@ -43,24 +41,21 @@ pub const Options = struct {
 };
 
 pub fn init(world: *World, opts: Options) !*ChunkManager {
-    logger.info("creating chunk manager", .{});
     errdefer |err| {
         logger.err("could not create chunk manager: {}", .{err});
     }
 
     const self = try world.get_gpa().create(ChunkManager);
+    logger.info("{*}: initializing", .{self});
     const thread_count = opts.thread_count orelse try std.Thread.getCpuCount();
 
     self.* = .{
         .world = world,
         .main_tid = std.Thread.getCurrentId(),
-        .unsafe_shared_gpa = .init,
-        .shared_gpa = undefined,
         .phase_pool = .init(world.get_gpa()),
         .task_pool = .init(world.get_gpa()),
         .threads = try world.get_gpa().alloc(std.Thread, thread_count),
     };
-    self.shared_gpa = .{ .child_allocator = self.unsafe_shared_gpa.allocator() };
 
     try self.workers.ensureTotalCapacity(world.get_gpa(), thread_count + 1);
     _ = Worker.init(self);
@@ -69,12 +64,14 @@ pub fn init(world: *World, opts: Options) !*ChunkManager {
         thread.* = try .spawn(.{}, Worker.init_and_run, .{self});
     }
 
-    logger.info("created chunk manager", .{});
+    logger.info("{*}: initialized", .{self});
 
     return self;
 }
 
 pub fn deinit(self: *ChunkManager) void {
+    logger.info("{*}: destroying", .{self});
+
     {
         self.mutex.lock();
         self.is_running = false;
@@ -87,12 +84,11 @@ pub fn deinit(self: *ChunkManager) void {
     self.workers.deinit(self.world.get_gpa());
     self.world.get_gpa().free(self.threads);
 
-    self.pending_tasks.deinit(self.shared_gpa.allocator());
-    self.completed_tasks.deinit(self.shared_gpa.allocator());
+    self.pending_tasks.deinit(self.shared_gpa());
+    self.completed_tasks.deinit(self.shared_gpa());
     self.task_pool.deinit();
     self.phase_pool.deinit();
-    _ = self.unsafe_shared_gpa.deinit();
-
+    self.chunks_to_mesh.deinit(self.world.get_gpa());
     self.world.get_gpa().destroy(self);
 }
 
@@ -125,19 +121,22 @@ pub fn schedule_set_block(
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    // if (immediate) {
-    //     const task1: *Task = try self.task_pool.create();
-    //     task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
-    //     try self.main_worker().run_task(task1);
-    //
-    //     for (Block.Neighbours(3).deltas) |d| {
-    //         const next = chunk.get_chunk_block(d + pos) orelse continue;
-    //         const next_chunk, _ = next;
-    //         const task2: *Task = try self.task_pool.create();
-    //         task2.* = .{ .chunk = next_chunk, .body = .meshing };
-    //         try self.main_worker().run_task(task2);
-    //     }
-    // }
+    if (true) {
+        const task1: *Task = try self.task_pool.create();
+        task1.* = .{ .chunk = chunk, .body = .{ .set_block = .{ pos, block } } };
+        try self.main_worker().run_task(task1);
+        try self.completed_tasks.append(self.shared_gpa(), task1);
+
+        for (Block.Neighbours(3).deltas) |d| {
+            const next = chunk.get_chunk_block(d + pos) orelse continue;
+            const next_chunk, _ = next;
+            const task2: *Task = try self.task_pool.create();
+            task2.* = .{ .chunk = next_chunk, .body = .meshing };
+            try self.main_worker().run_task(task2);
+            try self.completed_tasks.append(self.shared_gpa(), task2);
+        }
+        return;
+    }
 
     const phase: *Phase = try self.phase_pool.create();
     phase.* = .{
@@ -202,15 +201,14 @@ fn process_phase(self: *ChunkManager) !void {
                 .set_block = .{ block_coords, block },
             } };
             try self.main_worker().run_task(task1);
-            try self.completed_tasks.append(self.shared_gpa.allocator(), task1);
+            try self.completed_tasks.append(self.shared_gpa(), task1);
             for (Block.Neighbours(3).deltas) |d| {
-                // const world_coords = d + block_coords + @as(Coords, @splat(CHUNK_SIZE)) * chunk_coords;
-                // try self.chunks_to_mesh.put(
-                //     self.world.get_gpa(),
-                //     World.world_to_chunk(world_coords),
-                //     {},
-                // );
-                try self.chunks_to_mesh.put(self.world.get_gpa(), d + chunk_coords, {});
+                const world_coords = chunk.to_world_coords(d + block_coords);
+                try self.chunks_to_mesh.put(
+                    self.world.get_gpa(),
+                    World.world_to_chunk(world_coords),
+                    {},
+                );
             }
 
             _ = self.phase_queue.popFirst();
@@ -229,7 +227,7 @@ fn process_phase(self: *ChunkManager) !void {
                     const chunk = self.world.chunks.get(coords.*) orelse continue;
                     const task: *Task = try self.task_pool.create();
                     task.* = .{ .chunk = chunk, .body = .meshing };
-                    try self.pending_tasks.append(self.shared_gpa.allocator(), task);
+                    try self.pending_tasks.append(self.shared_gpa(), task);
                 }
                 self.chunks_to_mesh.clearRetainingCapacity();
 
@@ -285,7 +283,7 @@ fn process_phase(self: *ChunkManager) !void {
                                     const task: *Task = try self.task_pool.create();
                                     task.* = .{ .chunk = chunk, .body = .loading };
                                     try self.pending_tasks.append(
-                                        self.shared_gpa.allocator(),
+                                        self.shared_gpa(),
                                         task,
                                     );
 
@@ -321,7 +319,7 @@ fn process_phase(self: *ChunkManager) !void {
 
                                 const kv = self.world.chunks.fetchSwapRemove(pos).?;
                                 const chunk = kv.value;
-                                chunk.deinit(self.shared_gpa.allocator());
+                                chunk.deinit(self.shared_gpa());
 
                                 for (Block.Neighbours(3).deltas) |d| {
                                     try self.chunks_to_mesh.put(
@@ -388,7 +386,7 @@ pub const Worker = struct {
     }
 
     pub fn shared(self: *Worker) std.mem.Allocator {
-        return self.parent.shared_gpa.allocator();
+        return self.parent.shared_gpa();
     }
 
     pub fn is_main_thread(self: *Worker) bool {
@@ -409,12 +407,16 @@ pub const Worker = struct {
             .arena = undefined,
         };
         self.arena = .init(self.gpa.allocator());
+
+        logger.info("{*}: started", .{self});
         return self;
     }
 
     fn deinit(self: *Worker) void {
+        logger.info("{*}: joined", .{self});
+
         self.arena.deinit();
-        _ = self.gpa.deinit();
+        std.debug.assert(self.gpa.deinit() == .ok);
     }
 
     fn init_and_run(parent: *ChunkManager) void {
@@ -428,8 +430,6 @@ pub const Worker = struct {
     fn run(self: *Worker) !void {
         self.parent.mutex.lock();
         defer self.parent.mutex.unlock();
-
-        logger.info("{*}: started", .{self});
 
         while (true) {
             while (self.parent.pending_tasks.pop()) |task| {
@@ -461,8 +461,6 @@ pub const Worker = struct {
                 self.parent.cond.wait(&self.parent.mutex);
             } else break;
         }
-
-        logger.info("{*}: joined", .{self});
     }
 
     fn run_task(self: *Worker, task: *Task) !void {
@@ -499,7 +497,6 @@ fn on_imgui(self: *ChunkManager) !void {
         \\    work:   {d}:{d}:{d}
         \\    meshes: {d}
         \\Chunk Memory:
-        \\    world:  {f}
         \\    shared: {f}
     , .{
         cur_phase,
@@ -507,9 +504,7 @@ fn on_imgui(self: *ChunkManager) !void {
         self.tasks_left,
         self.completed_tasks.items.len,
         self.chunks_to_mesh.count(),
-
-        util.MemoryUsage.from_bytes(self.world.gpa.total_requested_bytes),
-        util.MemoryUsage.from_bytes(self.unsafe_shared_gpa.total_requested_bytes),
+        util.MemoryUsage.from_bytes(self.world.shared_gpa_base.total_requested_bytes),
     }, 0);
 
     c.igText("%s", @as(c_str, text1));
@@ -523,4 +518,8 @@ fn on_imgui(self: *ChunkManager) !void {
         }, 0);
         c.igText("%s", @as(c_str, text2));
     }
+}
+
+fn shared_gpa(self: *ChunkManager) std.mem.Allocator {
+    return self.world.shared_gpa.allocator();
 }
