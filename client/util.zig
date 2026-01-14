@@ -2,6 +2,8 @@ const c = @import("c.zig").c;
 const gl = @import("gl");
 const std = @import("std");
 const Options = @import("Build").Options;
+const EventManager = @import("libmine").EventManager;
+const App = @import("App.zig");
 
 pub const MemoryUsage = struct {
     bytes: usize,
@@ -219,3 +221,24 @@ pub fn file_sdl_iostream(file: *std.fs.File) !*c.SDL_IOStream {
     const res = try sdl_call(c.SDL_OpenIO(@ptrCast(&iface), @ptrCast(file)));
     return res;
 }
+
+pub const AmountPerSecond = struct {
+    amt: usize = 0,
+    evt: EventManager.Event = .invalid,
+    handle: EventManager.EventListenerHandle = undefined,
+    measurement: f32 = 0.0,
+
+    pub fn add(self: *AmountPerSecond, amt: usize) void {
+        if (self.evt == .invalid) {
+            self.evt = App.event_manager().get_named(".main.second_passed").?;
+            _ = App.event_manager().add_listener(self.evt, callback, .{self}, @src()) catch
+                unreachable;
+        }
+        self.amt += amt;
+    }
+
+    fn callback(self: *AmountPerSecond, ms: f32) void {
+        self.measurement = @as(f32, @floatFromInt(self.amt)) / ms * 1000.0;
+        self.amt = 0;
+    }
+};

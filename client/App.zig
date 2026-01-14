@@ -72,7 +72,7 @@ pub fn init() !void {
     app.asset_manager = try .init(App.gpa());
     app.settings_store = try .init();
     app.events = .init(App.main_alloc.allocator());
-    app.frame_data = .{ .start = std.time.timestamp() };
+    app.frame_data = try .init();
     try app.keys_state.init();
     app.debug_ui = try .init(&app);
 
@@ -273,7 +273,9 @@ fn on_imgui(self: *App) !void {
 
 pub fn run() UnhandledError!void {
     while (true) {
-        app.frame_data.on_frame_start();
+        app.frame_data.on_frame_start() catch |err| {
+            logger.err("frame_data: {}", .{err});
+        };
 
         if (!try handle_events()) break;
 
@@ -419,13 +421,23 @@ const FrameData = struct {
     frame_end_time: i64 = 0,
     this_frame_start: i64 = 0,
     start: i64,
+    evt: EventManager.Event,
 
-    fn on_frame_start(self: *FrameData) void {
+    fn init() !FrameData {
+        const evt = try App.event_manager().register_event(f32);
+        try App.event_manager().name_event(evt, ".main.second_passed");
+
+        return .{ .start = std.time.timestamp(), .evt = evt };
+    }
+
+    fn on_frame_start(self: *FrameData) !void {
         self.this_frame_start = std.time.milliTimestamp();
 
         if (self.this_frame_start >= self.last_fps_measurement_time + 1000) {
             const frame_cnt: f32 = @floatFromInt(self.cur_frame - self.last_fps_measurement_frame);
             const dt: f32 = @floatFromInt(self.this_frame_start - self.last_fps_measurement_time);
+            try App.event_manager().emit(self.evt, dt);
+
             const fps = frame_cnt / dt * 1000.0;
             const str = std.fmt.allocPrintSentinel(
                 frame_alloc(),

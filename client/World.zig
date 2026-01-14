@@ -93,8 +93,8 @@ pub fn update(self: *World) App.UnhandledError!void {
 }
 
 pub fn on_frame_start(self: *World) App.UnhandledError!void {
-    try self.renderer.on_frame_start();
     try self.chunk_manager.on_frame_start();
+    try self.renderer.on_frame_start();
 }
 
 pub fn world_to_chunk(w: Coords) Coords {

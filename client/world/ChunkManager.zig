@@ -28,6 +28,7 @@ phase_queue: std.DoublyLinkedList = .{}, // world.gpa
 phase_queue_len: usize = 0,
 phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
+tasks_per_second: util.AmountPerSecond = .{},
 chunks_to_mesh: std.AutoHashMapUnmanaged(Coords, void) = .empty, // world.gpa
 
 cur_center: Coords = @splat(0),
@@ -157,6 +158,7 @@ pub fn process(self: *ChunkManager) !void {
     }
 
     try self.process_phase();
+    self.tasks_per_second.add(self.completed_tasks.items.len);
 
     for (self.completed_tasks.items) |task| {
         if (task.body == .meshing) {
@@ -485,25 +487,35 @@ pub fn on_frame_start(self: *ChunkManager) App.UnhandledError!void {
     try App.gui().add_to_frame(ChunkManager, "Debug", self, on_imgui, @src());
 }
 
-fn on_imgui(self: *ChunkManager) !void {
-    const cur_phase = if (self.phase_queue.first) |link|
-        @as(Phase.Body.Tag, Phase.from_link(link).body)
-    else
-        null;
+fn fmt_queue(queue: std.DoublyLinkedList, writer: *std.Io.Writer) !void {
+    var cur = queue.first;
+    try writer.print("[", .{});
+    while (cur) |node| {
+        const phase = Phase.from_link(node);
+        try writer.print("{}, ", .{@as(Phase.Body.Tag, phase.body)});
+        cur = node.next;
+    }
+    try writer.print("]", .{});
+}
 
+fn on_imgui(self: *ChunkManager) !void {
     const text1 = try std.fmt.allocPrintSentinel(App.frame_alloc(),
         \\Chunk Work:
-        \\    phase:  {?}
-        \\    work:   {d}:{d}:{d}
+        \\    queue:  {f}
+        \\    work:   {d:.2}/s {d}:{d}
         \\    meshes: {d}
+        \\    region: {d} {}...{}
         \\Chunk Memory:
         \\    shared: {f}
     , .{
-        cur_phase,
-        self.phase_queue_len,
+        std.fmt.Alt(std.DoublyLinkedList, fmt_queue){ .data = self.phase_queue },
+        self.tasks_per_second.measurement,
         self.tasks_left,
         self.completed_tasks.items.len,
         self.chunks_to_mesh.count(),
+        self.world.chunks.count(),
+        self.cur_center - self.cur_radius,
+        self.cur_center + self.cur_radius,
         util.MemoryUsage.from_bytes(self.world.shared_gpa_base.total_requested_bytes),
     }, 0);
 
