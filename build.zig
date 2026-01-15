@@ -86,6 +86,29 @@ const Imgui = struct {
     }
 };
 
+fn compute_build_id(b: *std.Build) [:0]const u8 {
+    const paths: []const []const u8 = &.{
+        "client/",
+        "server/",
+        "lib/",
+        "build/",
+        "build.zig",
+        "build.zig.zon",
+        "assets/",
+    };
+
+    const Static = struct {
+        var buf = std.mem.zeroes([256]u8);
+    };
+
+    var hasher = std.hash.Crc32.init();
+    for (paths) |path| {
+        const stat = b.build_root.handle.statFile(path) catch unreachable;
+        hasher.update(std.mem.asBytes(&stat.atime));
+    }
+    return std.fmt.bufPrintZ(&Static.buf, "{x}", .{hasher.final()}) catch unreachable;
+}
+
 fn generate_builtins(b: *std.Build) *std.Build.Module {
     const builtins = b.addWriteFile("main.zig",
         \\pub const Options = @import("Options");
@@ -110,6 +133,7 @@ fn generate_builtins(b: *std.Build) *std.Build.Module {
         if (comptime std.mem.eql(u8, "assets_dir", o.name)) assets_dir = val;
         opts_map.addOption(t, o.name, val);
     }
+    opts_map.addOption([:0]const u8, "build_id", compute_build_id(b));
 
     mod.addImport("Options", opts_map.createModule());
 

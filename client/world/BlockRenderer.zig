@@ -16,6 +16,8 @@ const c = @import("../c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
 const Camera = @import("../Camera.zig");
+const LightLevelInfo = Renderer.LightLevelInfo;
+const LightList = Renderer.LightList;
 
 const logger = std.log.scoped(.block_renderer);
 
@@ -23,8 +25,11 @@ const Self = @This();
 const BlockRenderer = @This();
 
 const CHUNK_SIZE = Chunk.CHUNK_SIZE;
+const ChunkData = Renderer.ChunkData;
 
 const DEFAULT_FACES_SIZE = 1024 * 1024 * 16;
+const DEFAULT_LIGHT_LEVELS_SIZE = 1024 * 1024;
+const DEFAULT_LIGHT_LISTS_SIZE = 1024 * 1024;
 const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
 const DEFAULT_INDIRECT_SIZE = 1024 * @sizeOf(Indirect);
 const BLOCK_ATLAS_TEX = 0;
@@ -34,7 +39,11 @@ block_vao: gl.uint,
 block_ibo: gl.uint,
 model_ssbo: gl.uint,
 normal_ubo: gl.uint,
+
 faces: GpuAlloc,
+light_levels: GpuAlloc,
+light_lists: GpuAlloc,
+
 had_realloc: bool,
 chunk_data_ssbo: gl.uint,
 indirect_buf: gl.uint,
@@ -81,6 +90,8 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
     self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
+    self.light_levels = try .init(App.static_alloc(), DEFAULT_LIGHT_LEVELS_SIZE, gl.STREAM_DRAW);
+    self.light_lists = try .init(App.static_alloc(), DEFAULT_LIGHT_LISTS_SIZE, gl.STREAM_DRAW);
 
     try gl_call(gl.BindVertexArray(self.block_vao));
 
@@ -189,6 +200,8 @@ fn init_chunk_data(self: *Self) !void {
 pub fn deinit(self: *Self) void {
     self.block_pass.deinit();
     self.faces.deinit();
+    self.light_lists.deinit();
+    self.light_levels.deinit();
     self.mesh_pool.deinit();
     self.meshes.deinit(App.gpa());
 
@@ -210,8 +223,20 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
             @sizeOf(FaceMesh),
         ));
         try gl_call(gl.BindVertexArray(0));
+
         self.had_realloc = false;
     }
+
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        LIGHT_LISTS_BINDING,
+        self.light_lists.buffer,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        LIGHT_LEVELS_BINDING,
+        self.light_levels.buffer,
+    ));
 
     const draw_count = try self.compute_drawn_chunk_data(cam);
 
@@ -239,10 +264,42 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
 }
 
 pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
-    const old_buf = self.faces.buffer;
+    const old_faces_buf = self.faces.buffer;
+    const old_levels_buf = self.light_levels.buffer;
+    const old_lists_buf = self.light_lists.buffer;
 
     const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
-        for (&mesh.handles, &chunk.faces.values) |*handle, faces| {
+        {
+            const old_range = self.light_levels.get_range(mesh.light_levels_handle).?;
+            const new_size = chunk.compiled_light_levels.items.len * @sizeOf(LightLevelInfo);
+            try gl_call(gl.InvalidateBufferSubData(
+                self.light_levels.buffer,
+                old_range.offset,
+                old_range.size,
+            ));
+            mesh.light_levels_handle = try self.light_levels.realloc(
+                mesh.light_levels_handle,
+                new_size,
+                std.mem.Alignment.of(LightLevelInfo),
+            );
+        }
+
+        {
+            const old_range = self.light_lists.get_range(mesh.light_lists_handle).?;
+            const new_size = chunk.compiled_light_lists.items.len * @sizeOf(LightList);
+            try gl_call(gl.InvalidateBufferSubData(
+                self.light_lists.buffer,
+                old_range.offset,
+                old_range.size,
+            ));
+            mesh.light_lists_handle = try self.light_lists.realloc(
+                mesh.light_lists_handle,
+                new_size,
+                std.mem.Alignment.of(LightList),
+            );
+        }
+
+        for (&mesh.face_handles, &chunk.faces.values) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
             const new_size = faces.items.len * @sizeOf(FaceMesh);
 
@@ -260,7 +317,16 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
-        for (&mesh.handles, &chunk.faces.values) |*handle, faces| {
+        mesh.light_levels_handle = try self.light_levels.alloc(
+            chunk.compiled_light_levels.items.len * @sizeOf(LightLevelInfo),
+            std.mem.Alignment.of(LightLevelInfo),
+        );
+        mesh.light_lists_handle = try self.light_lists.alloc(
+            chunk.compiled_light_lists.items.len * @sizeOf(LightList),
+            std.mem.Alignment.of(LightList),
+        );
+
+        for (&mesh.face_handles, &chunk.faces.values) |*handle, faces| {
             const new_size = faces.items.len * @sizeOf(FaceMesh);
             handle.* = try self.faces.alloc(
                 new_size,
@@ -273,7 +339,32 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
 
     mesh.is_occluded = chunk.is_occluded;
     mesh.coords = chunk.coords;
-    for (&mesh.face_counts, &chunk.faces.values, mesh.handles, 0..) |*cnt, faces, handle, i| {
+
+    {
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_levels.buffer));
+        const range = self.light_levels.get_range(mesh.light_levels_handle).?;
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(chunk.compiled_light_levels.items),
+        ));
+    }
+
+    {
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_lists.buffer));
+        const range = self.light_lists.get_range(mesh.light_lists_handle).?;
+        std.debug.assert(range.size >= @as(isize, @intCast(chunk.compiled_light_lists.items.len * @sizeOf(LightList))));
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(chunk.compiled_light_lists.items),
+        ));
+    }
+
+    try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
+    for (&mesh.face_counts, &chunk.faces.values, mesh.face_handles, 0..) |*cnt, faces, handle, i| {
         cnt.* = faces.items.len;
         self.total_triangle_count += faces.items.len * 2;
 
@@ -283,7 +374,6 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
             .{ self, mesh.coords, i, handle, range.offset, range.size },
         );
 
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
         try gl_call(gl.BufferSubData(
             gl.ARRAY_BUFFER,
             range.offset,
@@ -293,13 +383,17 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     }
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 
-    self.had_realloc |= old_buf != self.faces.buffer;
+    self.had_realloc |= old_faces_buf != self.faces.buffer;
+    self.had_realloc |= old_levels_buf != self.light_levels.buffer;
+    self.had_realloc |= old_lists_buf != self.light_lists.buffer;
 }
 
 pub fn destroy_chunk_mesh(self: *Self, coords: Coords) !void {
     const kv = self.meshes.fetchSwapRemove(coords) orelse return;
     const mesh = kv.value;
-    for (mesh.handles, mesh.face_counts) |handle, cnt| {
+    self.faces.free(mesh.light_lists_handle);
+    self.faces.free(mesh.light_levels_handle);
+    for (mesh.face_handles, mesh.face_counts) |handle, cnt| {
         self.total_triangle_count -= cnt * 2;
         self.faces.free(handle);
     }
@@ -383,9 +477,14 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     @memset(chunk_data, std.mem.zeroes(ChunkData));
 
     for (meshes.items, 0..) |mesh, i| {
+        const light_levels_range = self.light_levels.get_range(mesh.mesh.light_levels_handle).?;
+        const light_lists_range = self.light_lists.get_range(mesh.mesh.light_lists_handle).?;
+        const light_levels: u32 = @intCast(@divExact(light_levels_range.offset, @sizeOf(LightLevelInfo)));
+        const light_lists: u32 = @intCast(@divExact(light_lists_range.offset, @sizeOf(LightList)));
+
         for (std.enums.values(Block.Direction)) |normal| {
             const j: u32 = @intFromEnum(normal);
-            const range = self.faces.get_range(mesh.mesh.handles[j]).?;
+            const range = self.faces.get_range(mesh.mesh.face_handles[j]).?;
 
             indirect[i * BLOCK_FACE_CNT + j] = Indirect{
                 .count = 6,
@@ -399,6 +498,9 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
                 .y = mesh.mesh.coords[1],
                 .z = mesh.mesh.coords[2],
                 .normal = j,
+                .light_levels = light_levels,
+                .light_lists = light_lists,
+                .no_lights = @intFromBool(light_levels_range.size == 0),
             };
             self.shown_triangle_count += mesh.mesh.face_counts[j] * 2;
         }
@@ -441,13 +543,6 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     return indirect.len;
 }
 
-const ChunkData = extern struct {
-    x: i32,
-    y: i32,
-    z: i32,
-    normal: u32,
-};
-
 const Indirect = extern struct {
     count: u32,
     instance_count: u32,
@@ -457,7 +552,9 @@ const Indirect = extern struct {
 };
 
 const Mesh = struct {
-    handles: [BLOCK_FACE_CNT]GpuAlloc.Handle,
+    face_handles: [BLOCK_FACE_CNT]GpuAlloc.Handle,
+    light_levels_handle: GpuAlloc.Handle,
+    light_lists_handle: GpuAlloc.Handle,
     face_counts: [BLOCK_FACE_CNT]usize,
     coords: Coords,
     is_occluded: bool,
@@ -507,10 +604,13 @@ const normal_mats = blk: {
 const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;
-const CHUNK_DATA_BINDING = 1;
 const NORMAL_BINDING = 2;
 const MODEL_BINDING = 3;
+const LIGHT_LEVELS_BINDING = Renderer.LIGHT_LEVELS_BINDING;
+const LIGHT_LISTS_BINDING = Renderer.LIGHT_LISTS_BINDING;
+
 const BLOCK_FACE_CNT = std.enums.values(Block.Direction).len;
+const CHUNK_DATA_BINDING = Renderer.CHUNK_DATA_BINDING;
 
 const block_vert =
     \\#version 460 core
@@ -549,13 +649,17 @@ const block_vert =
     \\  int y;
     \\  int z;
     \\  uint normal;
+    \\  uint light_levels;
+    \\  uint light_lists;
+    \\  uint no_lights;
+    \\  uint unused;
     \\};
     \\
-    \\layout (std430, binding = CHUNK_DATA_BINDING) buffer ChunkData{
+    \\layout (std430, binding = CHUNK_DATA_BINDING) readonly buffer ChunkData{
     \\  Chunk chunks[];
     \\};
     \\
-    \\layout (std430, binding = MODEL_BINDING) buffer Models {
+    \\layout (std430, binding = MODEL_BINDING) readonly buffer Models {
     \\  uint raw_model[];
     \\};
     \\
@@ -593,7 +697,7 @@ const block_vert =
     \\out uint frag_ao;
     \\out uint frag_tex;
     \\out vec2 frag_uv;
-    \\out vec3 frag_pos;
+    \\out vec4 frag_pos;
     \\out vec3 frag_color;
     \\
     \\void main() {
@@ -606,13 +710,14 @@ const block_vert =
     \\  frag_uv = uvs[p] * model.scale + model.offset.xy;
     \\  vec3 vert = norm_to_world[chunk.normal] * vec3(frag_uv - vec2(0.5, 0.5), 0.5 - model.offset.z) + face.pos + vec3(0.5,0.5,0.5);
     \\  vec3 chunk_coords = vec3(chunk.x, chunk.y, chunk.z);
-    \\  vec4 view_pos = u_view * vec4(vert + chunk_coords * 16, 1);
+    \\  vec4 world_pos = vec4(vert + chunk_coords * 16, 1);
+    \\  vec4 view_pos = u_view * world_pos;
     \\  gl_Position = u_proj * view_pos;
     \\
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
     \\  frag_ao = u_idx_to_ao[face.ao];
     \\  frag_tex = face.texture;
-    \\  frag_pos = view_pos.xyz;
+    \\  frag_pos = vec4(world_pos.xyz, uintBitsToFloat(gl_DrawID));
     \\  frag_color = vec3(1);
     \\}
 ;
@@ -630,7 +735,7 @@ const block_frag =
     \\
     \\in flat uint frag_tex;
     \\in vec3 frag_norm;
-    \\in vec3 frag_pos;
+    \\in vec4 frag_pos;
     \\in flat uint frag_ao;
     \\in vec2 frag_uv;
     \\in vec3 frag_color;
@@ -663,7 +768,7 @@ const block_frag =
     \\  float ao = (u_enable_face_ao ? 1.0 - get_ao() * u_ao_factor : 1.0);
     \\  vec3 rgb = texture(u_atlas, vec3(vec2(frag_uv.x, 1 - frag_uv.y), float(frag_tex))).rgb;
     \\  out_color = vec4(rgb * ao * frag_color, 1);
-    \\  out_pos = vec4(frag_pos, 1);
+    \\  out_pos = frag_pos;
     \\  out_norm = vec4(frag_norm, 1);
     \\}
 ;

@@ -254,6 +254,7 @@ fn on_imgui(self: *App) !void {
     var buf: std.ArrayList(u8) = .empty;
     const w = buf.writer(App.frame_alloc());
     try w.print(
+        \\build:   {s}
         \\runtime: {f}
         \\CPU Memory: 
         \\    main:   {f}
@@ -261,6 +262,7 @@ fn on_imgui(self: *App) !void {
         \\    static: {f}
         \\
     , .{
+        Options.build_id,
         util.TimeFmt{ .seconds = std.time.timestamp() - self.frame_data.start },
         util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),

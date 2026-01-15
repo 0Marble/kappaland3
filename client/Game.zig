@@ -52,14 +52,18 @@ fn on_attach(self: *Game) !void {
 }
 
 fn on_imgui(self: *Game) !void {
+    const cam_coords: World.Coords = @intFromFloat(self.camera.frustum_for_occlusion.pos);
+    const cam_block = World.world_to_block(cam_coords);
+    const cam_chunk = World.world_to_chunk(cam_coords);
+
     const camera_str: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
-        "xyz: {:.3}, angles: {:.3}, view: {:.3}\nchunk: {}",
+        "xyz: {:.3}, view: {:.3}\nblock: {} chunk: {}",
         .{
             self.camera.frustum.pos,
-            self.camera.frustum.angles,
             self.camera.frustum.view_dir(),
-            self.camera.chunk_coords(),
+            cam_block,
+            cam_chunk,
         },
         0,
     ));

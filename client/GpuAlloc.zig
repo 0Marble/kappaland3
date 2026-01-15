@@ -119,6 +119,7 @@ pub fn alloc(self: *GpuAlloc, size: usize, alignment: std.mem.Alignment) !Handle
             a.start,
             new_sentinel.start,
         });
+        std.debug.assert(@as(isize, @intCast(size)) == self.get_range(handle).?.size);
 
         return handle;
     } else {
@@ -165,6 +166,7 @@ pub fn realloc(
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 
     logger.debug("{*}: realloc({}, {}): allocated new {}", .{ self, handle, new_size, new });
+    std.debug.assert(@as(isize, @intCast(new_size)) == new_region.size);
     return new;
 }
 
@@ -200,6 +202,7 @@ pub fn get_range(self: *GpuAlloc, handle: Handle) ?GpuMemoryRange {
 
     const idx = handle.to_idx();
     const entry = self.allocations.items[idx];
+    logger.debug("{*}: get_range({}): {}", .{ self, handle, entry });
     return .{
         .offset = @intCast(entry.start + entry.offset),
         .size = @intCast(entry.size),

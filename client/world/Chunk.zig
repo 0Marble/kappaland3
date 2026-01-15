@@ -6,14 +6,16 @@ const BlockRenderer = @import("BlockRenderer.zig");
 const ChunkManager = @import("ChunkManager.zig");
 const Queue = @import("libmine").Queue;
 const App = @import("../App.zig");
+const LightList = @import("../Renderer.zig").LightList;
+const LightLevelInfo = @import("../Renderer.zig").LightLevelInfo;
 
 const Chunk = @This();
 const Coords = World.Coords;
 pub const CHUNK_SIZE = 16;
 
 const X_STRIDE = 1;
-const Z_STRIDE = CHUNK_SIZE;
 const Y_STRIDE = CHUNK_SIZE * CHUNK_SIZE;
+const Z_STRIDE = CHUNK_SIZE;
 const BLOCK_STRIDE: @Vector(3, i32) = .{ X_STRIDE, Y_STRIDE, Z_STRIDE };
 const SIZE: @Vector(3, i32) = @splat(CHUNK_SIZE);
 
@@ -28,13 +30,8 @@ light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,
 faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.FaceMesh)) = .initFill(.empty),
 
-compiled_light_level_offsets: std.ArrayList(Range) = .empty,
+compiled_light_lists: std.ArrayList(LightList) = .empty,
 compiled_light_levels: std.ArrayList(LightLevelInfo) = .empty,
-
-pub const Range = packed struct(u64) {
-    start: u32,
-    length: u32,
-};
 
 const OOM = std.mem.Allocator.Error;
 pub fn init(world: *World, coords: Coords) OOM!*Chunk {
@@ -63,7 +60,7 @@ pub fn deinit(self: *Chunk, shared_gpa: std.mem.Allocator) void {
     self.light_sources.deinit(shared_gpa);
     self.light_levels.deinit(shared_gpa);
     self.compiled_light_levels.deinit(shared_gpa);
-    self.compiled_light_level_offsets.deinit(shared_gpa);
+    self.compiled_light_lists.deinit(shared_gpa);
 }
 
 pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
@@ -178,8 +175,11 @@ pub fn set_block_and_propagate_updates(
 }
 
 pub fn compile_light_data(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
-    self.compiled_light_level_offsets.clearRetainingCapacity();
+    self.compiled_light_lists.clearRetainingCapacity();
     self.compiled_light_levels.clearRetainingCapacity();
+
+    try self.compiled_light_lists.ensureTotalCapacity(worker.shared(), CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+    self.compiled_light_lists.appendNTimesAssumeCapacity(.{}, CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
 
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |y| {
@@ -195,16 +195,16 @@ pub fn compile_light_data(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
                 }
 
                 const end = self.compiled_light_levels.items.len;
-                try self.compiled_light_level_offsets.append(worker.shared(), .{
+                self.compiled_light_lists.items[idx] = .{
                     .start = @intCast(start),
                     .length = @intCast(end - start),
-                });
+                };
             }
         }
     }
 
     if (self.compiled_light_levels.items.len == 0) {
-        self.compiled_light_level_offsets.clearRetainingCapacity();
+        self.compiled_light_lists.clearRetainingCapacity();
     }
 }
 
@@ -302,11 +302,6 @@ pub fn to_world_coords(self: *Chunk, pos: Coords) Coords {
 }
 
 const LightColor = u12;
-const LightLevelInfo = packed struct(u32) {
-    color: u12 = 0,
-    level: u4 = 0,
-    _unused: u16 = 0,
-};
 const LightLevels = struct {
     color: LightColor,
     levels: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]LightLevelInfo,

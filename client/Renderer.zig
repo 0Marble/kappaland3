@@ -22,6 +22,9 @@ pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
 pub const BASE_TEX_ATTACHMENT = 2;
 pub const SSAO_TEX_ATTACHMENT = 0;
+pub const CHUNK_DATA_BINDING = 1;
+pub const LIGHT_LISTS_BINDING = 4;
+pub const LIGHT_LEVELS_BINDING = 5;
 const RENDERED_TEX_ATTACHMENT = 0;
 
 const POSITION_TEX_UNIFORM = 0;
@@ -187,6 +190,7 @@ pub fn draw(self: *Renderer, camera: *Camera) (OOM || GlError)!void {
     try gl_call(gl.Disable(gl.DEPTH_TEST));
 
     try self.lighting_pass.bind();
+    try self.lighting_pass.set_vec2("u_tex_size", render_size);
     try self.lighting_pass.set_vec3("u_view_pos", camera.frustum.pos);
     const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
     const light_dir = camera.view_mat().multiplyVec4(light_dir_world);
@@ -224,7 +228,7 @@ pub fn resize_framebuffers(self: *Renderer, w: i32, h: i32) !void {
     try gl_call(gl.BindFramebuffer(gl.FRAMEBUFFER, self.g_buffer_fbo));
 
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));
-    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, null));
+    try gl_call(gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, null));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR));
     try gl_call(gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE));
@@ -427,8 +431,8 @@ fn init_screen(self: *Renderer) !void {
         .{ .name = "render_frag", .sources = &.{lighting_frag}, .kind = gl.FRAGMENT_SHADER },
     };
     self.lighting_pass = try .init(&render_sources, "lighting_pass");
-    try self.lighting_pass.set_vec3("u_ambient", .{ 0.3, 0.3, 0.3 });
-    try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 0.9 });
+    try self.lighting_pass.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
+    try self.lighting_pass.set_vec3("u_light_color", .{ 0.3, 0.3, 0.3 });
     try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_base_tex", BASE_TEX_UNIFORM);
@@ -489,6 +493,28 @@ const QuadVert = struct {
             try gl_call(gl.EnableVertexAttribArray(i));
         }
     }
+};
+
+pub const LightLevelInfo = packed struct(u32) {
+    color: u12 = 0,
+    level: u4 = 0,
+    _unused: u16 = 0x463a,
+};
+
+pub const LightList = packed struct(u64) {
+    start: u32 = 0,
+    length: u32 = 0,
+};
+
+pub const ChunkData = extern struct {
+    x: i32,
+    y: i32,
+    z: i32,
+    normal: u32,
+    light_levels: u32,
+    light_lists: u32,
+    no_lights: u32 = 1,
+    unused: u32 = 0x7426812f,
 };
 
 const vert =
@@ -567,6 +593,11 @@ const postprocessing_frag =
 ;
 const lighting_frag =
     \\#version 460 core
+    \\
+++ std.fmt.comptimePrint("#define CHUNK_DATA_BINDING {d}\n", .{CHUNK_DATA_BINDING}) ++
+    std.fmt.comptimePrint("#define LIGHT_LEVELS_BINDING {d}\n", .{LIGHT_LEVELS_BINDING}) ++
+    std.fmt.comptimePrint("#define LIGHT_LISTS_BINDING {d}\n", .{LIGHT_LISTS_BINDING}) ++
+    \\
     \\in vec2 frag_uv;
     \\out vec4 out_color;
     \\
@@ -580,19 +611,77 @@ const lighting_frag =
     \\uniform vec3 u_light_dir;
     \\uniform vec3 u_view_pos;
     \\uniform bool u_ssao_enabled;
+    \\uniform vec2 u_tex_size;
+    \\
+    \\struct Chunk {
+    \\  int x;
+    \\  int y;
+    \\  int z;
+    \\  uint normal;
+    \\  uint light_levels;
+    \\  uint light_lists;
+    \\  uint no_lights;
+    \\  uint unused;
+    \\};
+    \\
+    \\layout (std430, binding = CHUNK_DATA_BINDING) readonly buffer ChunkData {
+    \\ Chunk chunks[];
+    \\};
+    \\
+    \\layout (std430, binding = LIGHT_LEVELS_BINDING) readonly buffer LightLevels {
+    \\  uint light_levels[];
+    \\};
+    \\
+    \\layout (std430, binding = LIGHT_LISTS_BINDING) readonly buffer LightLists {
+    \\  uint light_lists[];
+    \\};
+    \\
+    \\#define LIGHT_DEBUG
+    \\#undef LIGHT_DEBUG
+    \\vec3 sample_light() {
+    \\  ivec2 texture_coords = ivec2(frag_uv * u_tex_size);
+    \\  vec4 world_pos = texelFetch(u_pos_tex, texture_coords, 0);
+    \\  vec3 pos = world_pos.xyz;
+    \\
+    \\  uint chunk_idx = floatBitsToUint(world_pos.w);
+    \\  Chunk chunk = chunks[chunk_idx];
+    \\  if (chunk.no_lights == 1) return vec3(0);
+    \\  
+    \\  vec3 block_coords = pos - vec3(chunk.x, chunk.y, chunk.z) * 16.0;
+    \\  uint idx = uint(block_coords.y) * 16 * 16 + uint(block_coords.z) * 16 + uint(block_coords.x);
+    \\  uint start = light_lists[(chunk.light_lists + idx) * 2];
+    \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
+    \\  vec3 sum = vec3(0);
+    \\
+    \\  for (uint i = 0; i < min(length, 8); i++) {
+    \\    uint entry = light_levels[chunk.light_levels + i + start];
+    \\    uint level = (entry >> uint(12)) & uint(0xF);
+    \\    uint r = (entry >> uint(0)) & uint(0xF);
+    \\    uint g = (entry >> uint(4)) & uint(0xF);
+    \\    uint b = (entry >> uint(8)) & uint(0xF);
+    \\    sum += vec3(float(level) / 15.0) * vec3(r, g, b) / 15.0;
+    \\  }
+    \\  #ifdef LIGHT_DEBUG
+    \\  return vec3(float(idx), float(chunk_idx), float(start));
+    \\  #endif
+    \\  return sum;
+    \\}
     \\
     \\void main() {
     \\  vec3 frag_color = texture(u_base_tex, frag_uv).rgb;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float ssao = texture(u_ssao_tex, frag_uv).x;
-    \\  vec3 ambient = u_ambient * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
+    \\  vec3 ambient = (u_ambient + sample_light()) * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
     \\
     \\  vec3 norm = normalize(frag_norm);
     \\  vec3 light_dir = u_light_dir;
     \\  float diff = max(dot(norm, light_dir), 0.0);
     \\  vec3 diffuse = u_light_color * diff * frag_color;
     \\
-    \\  out_color = vec4(ambient + diffuse, 1);
+    \\  out_color = vec4(ambient, 1);
+    \\  #ifdef LIGHT_DEBUG
+    \\  out_color = vec4(sample_light(), 1);
+    \\  #endif
     \\}
 ;
 const ssao_frag =
