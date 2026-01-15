@@ -190,10 +190,7 @@ pub fn schedule_set_block(
 
 pub fn process(self: *ChunkManager) !void {
     self.mutex.lock();
-    defer {
-        self.mutex.unlock();
-        self.cond.broadcast();
-    }
+    defer self.mutex.unlock();
 
     try self.process_phase();
     self.tasks_per_second.add(self.completed_tasks.items.len);
@@ -281,6 +278,7 @@ fn process_phase(self: *ChunkManager) !void {
                 self.chunks_to_mesh.clearRetainingCapacity();
 
                 self.tasks_left = self.pending_tasks.items.len;
+                self.cond.broadcast();
             }
 
             if (self.tasks_left == 0) {
@@ -372,6 +370,7 @@ fn process_phase(self: *ChunkManager) !void {
                     }
                 }
 
+                self.cond.broadcast();
                 self.tasks_left = self.pending_tasks.items.len;
             }
 
