@@ -653,12 +653,12 @@ const lighting_frag =
     \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
     \\  vec3 sum = vec3(0);
     \\
-    \\  for (uint i = 0; i < min(length, 8); i++) {
+    \\  for (uint i = 0; i < length; i++) {
     \\    uint entry = light_levels[chunk.light_levels + i + start];
     \\    uint level = (entry >> uint(12)) & uint(0xF);
-    \\    uint r = (entry >> uint(0)) & uint(0xF);
+    \\    uint r = (entry >> uint(8)) & uint(0xF);
     \\    uint g = (entry >> uint(4)) & uint(0xF);
-    \\    uint b = (entry >> uint(8)) & uint(0xF);
+    \\    uint b = (entry >> uint(0)) & uint(0xF);
     \\    sum += vec3(float(level) / 15.0) * vec3(r, g, b) / 15.0;
     \\  }
     \\  #ifdef LIGHT_DEBUG

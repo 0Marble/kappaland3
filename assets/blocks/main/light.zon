@@ -1,5 +1,27 @@
 .{
     .derives = ".main.basic",
     .textures = .{ .tex = ".blocks.main.light" },
-    .light = .{ .color = 0xF0F, .level = 0xF },
+    .states = .{
+        .red = .{
+            .light = .{ .color = 0xF00, .level = 0xF },
+        },
+        .blue = .{
+            .light = .{ .color = 0x00F, .level = 0xF },
+        },
+        .green = .{
+            .light = .{ .color = 0x0F0, .level = 0xF },
+        },
+        .purple = .{
+            .light = .{ .color = 0xF0F, .level = 0xF },
+        },
+        .yellow = .{
+            .light = .{ .color = 0xFF0, .level = 0xF },
+        },
+        .teal = .{
+            .light = .{ .color = 0x0FF, .level = 0xF },
+        },
+        .white = .{
+            .light = .{ .color = 0xFFF, .level = 0xF },
+        },
+    },
 }
