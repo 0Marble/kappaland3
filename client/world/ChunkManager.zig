@@ -221,7 +221,10 @@ pub fn process(self: *ChunkManager) !void {
             },
             .set_block => {},
             .compile_light => {
-                try self.world.renderer.upload_chunk_mesh(task.chunk);
+                if (task.chunk.had_light_updates) {
+                    try self.world.renderer.upload_chunk_mesh(task.chunk);
+                }
+                task.chunk.had_light_updates = false;
                 task.chunk.active = true;
             },
         }

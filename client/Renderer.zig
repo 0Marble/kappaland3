@@ -510,11 +510,28 @@ pub const ChunkData = extern struct {
     x: i32,
     y: i32,
     z: i32,
-    normal: u32,
     light_levels: u32,
     light_lists: u32,
     no_lights: u32 = 1,
-    unused: u32 = 0x7426812f,
+    unused1: u32 = 0xbabacaca,
+    unused2: u32 = 0xfefefafa,
+
+    pub fn define() [:0]const u8 {
+        return 
+        \\
+        \\struct Chunk {
+        \\  int x;
+        \\  int y;
+        \\  int z;
+        \\  uint light_levels;
+        \\  uint light_lists;
+        \\  uint no_lights;
+        \\  uint unused;
+        \\  uint unused2;
+        \\};
+        \\
+        ;
+    }
 };
 
 const vert =
@@ -613,16 +630,7 @@ const lighting_frag =
     \\uniform bool u_ssao_enabled;
     \\uniform vec2 u_tex_size;
     \\
-    \\struct Chunk {
-    \\  int x;
-    \\  int y;
-    \\  int z;
-    \\  uint normal;
-    \\  uint light_levels;
-    \\  uint light_lists;
-    \\  uint no_lights;
-    \\  uint unused;
-    \\};
+++ ChunkData.define() ++
     \\
     \\layout (std430, binding = CHUNK_DATA_BINDING) readonly buffer ChunkData {
     \\ Chunk chunks[];
@@ -636,8 +644,6 @@ const lighting_frag =
     \\  uint light_lists[];
     \\};
     \\
-    \\#define LIGHT_DEBUG
-    \\#undef LIGHT_DEBUG
     \\vec3 sample_light() {
     \\  ivec2 texture_coords = ivec2(frag_uv * u_tex_size);
     \\  vec4 world_pos = texelFetch(u_pos_tex, texture_coords, 0);
@@ -650,40 +656,39 @@ const lighting_frag =
     \\  vec3 block_coords = pos - vec3(chunk.x, chunk.y, chunk.z) * 16.0;
     \\  uint idx = uint(block_coords.y) * 16 * 16 + uint(block_coords.z) * 16 + uint(block_coords.x);
     \\  uint start = light_lists[(chunk.light_lists + idx) * 2];
-    \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
-    \\  vec3 sum = vec3(0);
+    \\  uint length = min(light_lists[(chunk.light_lists + idx) * 2 + 1], 8);
+    \\  if (length == 0) return vec3(0);
     \\
+    \\  vec3 res = vec3(0);
     \\  for (uint i = 0; i < length; i++) {
     \\    uint entry = light_levels[chunk.light_levels + i + start];
     \\    uint level = (entry >> uint(12)) & uint(0xF);
     \\    uint r = (entry >> uint(8)) & uint(0xF);
     \\    uint g = (entry >> uint(4)) & uint(0xF);
     \\    uint b = (entry >> uint(0)) & uint(0xF);
-    \\    sum += vec3(float(level) / 15.0) * vec3(r, g, b) / 15.0;
+    \\    vec3 color = vec3(float(r), float(g), float(b)) * (float(level) / 15.0);
+    \\    res = max(res, color);
     \\  }
-    \\  #ifdef LIGHT_DEBUG
-    \\  return vec3(float(idx), float(chunk_idx), float(start));
-    \\  #endif
-    \\  return sum;
+    \\  return res;
     \\}
     \\
     \\void main() {
     \\  vec3 frag_color = texture(u_base_tex, frag_uv).rgb;
     \\  vec3 frag_norm = texture(u_normal_tex, frag_uv).xyz;
     \\  float ssao = texture(u_ssao_tex, frag_uv).x;
-    \\  vec3 ambient = (u_ambient + sample_light()) * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
+    \\  vec3 light_color = sample_light();
+    \\
+    \\  vec3 ambient = (u_ambient * light_color) * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
     \\
     \\  vec3 norm = normalize(frag_norm);
     \\  vec3 light_dir = u_light_dir;
     \\  float diff = max(dot(norm, light_dir), 0.0);
     \\  vec3 diffuse = u_light_color * diff * frag_color;
     \\
-    \\  out_color = vec4(ambient, 1);
-    \\  #ifdef LIGHT_DEBUG
-    \\  out_color = vec4(sample_light(), 1);
-    \\  #endif
+    \\  out_color = vec4(ambient + diffuse, 1);
     \\}
 ;
+
 const ssao_frag =
     \\#version 460 core
 ++ std.fmt.comptimePrint("\n#define SAMPLES_COUNT {d}\n", .{SSAO_SAMPLES_COUNT}) ++

@@ -471,7 +471,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     std.mem.sort(MeshOrder, meshes.items, {}, MeshOrder.less_than);
 
     const indirect = try App.frame_alloc().alloc(Indirect, meshes.items.len * BLOCK_FACE_CNT);
-    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len * BLOCK_FACE_CNT);
+    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len);
 
     @memset(indirect, std.mem.zeroes(Indirect));
     @memset(chunk_data, std.mem.zeroes(ChunkData));
@@ -493,17 +493,16 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
                 .base_vertex = 0,
                 .first_index = 0,
             };
-            chunk_data[i * BLOCK_FACE_CNT + j] = ChunkData{
-                .x = mesh.mesh.coords[0],
-                .y = mesh.mesh.coords[1],
-                .z = mesh.mesh.coords[2],
-                .normal = j,
-                .light_levels = light_levels,
-                .light_lists = light_lists,
-                .no_lights = @intFromBool(light_levels_range.size == 0),
-            };
             self.shown_triangle_count += mesh.mesh.face_counts[j] * 2;
         }
+        chunk_data[i] = ChunkData{
+            .x = mesh.mesh.coords[0],
+            .y = mesh.mesh.coords[1],
+            .z = mesh.mesh.coords[2],
+            .light_levels = light_levels,
+            .light_lists = light_lists,
+            .no_lights = @intFromBool(light_levels_range.size == 0),
+        };
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
@@ -644,16 +643,7 @@ const block_vert =
     \\}
     \\
 ++ std.fmt.comptimePrint("uniform uint u_idx_to_ao[{}];\n", .{Ao.from_idx.len}) ++
-    \\struct Chunk {
-    \\  int x;
-    \\  int y;
-    \\  int z;
-    \\  uint normal;
-    \\  uint light_levels;
-    \\  uint light_lists;
-    \\  uint no_lights;
-    \\  uint unused;
-    \\};
+    ChunkData.define() ++
     \\
     \\layout (std430, binding = CHUNK_DATA_BINDING) readonly buffer ChunkData{
     \\  Chunk chunks[];
@@ -703,12 +693,13 @@ const block_vert =
     \\void main() {
     \\  Face face = unpack_face();
     \\  Model model = unpack_model(face.model);
-    \\  Chunk chunk = chunks[gl_DrawID];
+    \\  Chunk chunk = chunks[gl_DrawID / BLOCK_FACE_CNT];
     \\
     \\  uint p = gl_VertexID;
-    \\  vec3 normal = normals[chunk.normal];
+    \\  vec3 normal = normals[gl_DrawID % BLOCK_FACE_CNT];
     \\  frag_uv = uvs[p] * model.scale + model.offset.xy;
-    \\  vec3 vert = norm_to_world[chunk.normal] * vec3(frag_uv - vec2(0.5, 0.5), 0.5 - model.offset.z) + face.pos + vec3(0.5,0.5,0.5);
+    \\  vec3 vert = norm_to_world[gl_DrawID % BLOCK_FACE_CNT] * 
+    \\    vec3(frag_uv - vec2(0.5, 0.5), 0.5 - model.offset.z) + face.pos + vec3(0.5,0.5,0.5);
     \\  vec3 chunk_coords = vec3(chunk.x, chunk.y, chunk.z);
     \\  vec4 world_pos = vec4(vert + chunk_coords * 16, 1);
     \\  vec4 view_pos = u_view * world_pos;
@@ -717,7 +708,7 @@ const block_vert =
     \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
     \\  frag_ao = u_idx_to_ao[face.ao];
     \\  frag_tex = face.texture;
-    \\  frag_pos = vec4(world_pos.xyz, uintBitsToFloat(gl_DrawID));
+    \\  frag_pos = vec4(world_pos.xyz, uintBitsToFloat(gl_DrawID / BLOCK_FACE_CNT));
     \\  frag_color = vec3(1);
     \\}
 ;

@@ -25,6 +25,7 @@ blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block = undefined,
 neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
 is_occluded: bool = false,
 active: bool = false,
+had_light_updates: bool = false,
 
 light_sources: std.AutoArrayHashMapUnmanaged(Coords, void) = .empty,
 light_levels: std.AutoArrayHashMapUnmanaged(LightColor, LightLevels) = .empty,
@@ -163,6 +164,7 @@ pub fn set_block_and_propagate_updates(
 }
 
 pub fn compile_light_data(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
+    if (!self.had_light_updates) return;
     self.compiled_light_lists.clearRetainingCapacity();
     self.compiled_light_levels.clearRetainingCapacity();
 
@@ -283,6 +285,7 @@ fn set_light_level(
     };
     const idx: usize = @intCast(@reduce(.Add, block * BLOCK_STRIDE));
     light_levels.levels[idx].level = level;
+    self.had_light_updates = true;
 }
 
 pub fn to_world_coords(self: *Chunk, pos: Coords) Coords {
