@@ -3,6 +3,7 @@ const Camera = @import("Camera.zig");
 const gl = @import("gl");
 const std = @import("std");
 const World = @import("World.zig");
+const SsboBindings = @import("SsboBindings.zig");
 const util = @import("util.zig");
 const gl_call = util.gl_call;
 const Mesh = @import("Mesh.zig");
@@ -12,6 +13,7 @@ const Options = @import("ClientOptions");
 const c = @import("c.zig").c;
 const OOM = std.mem.Allocator.Error;
 const GlError = util.GlError;
+const logger = std.log.scoped(.renderer);
 
 const SSAO_SAMPLES_COUNT = 8;
 const NOISE_SIZE = 4;
@@ -22,9 +24,6 @@ pub const POSITION_TEX_ATTACHMENT = 0;
 pub const NORMAL_TEX_ATTACHMENT = 1;
 pub const BASE_TEX_ATTACHMENT = 2;
 pub const SSAO_TEX_ATTACHMENT = 0;
-pub const CHUNK_DATA_BINDING = 1;
-pub const LIGHT_LISTS_BINDING = 4;
-pub const LIGHT_LEVELS_BINDING = 5;
 const RENDERED_TEX_ATTACHMENT = 0;
 
 const POSITION_TEX_UNIFORM = 0;
@@ -192,6 +191,8 @@ pub fn draw(self: *Renderer, camera: *Camera) (OOM || GlError)!void {
     try self.lighting_pass.bind();
     try self.lighting_pass.set_vec2("u_tex_size", render_size);
     try self.lighting_pass.set_vec3("u_view_pos", camera.frustum.pos);
+    try self.lighting_pass.set_float("u_time", App.elapsed_time());
+
     const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
     const light_dir = camera.view_mat().multiplyVec4(light_dir_world);
     try self.lighting_pass.set_vec3("u_light_dir", zm.vec.xyz(light_dir));
@@ -611,9 +612,9 @@ const postprocessing_frag =
 const lighting_frag =
     \\#version 460 core
     \\
-++ std.fmt.comptimePrint("#define CHUNK_DATA_BINDING {d}\n", .{CHUNK_DATA_BINDING}) ++
-    std.fmt.comptimePrint("#define LIGHT_LEVELS_BINDING {d}\n", .{LIGHT_LEVELS_BINDING}) ++
-    std.fmt.comptimePrint("#define LIGHT_LISTS_BINDING {d}\n", .{LIGHT_LISTS_BINDING}) ++
+++ std.fmt.comptimePrint("#define CHUNK_DATA_BINDING {d}\n", .{SsboBindings.CHUNK_DATA}) ++
+    std.fmt.comptimePrint("#define LIGHT_LEVELS_BINDING {d}\n", .{SsboBindings.LIGHT_LEVELS}) ++
+    std.fmt.comptimePrint("#define LIGHT_LISTS_BINDING {d}\n", .{SsboBindings.LIGHT_LISTS}) ++
     \\
     \\in vec2 frag_uv;
     \\out vec4 out_color;
@@ -629,6 +630,7 @@ const lighting_frag =
     \\uniform vec3 u_view_pos;
     \\uniform bool u_ssao_enabled;
     \\uniform vec2 u_tex_size;
+    \\uniform float u_time;
     \\
 ++ ChunkData.define() ++
     \\
@@ -643,6 +645,44 @@ const lighting_frag =
     \\layout (std430, binding = LIGHT_LISTS_BINDING) readonly buffer LightLists {
     \\  uint light_lists[];
     \\};
+    \\
+    \\vec3 rgb_to_hsv(vec3 rgb) {
+    \\  float cmax = max(rgb.r, max(rgb.b, rgb.g));
+    \\  float cmin = min(rgb.r, min(rgb.b, rgb.g));
+    \\  float delta = cmax - cmin;
+    \\  float h = (delta == 0 ? 0.0
+    \\            : cmax == rgb.r ? (60 * mod((rgb.g - rgb.b) / delta, 6)) 
+    \\            : cmax == rgb.g ? (60 * ((rgb.b - rgb.r) / delta + 2.0))
+    \\            : (60 * ((rgb.r - rgb.g) / delta + 4.0)));
+    \\  float s = (cmax == 0 ? 0 : delta / cmax);
+    \\  float v = cmax;
+    \\  return vec3(h, s, v);
+    \\}
+    \\
+    \\vec3 hsv_to_rgb(vec3 hsv) {
+    \\  float h = mod(hsv.r, 360.0);
+    \\  float s = hsv.g;
+    \\  float v = hsv.b;
+    \\  float c = v * s;
+    \\  float x = c * (1.0 - abs(mod(h / 60, 2) - 1));
+    \\  float m = v - c;
+    \\ 
+    \\  float r = 0, g = 0, b = 0;
+    \\  if (h >= 0 && h < 60.0) {
+    \\      r = c; g = x; b = 0.0;
+    \\  } else if (h >= 60.0 && h < 120.0) {
+    \\      r = x; g = c; b = 0.0;
+    \\  } else if (h >= 120.0 && h < 180.0) {
+    \\      r = 0.0; g = c; b = x;
+    \\  } else if (h >= 180.0 && h < 240.0) {
+    \\      r = 0.0; g = x; b = c;
+    \\  } else if (h >= 240.0 && h < 300.0) {
+    \\      r = x; g = 0.0; b = c;
+    \\  } else if (h >= 300.0 && h < 360.0) {
+    \\      r = c; g = 0.0; b = x;
+    \\  }
+    \\  return vec3(r, g, b) + vec3(m);
+    \\}
     \\
     \\vec3 sample_light() {
     \\  ivec2 texture_coords = ivec2(frag_uv * u_tex_size);
@@ -666,8 +706,9 @@ const lighting_frag =
     \\    uint r = (entry >> uint(8)) & uint(0xF);
     \\    uint g = (entry >> uint(4)) & uint(0xF);
     \\    uint b = (entry >> uint(0)) & uint(0xF);
-    \\    vec3 color = vec3(float(r), float(g), float(b)) * (float(level) / 15.0);
-    \\    res = max(res, color);
+    \\    vec3 rgb = vec3(float(r), float(g), float(b));
+    \\    float a = float(level) / 15.0;
+    \\    res = max(res, rgb * a);
     \\  }
     \\  return res;
     \\}

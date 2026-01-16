@@ -3,6 +3,7 @@ const App = @import("../App.zig");
 const Game = @import("../Game.zig");
 const Chunk = @import("Chunk.zig");
 const World = @import("../World.zig");
+const SsboBindings = @import("../SsboBindings.zig");
 const Coords = World.Coords;
 const gl = @import("gl");
 const zm = @import("zm");
@@ -32,6 +33,7 @@ const DEFAULT_LIGHT_LEVELS_SIZE = 1024 * 1024;
 const DEFAULT_LIGHT_LISTS_SIZE = 1024 * 1024;
 const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
 const DEFAULT_INDIRECT_SIZE = 1024 * @sizeOf(Indirect);
+const DEFAULT_CHUNK_INDICES_SIZE = 1024;
 const BLOCK_ATLAS_TEX = 0;
 
 block_pass: Shader,
@@ -46,12 +48,12 @@ light_lists: GpuAlloc,
 
 had_realloc: bool,
 chunk_data_ssbo: gl.uint,
+draw_id_to_chunk_ssbo: gl.uint,
 indirect_buf: gl.uint,
 
 drawn_chunks_cnt: usize,
 shown_triangle_count: usize,
 total_triangle_count: usize,
-cur_chunk_data_ssbo_size: usize,
 
 meshes: std.AutoArrayHashMapUnmanaged(Coords, *Mesh),
 lights: std.AutoArrayHashMapUnmanaged(Coords, *Lights),
@@ -69,7 +71,6 @@ pub fn init(self: *Self) !void {
     self.mesh_pool = .init(App.gpa());
     self.lights = .empty;
     self.lights_pool = .init(App.gpa());
-    self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
 
     var sources: [2]Shader.Source = .{
         Shader.Source{
@@ -92,6 +93,7 @@ pub fn init(self: *Self) !void {
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.normal_ubo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.model_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.chunk_data_ssbo)));
+    try gl_call(gl.GenBuffers(1, @ptrCast(&self.draw_id_to_chunk_ssbo)));
     try gl_call(gl.GenBuffers(1, @ptrCast(&self.indirect_buf)));
     self.faces = try .init(App.static_alloc(), DEFAULT_FACES_SIZE, gl.STREAM_DRAW);
     self.light_levels = try .init(App.static_alloc(), DEFAULT_LIGHT_LEVELS_SIZE, gl.STREAM_DRAW);
@@ -105,6 +107,17 @@ pub fn init(self: *Self) !void {
     logger.debug("{*} Initialized face data buffers", .{self});
     try self.init_chunk_data();
     logger.debug("{*} Initialized chunk data buffers", .{self});
+
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        SsboBindings.LIGHT_LISTS,
+        self.light_lists.buffer,
+    ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        SsboBindings.LIGHT_LEVELS,
+        self.light_levels.buffer,
+    ));
 
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
@@ -140,7 +153,7 @@ fn init_models(self: *Self) !void {
         @ptrCast(&normals_data),
         gl.STATIC_DRAW,
     ));
-    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, NORMAL_BINDING, self.normal_ubo));
+    try gl_call(gl.BindBufferBase(gl.UNIFORM_BUFFER, SsboBindings.NORMAL, self.normal_ubo));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.model_ssbo));
 
@@ -154,7 +167,7 @@ fn init_models(self: *Self) !void {
     ));
     try gl_call(gl.BindBufferBase(
         gl.SHADER_STORAGE_BUFFER,
-        MODEL_BINDING,
+        SsboBindings.FACE_MODEL,
         self.model_ssbo,
     ));
 }
@@ -179,26 +192,16 @@ fn init_face_attribs(self: *Self) !void {
 }
 
 fn init_chunk_data(self: *Self) !void {
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.draw_id_to_chunk_ssbo));
+
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
-    try gl_call(gl.BufferData(
-        gl.SHADER_STORAGE_BUFFER,
-        @intCast(self.cur_chunk_data_ssbo_size),
-        null,
-        gl.STREAM_DRAW,
-    ));
     try gl_call(gl.BindBufferBase(
         gl.SHADER_STORAGE_BUFFER,
-        CHUNK_DATA_BINDING,
+        SsboBindings.CHUNK_DATA,
         self.chunk_data_ssbo,
     ));
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
-    try gl_call(gl.BufferData(
-        gl.DRAW_INDIRECT_BUFFER,
-        DEFAULT_INDIRECT_SIZE,
-        null,
-        gl.STREAM_DRAW,
-    ));
 }
 
 pub fn deinit(self: *Self) void {
@@ -217,6 +220,7 @@ pub fn deinit(self: *Self) void {
     gl.DeleteBuffers(1, @ptrCast(&self.model_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_data_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
+    gl.DeleteBuffers(1, @ptrCast(&self.draw_id_to_chunk_ssbo));
 }
 
 pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
@@ -229,12 +233,12 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     ));
     try gl_call(gl.BindBufferBase(
         gl.SHADER_STORAGE_BUFFER,
-        LIGHT_LISTS_BINDING,
+        SsboBindings.LIGHT_LISTS,
         self.light_lists.buffer,
     ));
     try gl_call(gl.BindBufferBase(
         gl.SHADER_STORAGE_BUFFER,
-        LIGHT_LEVELS_BINDING,
+        SsboBindings.LIGHT_LEVELS,
         self.light_levels.buffer,
     ));
 
@@ -414,7 +418,6 @@ fn on_imgui(self: *Self) !void {
         \\    triangles: {d}/{d}
         \\GPU Memory:
         \\    faces:      {f}
-        \\    chunk_ssbo: {f}
     ,
         .{
             self.meshes.count(),
@@ -422,7 +425,6 @@ fn on_imgui(self: *Self) !void {
             self.shown_triangle_count,
             self.total_triangle_count,
             util.MemoryUsage.from_bytes(self.faces.size),
-            util.MemoryUsage.from_bytes(self.cur_chunk_data_ssbo_size),
         },
         0,
     ));
@@ -441,6 +443,16 @@ const MeshOrder = struct {
         return a.dist_sq < b.dist_sq;
     }
 };
+
+fn morton_encode(pos: @Vector(3, u32)) u32 {
+    var x = pos;
+    x = ((x & 0x0000F0) << 8) | (x & 0x00000F);
+    x = ((x & 0x00C00C) << 4) | (x & 0x003003);
+    x = ((x & 0x082082) << 2) | (x & 0x041041);
+    return x[0] | (x[1] << 1) | (x[2] << 2);
+}
+
+// fn update_chunk_data(self: *Self) !usize {}
 
 fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     const do_frustum_culling = App.settings().get_value(
@@ -520,29 +532,13 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
         @ptrCast(indirect),
         gl.STREAM_DRAW,
     ));
-    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
-    const ssbo_size = chunk_data.len * @sizeOf(ChunkData);
-    if (self.cur_chunk_data_ssbo_size <= ssbo_size) {
-        self.cur_chunk_data_ssbo_size = ssbo_size * 2;
-        try gl_call(gl.BufferData(
-            gl.SHADER_STORAGE_BUFFER,
-            @intCast(self.cur_chunk_data_ssbo_size),
-            null,
-            gl.STREAM_DRAW,
-        ));
-        try gl_call(gl.BindBufferBase(
-            gl.SHADER_STORAGE_BUFFER,
-            CHUNK_DATA_BINDING,
-            self.chunk_data_ssbo,
-        ));
-    }
-    try gl_call(gl.BufferSubData(
+    try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        0,
-        @intCast(ssbo_size),
+        @intCast(chunk_data.len * @sizeOf(ChunkData)),
         @ptrCast(chunk_data),
+        gl.STREAM_DRAW,
     ));
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
@@ -614,13 +610,7 @@ const normal_mats = blk: {
 const FACE_DATA_LOCATION_A = 0;
 const FACE_DATA_LOCATION_B = 1;
 const FACE_DATA_BINDING = 0;
-const NORMAL_BINDING = 2;
-const MODEL_BINDING = 3;
-const LIGHT_LEVELS_BINDING = Renderer.LIGHT_LEVELS_BINDING;
-const LIGHT_LISTS_BINDING = Renderer.LIGHT_LISTS_BINDING;
-
 const BLOCK_FACE_CNT = std.enums.values(Block.Direction).len;
-const CHUNK_DATA_BINDING = Renderer.CHUNK_DATA_BINDING;
 
 const block_vert =
     \\#version 460 core
@@ -628,9 +618,10 @@ const block_vert =
 ++
     std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_A {d}", .{FACE_DATA_LOCATION_A}) ++
     std.fmt.comptimePrint("\n#define FACE_DATA_LOCATION_B {d}", .{FACE_DATA_LOCATION_B}) ++
-    std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}", .{CHUNK_DATA_BINDING}) ++
-    std.fmt.comptimePrint("\n#define NORMAL_BINDING {d}", .{NORMAL_BINDING}) ++
-    std.fmt.comptimePrint("\n#define MODEL_BINDING {d}", .{MODEL_BINDING}) ++
+    std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}", .{SsboBindings.CHUNK_DATA}) ++
+    std.fmt.comptimePrint("\n#define NORMAL_BINDING {d}", .{SsboBindings.NORMAL}) ++
+    std.fmt.comptimePrint("\n#define MODEL_BINDING {d}", .{SsboBindings.FACE_MODEL}) ++
+    std.fmt.comptimePrint("\n#define ID_TO_COORDS_BINDING {d}", .{SsboBindings.DRAW_ID_TO_COORDS}) ++
     std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}", .{BLOCK_FACE_CNT}) ++
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;

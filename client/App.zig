@@ -255,7 +255,7 @@ fn on_imgui(self: *App) !void {
     const w = buf.writer(App.frame_alloc());
     try w.print(
         \\build:   {s}
-        \\runtime: {f}
+        \\runtime: {D}
         \\CPU Memory: 
         \\    main:   {f}
         \\    frame:  {f}
@@ -263,7 +263,7 @@ fn on_imgui(self: *App) !void {
         \\
     , .{
         Options.build_id,
-        util.TimeFmt{ .seconds = std.time.timestamp() - self.frame_data.start },
+        (std.time.milliTimestamp() - self.frame_data.start) * std.time.ns_per_ms,
         util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
         util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
         util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
@@ -380,6 +380,10 @@ pub fn current_frame() u64 {
     return app.frame_data.cur_frame;
 }
 
+pub fn elapsed_time() f32 {
+    return @as(f32, @floatFromInt(app.frame_data.this_frame_start - app.frame_data.start)) / 1000.0;
+}
+
 pub fn screen_width() i32 {
     var w: i32 = 0;
     sdl_call(c.SDL_GetWindowSize(app.win, &w, null)) catch return 0;
@@ -429,7 +433,7 @@ const FrameData = struct {
         const evt = try App.event_manager().register_event(f32);
         try App.event_manager().name_event(evt, ".main.second_passed");
 
-        return .{ .start = std.time.timestamp(), .evt = evt };
+        return .{ .start = std.time.milliTimestamp(), .evt = evt };
     }
 
     fn on_frame_start(self: *FrameData) !void {

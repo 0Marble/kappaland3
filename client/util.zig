@@ -38,21 +38,6 @@ pub const MemoryUsage = struct {
     }
 };
 
-pub const TimeFmt = struct {
-    seconds: i64,
-
-    pub fn format(
-        self: @This(),
-        writer: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        const hh: u64 = @intCast(@divFloor(self.seconds, 3600));
-        const mm: u64 = @intCast(@mod(@divFloor(self.seconds, 60), 60));
-        const ss: u64 = @intCast(@mod(self.seconds, 60));
-
-        try writer.print("{d:02}:{d:02}:{d:02}", .{ hh, mm, ss });
-    }
-};
-
 fn gl_err_to_str(code: gl.@"enum") ?[]const u8 {
     return switch (code) {
         gl.NO_ERROR => "GL_NO_ERROR",
