@@ -656,7 +656,7 @@ const lighting_frag =
     \\  vec3 block_coords = pos - vec3(chunk.x, chunk.y, chunk.z) * 16.0;
     \\  uint idx = uint(block_coords.y) * 16 * 16 + uint(block_coords.z) * 16 + uint(block_coords.x);
     \\  uint start = light_lists[(chunk.light_lists + idx) * 2];
-    \\  uint length = min(light_lists[(chunk.light_lists + idx) * 2 + 1], 8);
+    \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
     \\  if (length == 0) return vec3(0);
     \\
     \\  vec3 res = vec3(0);

@@ -118,7 +118,7 @@ pub fn set_block_and_propagate_updates(
     pos: Coords,
     block: Block,
     worker: *ChunkManager.Worker,
-) OOM!void {
+) !void {
     std.debug.assert(worker.is_main_thread());
     const old_block = self.get(pos);
     if (old_block.idx == block.idx) return;
@@ -126,12 +126,16 @@ pub fn set_block_and_propagate_updates(
 
     var queue = PropagateLightQueue.empty;
     defer queue.deinit(worker.temp());
+    var updated_chunks = ChunksWithLightUpdates.empty;
+    defer updated_chunks.deinit(worker.temp());
+    try updated_chunks.ensureTotalCapacity(worker.temp(), 27);
 
     if (block.emits_light()) {
         try self.propagate_light_on_light_placed(
             pos,
             &queue,
             worker,
+            &updated_chunks,
         );
     }
 
@@ -144,6 +148,7 @@ pub fn set_block_and_propagate_updates(
                 light_levels.color,
                 &queue,
                 worker,
+                &updated_chunks,
             );
         } else if (old_block.emitted_light_color() == light_levels.color) {
             try self.propagate_light_on_light_broken(
@@ -151,6 +156,7 @@ pub fn set_block_and_propagate_updates(
                 light_levels.color,
                 &queue,
                 worker,
+                &updated_chunks,
             );
         } else {
             try self.propagate_light_on_block_broken(
@@ -158,8 +164,15 @@ pub fn set_block_and_propagate_updates(
                 light_levels.color,
                 &queue,
                 worker,
+                &updated_chunks,
             );
         }
+    }
+
+    for (updated_chunks.keys()) |chunk| {
+        try chunk.compile_light_data(worker);
+        // this is main thread so its ok
+        try worker.parent.world.renderer.upload_chunk_lights(chunk);
     }
 }
 
@@ -310,12 +323,14 @@ fn propagate_light_on_light_placed(
     start: Coords,
     queue: *PropagateLightQueue,
     worker: *ChunkManager.Worker,
+    updated_chunks: *ChunksWithLightUpdates,
 ) OOM!void {
     const color = self.get(start).emitted_light_color().?;
     const level = self.get(start).emitted_light_level().?;
     try self.set_light_level(start, color, level, worker);
+    updated_chunks.putAssumeCapacity(self, {});
     if (level == 1) return;
-    try self.propagate_light(start, color, queue, worker);
+    try self.propagate_light(start, color, queue, worker, updated_chunks);
 }
 
 fn propagate_light_on_block_broken(
@@ -324,6 +339,7 @@ fn propagate_light_on_block_broken(
     color: LightColor,
     queue: *PropagateLightQueue,
     worker: *ChunkManager.Worker,
+    updated_chunks: *ChunksWithLightUpdates,
 ) OOM!void {
     const orig_level = self.get_light_level(start, color);
     var this_level = orig_level;
@@ -336,7 +352,8 @@ fn propagate_light_on_block_broken(
 
     if (this_level == orig_level) return;
     try self.set_light_level(start, color, this_level, worker);
-    try self.propagate_light(start, color, queue, worker);
+    updated_chunks.putAssumeCapacity(self, {});
+    try self.propagate_light(start, color, queue, worker, updated_chunks);
 }
 
 fn propagate_light_on_block_placed(
@@ -345,6 +362,7 @@ fn propagate_light_on_block_placed(
     color: LightColor,
     queue: *PropagateLightQueue,
     worker: *ChunkManager.Worker,
+    updated_chunks: *ChunksWithLightUpdates,
 ) OOM!void {
     var visited = std.AutoHashMapUnmanaged(Coords, void).empty;
     var frontier = std.AutoArrayHashMapUnmanaged(struct { *Chunk, Coords }, void).empty;
@@ -379,11 +397,12 @@ fn propagate_light_on_block_placed(
         }
 
         try chunk.set_light_level(pos, color, 0, worker);
+        updated_chunks.putAssumeCapacity(chunk, {});
     }
 
     for (frontier.keys()) |cur| {
         const chunk, const pos = cur;
-        try chunk.propagate_light(pos, color, queue, worker);
+        try chunk.propagate_light(pos, color, queue, worker, updated_chunks);
     }
 }
 
@@ -393,17 +412,20 @@ fn propagate_light_on_light_broken(
     color: LightColor,
     queue: *PropagateLightQueue,
     worker: *ChunkManager.Worker,
+    updated_chunks: *ChunksWithLightUpdates,
 ) OOM!void {
-    try self.propagate_light_on_block_placed(start, color, queue, worker);
+    try self.propagate_light_on_block_placed(start, color, queue, worker, updated_chunks);
 }
 
 const PropagateLightQueue = Queue(struct { *Chunk, Coords });
+const ChunksWithLightUpdates = std.AutoArrayHashMapUnmanaged(*Chunk, void);
 fn propagate_light(
     self: *Chunk,
     start: Coords,
     color: LightColor,
     queue: *PropagateLightQueue,
     worker: *ChunkManager.Worker,
+    updated_chunks: *ChunksWithLightUpdates,
 ) OOM!void {
     std.debug.assert(worker.is_main_thread());
     if (self.get_light_level(start, color) <= 1) return;
@@ -422,6 +444,7 @@ fn propagate_light(
             if (next_chunk.get_light_level(next_pos, color) >= level - 1) continue;
 
             try next_chunk.set_light_level(next_pos, color, level - 1, worker);
+            updated_chunks.putAssumeCapacity(next_chunk, {});
 
             if (level - 1 > 1) {
                 try queue.push(worker.temp(), .{ next_chunk, next_pos });

@@ -54,7 +54,9 @@ total_triangle_count: usize,
 cur_chunk_data_ssbo_size: usize,
 
 meshes: std.AutoArrayHashMapUnmanaged(Coords, *Mesh),
+lights: std.AutoArrayHashMapUnmanaged(Coords, *Lights),
 mesh_pool: std.heap.MemoryPool(Mesh),
+lights_pool: std.heap.MemoryPool(Lights),
 
 pub fn init(self: *Self) !void {
     logger.debug("{*} Initializing...", .{self});
@@ -65,6 +67,8 @@ pub fn init(self: *Self) !void {
     self.total_triangle_count = 0;
     self.meshes = .empty;
     self.mesh_pool = .init(App.gpa());
+    self.lights = .empty;
+    self.lights_pool = .init(App.gpa());
     self.cur_chunk_data_ssbo_size = DEFAULT_CHUNK_DATA_SIZE;
 
     var sources: [2]Shader.Source = .{
@@ -203,7 +207,9 @@ pub fn deinit(self: *Self) void {
     self.light_lists.deinit();
     self.light_levels.deinit();
     self.mesh_pool.deinit();
+    self.lights_pool.deinit();
     self.meshes.deinit(App.gpa());
+    self.lights.deinit(App.gpa());
 
     gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
     gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
@@ -214,19 +220,13 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
-    if (self.had_realloc) {
-        try gl_call(gl.BindVertexArray(self.block_vao));
-        try gl_call(gl.BindVertexBuffer(
-            FACE_DATA_BINDING,
-            self.faces.buffer,
-            0,
-            @sizeOf(FaceMesh),
-        ));
-        try gl_call(gl.BindVertexArray(0));
-
-        self.had_realloc = false;
-    }
-
+    try gl_call(gl.BindVertexArray(self.block_vao));
+    try gl_call(gl.BindVertexBuffer(
+        FACE_DATA_BINDING,
+        self.faces.buffer,
+        0,
+        @sizeOf(FaceMesh),
+    ));
     try gl_call(gl.BindBufferBase(
         gl.SHADER_STORAGE_BUFFER,
         LIGHT_LISTS_BINDING,
@@ -244,7 +244,6 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     try self.block_pass.set_mat4("u_proj", cam.proj_mat());
     try self.block_pass.bind();
 
-    try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + BLOCK_ATLAS_TEX));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D_ARRAY, App.assets().get_blocks_atlas().handle));
@@ -263,42 +262,77 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(0));
 }
 
-pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
-    const old_faces_buf = self.faces.buffer;
-    const old_levels_buf = self.light_levels.buffer;
-    const old_lists_buf = self.light_lists.buffer;
-
-    const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
+pub fn upload_chunk_lights(self: *Self, chunk: *Chunk) !void {
+    const lights = if (self.lights.get(chunk.coords)) |lights| blk: {
         {
-            const old_range = self.light_levels.get_range(mesh.light_levels_handle).?;
+            const old_range = self.light_levels.get_range(lights.light_levels_handle).?;
             const new_size = chunk.compiled_light_levels.items.len * @sizeOf(LightLevelInfo);
             try gl_call(gl.InvalidateBufferSubData(
                 self.light_levels.buffer,
                 old_range.offset,
                 old_range.size,
             ));
-            mesh.light_levels_handle = try self.light_levels.realloc(
-                mesh.light_levels_handle,
+            lights.light_levels_handle = try self.light_levels.realloc(
+                lights.light_levels_handle,
                 new_size,
                 std.mem.Alignment.of(LightLevelInfo),
             );
         }
 
         {
-            const old_range = self.light_lists.get_range(mesh.light_lists_handle).?;
+            const old_range = self.light_lists.get_range(lights.light_lists_handle).?;
             const new_size = chunk.compiled_light_lists.items.len * @sizeOf(LightList);
             try gl_call(gl.InvalidateBufferSubData(
                 self.light_lists.buffer,
                 old_range.offset,
                 old_range.size,
             ));
-            mesh.light_lists_handle = try self.light_lists.realloc(
-                mesh.light_lists_handle,
+            lights.light_lists_handle = try self.light_lists.realloc(
+                lights.light_lists_handle,
                 new_size,
                 std.mem.Alignment.of(LightList),
             );
         }
+        break :blk lights;
+    } else blk: {
+        const lights = try self.lights_pool.create();
+        lights.light_levels_handle = try self.light_levels.alloc(
+            chunk.compiled_light_levels.items.len * @sizeOf(LightLevelInfo),
+            std.mem.Alignment.of(LightLevelInfo),
+        );
+        lights.light_lists_handle = try self.light_lists.alloc(
+            chunk.compiled_light_lists.items.len * @sizeOf(LightList),
+            std.mem.Alignment.of(LightList),
+        );
+        try self.lights.put(App.gpa(), chunk.coords, lights);
+        break :blk lights;
+    };
 
+    {
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_levels.buffer));
+        const range = self.light_levels.get_range(lights.light_levels_handle).?;
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(chunk.compiled_light_levels.items),
+        ));
+    }
+
+    {
+        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_lists.buffer));
+        const range = self.light_lists.get_range(lights.light_lists_handle).?;
+        try gl_call(gl.BufferSubData(
+            gl.ARRAY_BUFFER,
+            range.offset,
+            range.size,
+            @ptrCast(chunk.compiled_light_lists.items),
+        ));
+    }
+}
+
+pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
+    const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
         for (&mesh.face_handles, &chunk.faces.values) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
             const new_size = faces.items.len * @sizeOf(FaceMesh);
@@ -317,14 +351,6 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
         break :blk mesh;
     } else blk: {
         const mesh: *Mesh = try self.mesh_pool.create();
-        mesh.light_levels_handle = try self.light_levels.alloc(
-            chunk.compiled_light_levels.items.len * @sizeOf(LightLevelInfo),
-            std.mem.Alignment.of(LightLevelInfo),
-        );
-        mesh.light_lists_handle = try self.light_lists.alloc(
-            chunk.compiled_light_lists.items.len * @sizeOf(LightList),
-            std.mem.Alignment.of(LightList),
-        );
 
         for (&mesh.face_handles, &chunk.faces.values) |*handle, faces| {
             const new_size = faces.items.len * @sizeOf(FaceMesh);
@@ -339,29 +365,6 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
 
     mesh.is_occluded = chunk.is_occluded;
     mesh.coords = chunk.coords;
-
-    {
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_levels.buffer));
-        const range = self.light_levels.get_range(mesh.light_levels_handle).?;
-        try gl_call(gl.BufferSubData(
-            gl.ARRAY_BUFFER,
-            range.offset,
-            range.size,
-            @ptrCast(chunk.compiled_light_levels.items),
-        ));
-    }
-
-    {
-        try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.light_lists.buffer));
-        const range = self.light_lists.get_range(mesh.light_lists_handle).?;
-        std.debug.assert(range.size >= @as(isize, @intCast(chunk.compiled_light_lists.items.len * @sizeOf(LightList))));
-        try gl_call(gl.BufferSubData(
-            gl.ARRAY_BUFFER,
-            range.offset,
-            range.size,
-            @ptrCast(chunk.compiled_light_lists.items),
-        ));
-    }
 
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, self.faces.buffer));
     for (&mesh.face_counts, &chunk.faces.values, mesh.face_handles, 0..) |*cnt, faces, handle, i| {
@@ -382,23 +385,24 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
         ));
     }
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
-
-    self.had_realloc |= old_faces_buf != self.faces.buffer;
-    self.had_realloc |= old_levels_buf != self.light_levels.buffer;
-    self.had_realloc |= old_lists_buf != self.light_lists.buffer;
 }
 
-pub fn destroy_chunk_mesh(self: *Self, coords: Coords) !void {
-    const kv = self.meshes.fetchSwapRemove(coords) orelse return;
-    const mesh = kv.value;
-    self.faces.free(mesh.light_lists_handle);
-    self.faces.free(mesh.light_levels_handle);
-    for (mesh.face_handles, mesh.face_counts) |handle, cnt| {
-        self.total_triangle_count -= cnt * 2;
-        self.faces.free(handle);
+pub fn destroy_chunk(self: *Self, coords: Coords) !void {
+    if (self.meshes.fetchSwapRemove(coords)) |kv| {
+        const mesh = kv.value;
+        for (mesh.face_handles, mesh.face_counts) |handle, cnt| {
+            self.total_triangle_count -= cnt * 2;
+            self.faces.free(handle);
+        }
+        self.mesh_pool.destroy(mesh);
     }
 
-    self.mesh_pool.destroy(mesh);
+    if (self.lights.fetchSwapRemove(coords)) |kv| {
+        const lights = kv.value;
+        self.light_levels.free(lights.light_levels_handle);
+        self.light_lists.free(lights.light_lists_handle);
+        self.lights_pool.destroy(lights);
+    }
 }
 
 fn on_imgui(self: *Self) !void {
@@ -477,10 +481,14 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
     @memset(chunk_data, std.mem.zeroes(ChunkData));
 
     for (meshes.items, 0..) |mesh, i| {
-        const light_levels_range = self.light_levels.get_range(mesh.mesh.light_levels_handle).?;
-        const light_lists_range = self.light_lists.get_range(mesh.mesh.light_lists_handle).?;
-        const light_levels: u32 = @intCast(@divExact(light_levels_range.offset, @sizeOf(LightLevelInfo)));
-        const light_lists: u32 = @intCast(@divExact(light_lists_range.offset, @sizeOf(LightList)));
+        const lights = if (self.lights.get(mesh.mesh.coords)) |lights| blk: {
+            const light_levels_range = self.light_levels.get_range(lights.light_levels_handle).?;
+            const light_lists_range = self.light_lists.get_range(lights.light_lists_handle).?;
+            const light_levels: u32 = @intCast(@divExact(light_levels_range.offset, @sizeOf(LightLevelInfo)));
+            const light_lists: u32 = @intCast(@divExact(light_lists_range.offset, @sizeOf(LightList)));
+            break :blk .{ light_levels, light_lists, light_levels_range.size };
+        } else .{ 0, 0, 0 };
+        const light_levels, const light_lists, const light_count = lights;
 
         for (std.enums.values(Block.Direction)) |normal| {
             const j: u32 = @intFromEnum(normal);
@@ -501,7 +509,7 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
             .z = mesh.mesh.coords[2],
             .light_levels = light_levels,
             .light_lists = light_lists,
-            .no_lights = @intFromBool(light_levels_range.size == 0),
+            .no_lights = @intFromBool(light_count == 0),
         };
     }
 
@@ -552,8 +560,6 @@ const Indirect = extern struct {
 
 const Mesh = struct {
     face_handles: [BLOCK_FACE_CNT]GpuAlloc.Handle,
-    light_levels_handle: GpuAlloc.Handle,
-    light_lists_handle: GpuAlloc.Handle,
     face_counts: [BLOCK_FACE_CNT]usize,
     coords: Coords,
     is_occluded: bool,
@@ -566,6 +572,11 @@ const Mesh = struct {
 
         return .{ pos[0], pos[1], pos[2], rad };
     }
+};
+
+const Lights = struct {
+    light_levels_handle: GpuAlloc.Handle,
+    light_lists_handle: GpuAlloc.Handle,
 };
 
 const normals = blk: {

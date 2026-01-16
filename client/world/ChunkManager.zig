@@ -30,7 +30,6 @@ phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
 tasks_per_second: util.AmountPerSecond = .{},
 chunks_to_mesh: ScheduledChunks = .empty, // world.gpa
-chunks_to_compile_light: ScheduledChunks = .empty, // World.gpa
 
 cur_center: Coords = @splat(0),
 cur_radius: Coords = @splat(0),
@@ -108,7 +107,6 @@ pub fn deinit(self: *ChunkManager) void {
     self.task_pool.deinit();
     self.phase_pool.deinit();
     self.chunks_to_mesh.deinit(self.world.get_gpa());
-    self.chunks_to_compile_light.deinit(self.world.get_gpa());
     self.world.get_gpa().destroy(self);
 }
 
@@ -179,14 +177,6 @@ pub fn schedule_set_block(
             try self.completed_tasks.append(self.shared_gpa(), task2);
         }
 
-        for (Block.Neighbours(3).deltas) |d| {
-            const next_chunk = chunk.get_chunk(d + chunk.coords) orelse continue;
-            const task3: *Task = try self.task_pool.create();
-            task3.* = .{ .chunk = next_chunk, .body = .compile_light };
-            try self.main_worker().run_task(task3);
-            try self.completed_tasks.append(self.shared_gpa(), task3);
-        }
-
         return;
     }
 
@@ -220,13 +210,6 @@ pub fn process(self: *ChunkManager) !void {
                 }
             },
             .set_block => {},
-            .compile_light => {
-                if (task.chunk.had_light_updates) {
-                    try self.world.renderer.upload_chunk_mesh(task.chunk);
-                }
-                task.chunk.had_light_updates = false;
-                task.chunk.active = true;
-            },
         }
         self.task_pool.destroy(task);
     }
@@ -237,13 +220,7 @@ pub fn process(self: *ChunkManager) !void {
 fn process_phase(self: *ChunkManager) !void {
     const cur_phase = if (self.phase_queue.first) |link|
         Phase.from_link(link)
-    else if (self.chunks_to_compile_light.count() != 0) blk: {
-        const phase: *Phase = try self.phase_pool.create();
-        phase.* = .{ .body = .compile_light };
-        self.phase_queue.prepend(&phase.link);
-        self.phase_queue_len += 1;
-        break :blk phase;
-    } else if (self.chunks_to_mesh.count() != 0) blk: {
+    else if (self.chunks_to_mesh.count() != 0) blk: {
         const phase: *Phase = try self.phase_pool.create();
         phase.* = .{ .body = .meshing };
         self.phase_queue.prepend(&phase.link);
@@ -284,10 +261,6 @@ fn process_phase(self: *ChunkManager) !void {
                 );
             }
 
-            for (Block.Neighbours(3).deltas) |d| {
-                try self.chunks_to_compile_light.put(self.world.get_gpa(), d + chunk.coords, {});
-            }
-
             _ = self.phase_queue.popFirst();
             self.phase_pool.destroy(cur_phase);
             self.phase_queue_len -= 1;
@@ -307,31 +280,6 @@ fn process_phase(self: *ChunkManager) !void {
                     try self.pending_tasks.append(self.shared_gpa(), task);
                 }
                 self.chunks_to_mesh.clearRetainingCapacity();
-
-                self.tasks_left = self.pending_tasks.items.len;
-                self.cond.broadcast();
-            }
-
-            if (self.tasks_left == 0) {
-                self.phase_queue_len -= 1;
-                _ = self.phase_queue.popFirst();
-                self.phase_pool.destroy(cur_phase);
-            }
-        },
-        .compile_light => {
-            if (!cur_phase.started) {
-                std.debug.assert(self.pending_tasks.items.len == 0);
-                std.debug.assert(self.tasks_left == 0);
-                cur_phase.started = true;
-
-                var it = self.chunks_to_compile_light.keyIterator();
-                while (it.next()) |coords| {
-                    const chunk = self.world.chunks.get(coords.*) orelse continue;
-                    const task: *Task = try self.task_pool.create();
-                    task.* = .{ .chunk = chunk, .body = .compile_light };
-                    try self.pending_tasks.append(self.shared_gpa(), task);
-                }
-                self.chunks_to_compile_light.clearRetainingCapacity();
 
                 self.tasks_left = self.pending_tasks.items.len;
                 self.cond.broadcast();
@@ -379,7 +327,7 @@ fn process_phase(self: *ChunkManager) !void {
                         if (@reduce(.And, pos >= tgt_min) and @reduce(.And, pos <= tgt_max)) {
                             continue;
                         }
-                        try self.world.renderer.destroy_chunk_mesh(pos);
+                        try self.world.renderer.destroy_chunk(pos);
 
                         const kv = self.world.chunks.fetchSwapRemove(pos).?;
                         const chunk = kv.value;
@@ -450,7 +398,6 @@ const Phase = struct {
         loading: struct { Coords, Coords },
         meshing: void,
         set_block: struct { Coords, Block },
-        compile_light: void,
         const Tag = std.meta.Tag(Body);
     };
 
@@ -466,7 +413,6 @@ const Task = struct {
         loading: void,
         meshing: void,
         set_block: struct { Coords, Block },
-        compile_light: void,
         const Tag = std.meta.Tag(Body);
     };
 };
@@ -569,7 +515,6 @@ pub const Worker = struct {
             .loading => try task.chunk.generate(self),
             .meshing => try task.chunk.build_mesh(self),
             .set_block => |x| try task.chunk.set_block_and_propagate_updates(x[0], x[1], self),
-            .compile_light => try task.chunk.compile_light_data(self),
         }
     }
 };
