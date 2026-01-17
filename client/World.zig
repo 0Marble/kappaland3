@@ -11,7 +11,7 @@ const zm = @import("zm");
 pub const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 
 chunk_manager: *ChunkManager = undefined,
-renderer: BlockRenderer = undefined,
+renderer: *BlockRenderer = undefined,
 chunk_pool: std.heap.MemoryPool(Chunk) = undefined,
 chunks: std.AutoArrayHashMapUnmanaged(Coords, *Chunk) = .empty,
 
@@ -19,11 +19,7 @@ normal_gpa: std.mem.Allocator,
 shared_gpa_base: Gpa = .init,
 shared_gpa: std.heap.ThreadSafeAllocator = undefined,
 
-load_radius: Coords = .{
-    Options.world_size / 2,
-    Options.world_height / 2,
-    Options.world_size / 2,
-},
+load_radius: Coords = .{ Options.world_size, Options.world_height, Options.world_size },
 
 const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
 
@@ -37,10 +33,10 @@ pub fn init(gpa: std.mem.Allocator) !*World {
     self.shared_gpa = .{ .child_allocator = self.shared_gpa_base.allocator() };
 
     self.chunk_pool = .init(self.get_gpa());
-    try self.renderer.init();
+    self.renderer = try .init(self);
     self.chunk_manager = try ChunkManager.init(self, .{ .thread_count = 4 });
 
-    try App.get_renderer().add_step(BlockRenderer.draw, .{&self.renderer});
+    try App.get_renderer().add_step(BlockRenderer.draw, .{self.renderer});
 
     logger.info("{*}: initialized!", .{self});
 
@@ -111,4 +107,10 @@ pub fn get_gpa(self: *World) std.mem.Allocator {
 
 pub fn to_world_coord(pos: zm.Vec3f) Coords {
     return @intFromFloat(@floor(pos));
+}
+
+// center, radius
+// [center - radius, center + radius]
+pub fn currently_loaded_region(self: *World) struct { Coords, Coords } {
+    return .{ self.chunk_manager.cur_center, self.chunk_manager.cur_radius };
 }

@@ -31,6 +31,7 @@ phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 tasks_per_second: util.AmountPerSecond = .{},
 chunks_to_mesh: ScheduledChunks = .empty, // world.gpa
 
+full_reload: bool = true,
 cur_center: Coords = @splat(0),
 cur_radius: Coords = @splat(0),
 
@@ -122,7 +123,7 @@ pub fn schedule_load_region(self: *ChunkManager, center: Coords, radius: Coords)
         }
     } else if (self.phase_queue.first == null) {
         if (@reduce(.And, self.cur_center == center) and
-            @reduce(.And, self.cur_radius == radius))
+            @reduce(.And, self.cur_radius == radius) and !self.full_reload)
         {
             return;
         }
@@ -295,7 +296,7 @@ fn process_phase(self: *ChunkManager) !void {
         .loading => |body| {
             const center, const radius = body;
             if (@reduce(.And, center == self.cur_center) and
-                @reduce(.And, radius == self.cur_radius))
+                @reduce(.And, radius == self.cur_radius) and !self.full_reload)
             {
                 self.phase_queue_len -= 1;
                 _ = self.phase_queue.popFirst();
@@ -304,6 +305,7 @@ fn process_phase(self: *ChunkManager) !void {
             }
 
             if (!cur_phase.started) {
+                self.full_reload = false;
                 std.debug.assert(self.pending_tasks.items.len == 0);
                 std.debug.assert(self.tasks_left == 0);
 

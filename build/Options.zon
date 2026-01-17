@@ -21,13 +21,13 @@
         .type = .usize,
         .name = "world_size",
         .desc = "World size in chunks (x/z)",
-        .default = 16,
+        .default = 8,
     },
     .{
         .type = .usize,
         .name = "world_height",
         .desc = "World size in chunks (y)",
-        .default = 8,
+        .default = 4,
     },
     .{
         .type = .bool,

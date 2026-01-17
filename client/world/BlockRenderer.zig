@@ -22,7 +22,6 @@ const LightList = Renderer.LightList;
 
 const logger = std.log.scoped(.block_renderer);
 
-const Self = @This();
 const BlockRenderer = @This();
 
 const CHUNK_SIZE = Chunk.CHUNK_SIZE;
@@ -35,6 +34,8 @@ const DEFAULT_CHUNK_DATA_SIZE = 1024 * @sizeOf(ChunkData);
 const DEFAULT_INDIRECT_SIZE = 1024 * @sizeOf(Indirect);
 const DEFAULT_CHUNK_INDICES_SIZE = 1024;
 const BLOCK_ATLAS_TEX = 0;
+
+world: *World,
 
 block_pass: Shader,
 block_vao: gl.uint,
@@ -60,7 +61,10 @@ lights: std.AutoArrayHashMapUnmanaged(Coords, *Lights),
 mesh_pool: std.heap.MemoryPool(Mesh),
 lights_pool: std.heap.MemoryPool(Lights),
 
-pub fn init(self: *Self) !void {
+pub fn init(world: *World) !*BlockRenderer {
+    const self = try App.gpa().create(BlockRenderer);
+    self.world = world;
+
     logger.debug("{*} Initializing...", .{self});
 
     self.had_realloc = false;
@@ -118,6 +122,11 @@ pub fn init(self: *Self) !void {
         SsboBindings.LIGHT_LEVELS,
         self.light_levels.buffer,
     ));
+    try gl_call(gl.BindBufferBase(
+        gl.SHADER_STORAGE_BUFFER,
+        SsboBindings.DRAW_ID_TO_CHUNK,
+        self.draw_id_to_chunk_ssbo,
+    ));
 
     try gl_call(gl.BindVertexArray(0));
     try gl_call(gl.BindBuffer(gl.UNIFORM_BUFFER, 0));
@@ -134,9 +143,11 @@ pub fn init(self: *Self) !void {
     }
 
     logger.debug("{*} Finished initializing...", .{self});
+
+    return self;
 }
 
-fn init_models(self: *Self) !void {
+fn init_models(self: *BlockRenderer) !void {
     try gl_call(gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.block_ibo));
     try gl_call(gl.BufferData(
         gl.ELEMENT_ARRAY_BUFFER,
@@ -172,7 +183,7 @@ fn init_models(self: *Self) !void {
     ));
 }
 
-fn init_face_attribs(self: *Self) !void {
+fn init_face_attribs(self: *BlockRenderer) !void {
     try gl_call(gl.BindVertexBuffer(
         FACE_DATA_BINDING,
         self.faces.buffer,
@@ -191,7 +202,7 @@ fn init_face_attribs(self: *Self) !void {
     try gl_call(gl.VertexBindingDivisor(FACE_DATA_BINDING, 1));
 }
 
-fn init_chunk_data(self: *Self) !void {
+fn init_chunk_data(self: *BlockRenderer) !void {
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.draw_id_to_chunk_ssbo));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
@@ -204,7 +215,7 @@ fn init_chunk_data(self: *Self) !void {
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *BlockRenderer) void {
     self.block_pass.deinit();
     self.faces.deinit();
     self.light_lists.deinit();
@@ -221,9 +232,11 @@ pub fn deinit(self: *Self) void {
     gl.DeleteBuffers(1, @ptrCast(&self.chunk_data_ssbo));
     gl.DeleteBuffers(1, @ptrCast(&self.indirect_buf));
     gl.DeleteBuffers(1, @ptrCast(&self.draw_id_to_chunk_ssbo));
+
+    App.gpa().destroy(self);
 }
 
-pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
+pub fn draw(self: *BlockRenderer, cam: *Camera) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(self.block_vao));
     try gl_call(gl.BindVertexBuffer(
         FACE_DATA_BINDING,
@@ -266,7 +279,7 @@ pub fn draw(self: *Self, cam: *Camera) (OOM || GlError)!void {
     try gl_call(gl.BindVertexArray(0));
 }
 
-pub fn upload_chunk_lights(self: *Self, chunk: *Chunk) !void {
+pub fn upload_chunk_lights(self: *BlockRenderer, chunk: *Chunk) !void {
     const lights = if (self.lights.get(chunk.coords)) |lights| blk: {
         {
             const old_range = self.light_levels.get_range(lights.light_levels_handle).?;
@@ -335,7 +348,7 @@ pub fn upload_chunk_lights(self: *Self, chunk: *Chunk) !void {
     }
 }
 
-pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
+pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
     const mesh = if (self.meshes.get(chunk.coords)) |mesh| blk: {
         for (&mesh.face_handles, &chunk.faces.values) |*handle, faces| {
             const old_range = self.faces.get_range(handle.*).?;
@@ -391,7 +404,7 @@ pub fn upload_chunk_mesh(self: *Self, chunk: *Chunk) !void {
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
 }
 
-pub fn destroy_chunk(self: *Self, coords: Coords) !void {
+pub fn destroy_chunk(self: *BlockRenderer, coords: Coords) !void {
     if (self.meshes.fetchSwapRemove(coords)) |kv| {
         const mesh = kv.value;
         for (mesh.face_handles, mesh.face_counts) |handle, cnt| {
@@ -409,7 +422,7 @@ pub fn destroy_chunk(self: *Self, coords: Coords) !void {
     }
 }
 
-fn on_imgui(self: *Self) !void {
+fn on_imgui(self: *BlockRenderer) !void {
     const gpu_mem_faces: [*:0]const u8 = @ptrCast(try std.fmt.allocPrintSentinel(
         App.frame_alloc(),
         \\Meshes: 
@@ -431,8 +444,8 @@ fn on_imgui(self: *Self) !void {
     c.igText("%s", gpu_mem_faces);
 }
 
-pub fn on_frame_start(self: *Self) !void {
-    try App.gui().add_to_frame(Self, "Debug", self, on_imgui, @src());
+pub fn on_frame_start(self: *BlockRenderer) !void {
+    try App.gui().add_to_frame(BlockRenderer, "Debug", self, on_imgui, @src());
 }
 
 const MeshOrder = struct {
@@ -452,9 +465,7 @@ fn morton_encode(pos: @Vector(3, u32)) u32 {
     return x[0] | (x[1] << 1) | (x[2] << 2);
 }
 
-// fn update_chunk_data(self: *Self) !usize {}
-
-fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
+fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
     const do_frustum_culling = App.settings().get_value(
         bool,
         ".main.renderer.frustum_culling",
@@ -464,86 +475,163 @@ fn compute_drawn_chunk_data(self: *Self, cam: *Camera) !usize {
         ".main.renderer.occlusion_culling",
     );
 
+    const center, const radius = self.world.currently_loaded_region();
+    const one: Coords = @splat(1);
+    const two: Coords = @splat(2);
+    const size: @Vector(3, usize) = @intCast(radius * two + one);
+    const stride: @Vector(3, usize) = .{ size[1] * size[2], size[2], 1 };
+
+    const n = @reduce(.Mul, size);
+    std.debug.assert(radius[0] == radius[2]);
+
+    const draw_order = try ring_order(App.frame_alloc(), @intCast(radius[0]), @intCast(radius[1]));
+    std.debug.assert(draw_order.len == n);
+
+    var indirect = std.ArrayList(Indirect).empty;
+    var chunks = std.ArrayList(ChunkData).empty;
+    try chunks.resize(App.frame_alloc(), n);
+    var draw_id_to_chunk_idx = std.ArrayList(u32).empty;
+    var draw_id: usize = 0;
+
     const cam_chunk = cam.chunk_coords();
-    var meshes: std.ArrayList(MeshOrder) = .empty;
     self.shown_triangle_count = 0;
+    for (draw_order) |pos| {
+        const chunk_idx: usize = @reduce(
+            .Add,
+            @as(@Vector(3, usize), @intCast(radius + pos)) * stride,
+        );
 
-    for (self.meshes.values()) |mesh| {
-        const bound = mesh.bounding_sphere();
-        const center = zm.vec.xyz(bound);
-        const rad = bound[3];
-        if (do_frustum_culling and !cam.sphere_in_frustum(center, rad)) continue;
-
-        if (do_occlusion_culling and
-            !@reduce(.And, mesh.coords == cam_chunk) and
-            mesh.is_occluded)
-            continue;
-
-        try meshes.append(App.frame_alloc(), .{
-            .mesh = mesh,
-            .dist_sq = zm.vec.lenSq(cam.frustum.pos - center),
-        });
-    }
-    std.mem.sort(MeshOrder, meshes.items, {}, MeshOrder.less_than);
-
-    const indirect = try App.frame_alloc().alloc(Indirect, meshes.items.len * BLOCK_FACE_CNT);
-    const chunk_data = try App.frame_alloc().alloc(ChunkData, meshes.items.len);
-
-    @memset(indirect, std.mem.zeroes(Indirect));
-    @memset(chunk_data, std.mem.zeroes(ChunkData));
-
-    for (meshes.items, 0..) |mesh, i| {
-        const lights = if (self.lights.get(mesh.mesh.coords)) |lights| blk: {
-            const light_levels_range = self.light_levels.get_range(lights.light_levels_handle).?;
-            const light_lists_range = self.light_lists.get_range(lights.light_lists_handle).?;
-            const light_levels: u32 = @intCast(@divExact(light_levels_range.offset, @sizeOf(LightLevelInfo)));
-            const light_lists: u32 = @intCast(@divExact(light_lists_range.offset, @sizeOf(LightList)));
-            break :blk .{ light_levels, light_lists, light_levels_range.size };
-        } else .{ 0, 0, 0 };
-        const light_levels, const light_lists, const light_count = lights;
-
-        for (std.enums.values(Block.Direction)) |normal| {
-            const j: u32 = @intFromEnum(normal);
-            const range = self.faces.get_range(mesh.mesh.face_handles[j]).?;
-
-            indirect[i * BLOCK_FACE_CNT + j] = Indirect{
-                .count = 6,
-                .instance_count = @intCast(mesh.mesh.face_counts[j]),
-                .base_instance = @intCast(@divExact(range.offset, @sizeOf(FaceMesh))),
-                .base_vertex = 0,
-                .first_index = 0,
-            };
-            self.shown_triangle_count += mesh.mesh.face_counts[j] * 2;
-        }
-        chunk_data[i] = ChunkData{
-            .x = mesh.mesh.coords[0],
-            .y = mesh.mesh.coords[1],
-            .z = mesh.mesh.coords[2],
-            .light_levels = light_levels,
-            .light_lists = light_lists,
-            .no_lights = @intFromBool(light_count == 0),
+        const coords = pos + center;
+        chunks.items[chunk_idx] = ChunkData{
+            .x = coords[0],
+            .y = coords[1],
+            .z = coords[2],
+            .light_levels = 0,
+            .light_lists = 0,
         };
+
+        if (self.meshes.get(coords)) |mesh| {
+            const bound = mesh.bounding_sphere();
+            std.debug.assert(@reduce(.And, mesh.coords == coords));
+
+            if (do_occlusion_culling and
+                !@reduce(.And, cam_chunk == mesh.coords) and
+                mesh.is_occluded)
+                continue;
+            if (do_frustum_culling and !cam.sphere_in_frustum(zm.vec.xyz(bound), bound[3]))
+                continue;
+
+            try draw_id_to_chunk_idx.append(App.frame_alloc(), @intCast(chunk_idx));
+            draw_id += 1;
+
+            for (std.enums.values(Block.Direction)) |dir| {
+                const j: u32 = @intFromEnum(dir);
+                const range = self.faces.get_range(mesh.face_handles[j]).?;
+                try indirect.append(App.frame_alloc(), Indirect{
+                    .count = 6,
+                    .instance_count = @intCast(mesh.face_counts[j]),
+                    .base_instance = @intCast(@divExact(range.offset, @sizeOf(FaceMesh))),
+                    .base_vertex = 0,
+                    .first_index = 0,
+                });
+
+                self.shown_triangle_count += mesh.face_counts[j] * 2;
+            }
+        }
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
     try gl_call(gl.BufferData(
         gl.DRAW_INDIRECT_BUFFER,
-        @intCast(indirect.len * @sizeOf(Indirect)),
-        @ptrCast(indirect),
+        @intCast(indirect.items.len * @sizeOf(Indirect)),
+        @ptrCast(indirect.items),
         gl.STREAM_DRAW,
     ));
+    try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, 0));
 
     try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.chunk_data_ssbo));
     try gl_call(gl.BufferData(
         gl.SHADER_STORAGE_BUFFER,
-        @intCast(chunk_data.len * @sizeOf(ChunkData)),
-        @ptrCast(chunk_data),
+        @intCast(chunks.items.len * @sizeOf(ChunkData)),
+        @ptrCast(chunks.items),
         gl.STREAM_DRAW,
     ));
-    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0));
 
-    self.drawn_chunks_cnt = meshes.items.len;
-    return indirect.len;
+    try gl_call(gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, self.draw_id_to_chunk_ssbo));
+    try gl_call(gl.BufferData(
+        gl.SHADER_STORAGE_BUFFER,
+        @intCast(draw_id_to_chunk_idx.items.len * @sizeOf(u32)),
+        @ptrCast(draw_id_to_chunk_idx.items),
+        gl.STREAM_DRAW,
+    ));
+
+    self.drawn_chunks_cnt = indirect.items.len / 6;
+    return indirect.items.len;
+}
+
+fn ring_order(arena: std.mem.Allocator, width: usize, height: usize) ![]const Coords {
+    var res = std.ArrayList(Coords).empty;
+    const size = (width * 2 + 1) * (width * 2 + 1) * (height * 2 + 1);
+    try res.ensureTotalCapacity(arena, size);
+
+    for (0..width + 1) |ring| {
+        const side = ring * 2;
+
+        for (0..2 * height + 1) |j| {
+            const y: i32 = if (j % 2 == 0)
+                @intCast((j + 1) / 2)
+            else
+                -@as(i32, @intCast((j + 1) / 2));
+
+            if (ring == 0) {
+                res.appendAssumeCapacity(.{ 0, y, 0 });
+                continue;
+            }
+
+            for (0..side) |i| {
+                const x: i32 = if (i % 2 == 0)
+                    @intCast((i + 1) / 2)
+                else
+                    -@as(i32, @intCast((i + 1) / 2));
+
+                const z: i32 = @intCast(ring);
+                res.appendAssumeCapacity(.{ x, y, z });
+                res.appendAssumeCapacity(.{ -x, y, -z });
+                res.appendAssumeCapacity(.{ -z, y, x });
+                res.appendAssumeCapacity(.{ z, y, -x });
+            }
+        }
+    }
+
+    return try res.toOwnedSlice(arena);
+}
+
+test "ring order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    for (0..10) |h| {
+        for (0..10) |w| {
+            errdefer logger.err("on test w={},h={}", .{ w, h });
+
+            const size = (w * 2 + 1) * (w * 2 + 1) * (h * 2 + 1);
+            var set = std.AutoArrayHashMapUnmanaged(Coords, usize).empty;
+            const ord = try ring_order(arena.allocator(), w, h);
+
+            errdefer logger.err("ord={any}", .{ord});
+            try std.testing.expectEqual(size, ord.len);
+
+            for (ord, 0..) |pos, i| {
+                errdefer logger.err("on pos={},i={}", .{ pos, i });
+
+                const entry = try set.getOrPutValue(arena.allocator(), pos, i);
+                try std.testing.expect(!entry.found_existing);
+            }
+            try std.testing.expectEqual(size, set.count());
+
+            _ = arena.reset(.retain_capacity);
+        }
+    }
 }
 
 const Indirect = extern struct {
@@ -621,7 +709,7 @@ const block_vert =
     std.fmt.comptimePrint("\n#define CHUNK_DATA_BINDING {d}", .{SsboBindings.CHUNK_DATA}) ++
     std.fmt.comptimePrint("\n#define NORMAL_BINDING {d}", .{SsboBindings.NORMAL}) ++
     std.fmt.comptimePrint("\n#define MODEL_BINDING {d}", .{SsboBindings.FACE_MODEL}) ++
-    std.fmt.comptimePrint("\n#define ID_TO_COORDS_BINDING {d}", .{SsboBindings.DRAW_ID_TO_COORDS}) ++
+    std.fmt.comptimePrint("\n#define DRAW_ID_TO_CHUNK_BINDING {d}", .{SsboBindings.DRAW_ID_TO_CHUNK}) ++
     std.fmt.comptimePrint("\n#define BLOCK_FACE_CNT {d}", .{BLOCK_FACE_CNT}) ++
     \\
     \\layout (location = FACE_DATA_LOCATION_A) in uint vert_face_a;
@@ -653,6 +741,10 @@ const block_vert =
     \\
     \\layout (std430, binding = MODEL_BINDING) readonly buffer Models {
     \\  uint raw_model[];
+    \\};
+    \\
+    \\layout (std430, binding = DRAW_ID_TO_CHUNK_BINDING) readonly buffer DrawIdToChunk {
+    \\  uint draw_id_to_chunk[];
     \\};
     \\
     \\struct Model {
@@ -695,7 +787,7 @@ const block_vert =
     \\void main() {
     \\  Face face = unpack_face();
     \\  Model model = unpack_model(face.model);
-    \\  Chunk chunk = chunks[gl_DrawID / BLOCK_FACE_CNT];
+    \\  Chunk chunk = chunks[draw_id_to_chunk[gl_DrawID / BLOCK_FACE_CNT]];
     \\
     \\  uint p = gl_VertexID;
     \\  vec3 normal = normals[gl_DrawID % BLOCK_FACE_CNT];
@@ -707,7 +799,7 @@ const block_vert =
     \\  vec4 view_pos = u_view * world_pos;
     \\  gl_Position = u_proj * view_pos;
     \\
-    \\  frag_norm = (u_view * vec4(normal, 0)).xyz;
+    \\  frag_norm = normal;
     \\  frag_ao = u_idx_to_ao[face.ao];
     \\  frag_tex = face.texture;
     \\  frag_pos = vec4(world_pos.xyz, uintBitsToFloat(gl_DrawID / BLOCK_FACE_CNT));

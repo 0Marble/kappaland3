@@ -193,9 +193,6 @@ pub fn draw(self: *Renderer, camera: *Camera) (OOM || GlError)!void {
     try self.lighting_pass.set_vec3("u_view_pos", camera.frustum.pos);
     try self.lighting_pass.set_float("u_time", App.elapsed_time());
 
-    const light_dir_world = zm.vec.normalize(zm.Vec4f{ 1, 1, 1, 0 });
-    const light_dir = camera.view_mat().multiplyVec4(light_dir_world);
-    try self.lighting_pass.set_vec3("u_light_dir", zm.vec.xyz(light_dir));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POSITION_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + NORMAL_TEX_UNIFORM));
@@ -434,6 +431,9 @@ fn init_screen(self: *Renderer) !void {
     self.lighting_pass = try .init(&render_sources, "lighting_pass");
     try self.lighting_pass.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
     try self.lighting_pass.set_vec3("u_light_color", .{ 0.3, 0.3, 0.3 });
+    const light_dir_world = zm.vec.normalize(zm.Vec3f{ 1, 1, 1 });
+    try self.lighting_pass.set_vec3("u_light_dir", light_dir_world);
+
     try self.lighting_pass.set_int("u_pos_tex", POSITION_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_normal_tex", NORMAL_TEX_UNIFORM);
     try self.lighting_pass.set_int("u_base_tex", BASE_TEX_UNIFORM);
