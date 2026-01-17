@@ -192,6 +192,19 @@ pub fn draw(self: *Renderer, camera: *Camera) (OOM || GlError)!void {
     try self.lighting_pass.set_vec2("u_tex_size", render_size);
     try self.lighting_pass.set_vec3("u_view_pos", camera.frustum.pos);
     try self.lighting_pass.set_float("u_time", App.elapsed_time());
+    // TODO: find a better way to get this value
+    const center_chunk, const chunk_radius = @import("Game.zig").instance().world
+        .currently_loaded_region();
+    try self.lighting_pass.set(
+        "u_chunk_radius",
+        .{ chunk_radius[0], chunk_radius[1], chunk_radius[2] },
+        "3i",
+    );
+    try self.lighting_pass.set(
+        "u_center_chunk",
+        .{ center_chunk[0], center_chunk[1], center_chunk[2] },
+        "3i",
+    );
 
     try gl_call(gl.ActiveTexture(gl.TEXTURE0 + POSITION_TEX_UNIFORM));
     try gl_call(gl.BindTexture(gl.TEXTURE_2D, self.position_tex));
@@ -631,6 +644,8 @@ const lighting_frag =
     \\uniform bool u_ssao_enabled;
     \\uniform vec2 u_tex_size;
     \\uniform float u_time;
+    \\uniform ivec3 u_chunk_radius;
+    \\uniform ivec3 u_center_chunk;
     \\
 ++ ChunkData.define() ++
     \\
@@ -686,15 +701,29 @@ const lighting_frag =
     \\
     \\vec3 sample_light() {
     \\  ivec2 texture_coords = ivec2(frag_uv * u_tex_size);
-    \\  vec4 world_pos = texelFetch(u_pos_tex, texture_coords, 0);
-    \\  vec3 pos = world_pos.xyz;
+    // TODO: 0.75 is a hacky number to get stairs working,
+    // if a block is lower than stairs it will not get lit
+    \\  vec3 pos = texelFetch(u_pos_tex, texture_coords, 0).xyz + texelFetch(u_normal_tex, texture_coords, 0).xyz * 0.75;
+    \\  ivec3 world_pos = ivec3(floor(pos));
+    // TODO: bad code but it doesnt seem to do @divFloor() properly
+    \\  ivec3 chunk_pos = ivec3(
+    \\    world_pos.x > 0 ? world_pos.x / 16 : (world_pos.x + 1) / 16 - 1,
+    \\    world_pos.y > 0 ? world_pos.y / 16 : (world_pos.y + 1) / 16 - 1,
+    \\    world_pos.z > 0 ? world_pos.z / 16 : (world_pos.z + 1) / 16 - 1
+    \\  );
+    \\  chunk_pos.x = (world_pos.x == 0 ? 0 : chunk_pos.x);
+    \\  chunk_pos.y = (world_pos.y == 0 ? 0 : chunk_pos.y);
+    \\  chunk_pos.z = (world_pos.z == 0 ? 0 : chunk_pos.z);
     \\
-    \\  uint chunk_idx = floatBitsToUint(world_pos.w);
+    \\  ivec3 chunk_offset = chunk_pos - u_center_chunk;
+    \\  chunk_offset += u_chunk_radius;
+    \\  uvec3 size = u_chunk_radius * 2 + 1;
+    \\  uint chunk_idx = chunk_offset.x * size.y * size.z + chunk_offset.y * size.z + chunk_offset.z;
     \\  Chunk chunk = chunks[chunk_idx];
     \\  if (chunk.no_lights == 1) return vec3(0);
     \\  
-    \\  vec3 block_coords = pos - vec3(chunk.x, chunk.y, chunk.z) * 16.0;
-    \\  uint idx = uint(block_coords.y) * 16 * 16 + uint(block_coords.z) * 16 + uint(block_coords.x);
+    \\  uvec3 block_coords = uvec3(mod(world_pos, 16));
+    \\  uint idx = block_coords.y * 16 * 16 + block_coords.z * 16 + block_coords.x;
     \\  uint start = light_lists[(chunk.light_lists + idx) * 2];
     \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
     \\  if (length == 0) return vec3(0);

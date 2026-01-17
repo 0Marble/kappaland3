@@ -502,7 +502,8 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
         );
 
         const coords = pos + center;
-        chunks.items[chunk_idx] = ChunkData{
+        const chunk_data = &chunks.items[chunk_idx];
+        chunk_data.* = ChunkData{
             .x = coords[0],
             .y = coords[1],
             .z = coords[2],
@@ -510,16 +511,33 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
             .light_lists = 0,
         };
 
-        if (self.meshes.get(coords)) |mesh| {
+        if (self.lights.get(coords)) |lights| {
+            const light_levels_range = self.light_levels.get_range(lights.light_levels_handle).?;
+            const light_lists_range = self.light_lists.get_range(lights.light_lists_handle).?;
+            const light_levels: u32 = @intCast(@divExact(
+                light_levels_range.offset,
+                @sizeOf(LightLevelInfo),
+            ));
+            const light_lists: u32 = @intCast(@divExact(
+                light_lists_range.offset,
+                @sizeOf(LightList),
+            ));
+
+            chunk_data.light_levels = light_levels;
+            chunk_data.light_lists = light_lists;
+            chunk_data.no_lights = @intFromBool(light_levels_range.size == 0);
+        }
+
+        if (self.meshes.get(coords)) |mesh| blk: {
             const bound = mesh.bounding_sphere();
             std.debug.assert(@reduce(.And, mesh.coords == coords));
 
             if (do_occlusion_culling and
                 !@reduce(.And, cam_chunk == mesh.coords) and
                 mesh.is_occluded)
-                continue;
+                break :blk;
             if (do_frustum_culling and !cam.sphere_in_frustum(zm.vec.xyz(bound), bound[3]))
-                continue;
+                break :blk;
 
             try draw_id_to_chunk_idx.append(App.frame_alloc(), @intCast(chunk_idx));
             draw_id += 1;
@@ -775,7 +793,7 @@ const block_vert =
     \\uniform mat4 u_view;
     \\uniform mat4 u_proj;
     \\
-    \\vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
+    \\uniform vec2 uvs[4] = {vec2(0,0), vec2(0,1), vec2(1,1), vec2(1,0)};
     \\
     \\out vec3 frag_norm;
     \\out uint frag_ao;
@@ -802,7 +820,7 @@ const block_vert =
     \\  frag_norm = normal;
     \\  frag_ao = u_idx_to_ao[face.ao];
     \\  frag_tex = face.texture;
-    \\  frag_pos = vec4(world_pos.xyz, uintBitsToFloat(gl_DrawID / BLOCK_FACE_CNT));
+    \\  frag_pos = vec4(world_pos.xyz, 1.0);
     \\  frag_color = vec3(1);
     \\}
 ;

@@ -84,7 +84,7 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
                     8 => if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE)
                         Block.planks()
                     else
-                        Block.grass(),
+                        Block.planks(),
                     else => Block.air(),
                 };
                 self.set(pos, block);
