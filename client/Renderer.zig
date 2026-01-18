@@ -515,11 +515,7 @@ pub const LightLevelInfo = packed struct(u32) {
     _unused: u16 = 0x463a,
 };
 
-pub const LightList = packed struct(u64) {
-    start: u32 = 0,
-    length: u32 = 0,
-};
-
+pub const LightList = u32;
 pub const ChunkData = extern struct {
     x: i32,
     y: i32,
@@ -703,7 +699,8 @@ const lighting_frag =
     \\  ivec2 texture_coords = ivec2(frag_uv * u_tex_size);
     // TODO: 0.75 is a hacky number to get stairs working,
     // if a block is lower than stairs it will not get lit
-    \\  vec3 pos = texelFetch(u_pos_tex, texture_coords, 0).xyz + texelFetch(u_normal_tex, texture_coords, 0).xyz * 0.75;
+    \\  vec3 pos = texelFetch(u_pos_tex, texture_coords, 0).xyz + 
+    \\             texelFetch(u_normal_tex, texture_coords, 0).xyz * 0.75;
     \\  ivec3 world_pos = ivec3(floor(pos));
     // TODO: bad code but it doesnt seem to do @divFloor() properly
     \\  ivec3 chunk_pos = ivec3(
@@ -718,14 +715,16 @@ const lighting_frag =
     \\  ivec3 chunk_offset = chunk_pos - u_center_chunk;
     \\  chunk_offset += u_chunk_radius;
     \\  uvec3 size = u_chunk_radius * 2 + 1;
-    \\  uint chunk_idx = chunk_offset.x * size.y * size.z + chunk_offset.y * size.z + chunk_offset.z;
+    \\  uint chunk_idx = chunk_offset.x * size.y * size.z + 
+    \\                   chunk_offset.y * size.z + chunk_offset.z;
     \\  Chunk chunk = chunks[chunk_idx];
     \\  if (chunk.no_lights == 1) return vec3(0);
     \\  
     \\  uvec3 block_coords = uvec3(mod(world_pos, 16));
     \\  uint idx = block_coords.y * 16 * 16 + block_coords.z * 16 + block_coords.x;
-    \\  uint start = light_lists[(chunk.light_lists + idx) * 2];
-    \\  uint length = light_lists[(chunk.light_lists + idx) * 2 + 1];
+    \\  uint start = light_lists[chunk.light_lists + idx];
+    \\  uint end = light_lists[chunk.light_lists + idx + 1];
+    \\  uint length = end - start;
     \\  if (length == 0) return vec3(0);
     \\
     \\  vec3 res = vec3(0);

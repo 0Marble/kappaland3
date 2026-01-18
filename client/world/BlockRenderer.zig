@@ -431,6 +431,7 @@ fn on_imgui(self: *BlockRenderer) !void {
         \\    triangles: {d}/{d}
         \\GPU Memory:
         \\    faces:      {f}
+        \\    lights:     {Bi}+{Bi}
     ,
         .{
             self.meshes.count(),
@@ -438,6 +439,8 @@ fn on_imgui(self: *BlockRenderer) !void {
             self.shown_triangle_count,
             self.total_triangle_count,
             util.MemoryUsage.from_bytes(self.faces.size),
+            self.light_levels.size,
+            self.light_lists.size,
         },
         0,
     ));

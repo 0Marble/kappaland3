@@ -84,7 +84,7 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
                     8 => if (x == 0 or x + 1 == CHUNK_SIZE or z == 0 or z + 1 == CHUNK_SIZE)
                         Block.planks()
                     else
-                        Block.planks(),
+                        Block.grass(),
                     else => Block.air(),
                 };
                 self.set(pos, block);
@@ -181,29 +181,24 @@ pub fn compile_light_data(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
     self.compiled_light_lists.clearRetainingCapacity();
     self.compiled_light_levels.clearRetainingCapacity();
 
-    try self.compiled_light_lists.ensureTotalCapacity(worker.shared(), CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
-    self.compiled_light_lists.appendNTimesAssumeCapacity(.{}, CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+    try self.compiled_light_lists.ensureTotalCapacity(
+        worker.shared(),
+        CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
+    );
+    self.compiled_light_lists.appendNTimesAssumeCapacity(
+        0,
+        CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE + 1,
+    );
+    self.compiled_light_lists.items[0] = 0;
 
-    for (0..CHUNK_SIZE) |x| {
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |z| {
-                const pos: Coords = @intCast(@Vector(3, usize){ x, y, z });
-                const start = self.compiled_light_levels.items.len;
-                const idx: usize = @intCast(@reduce(.Add, pos * BLOCK_STRIDE));
-
-                for (self.light_levels.values()) |*levels| {
-                    const info = levels.levels[idx];
-                    if (info.level == 0) continue;
-                    try self.compiled_light_levels.append(worker.shared(), info);
-                }
-
-                const end = self.compiled_light_levels.items.len;
-                self.compiled_light_lists.items[idx] = .{
-                    .start = @intCast(start),
-                    .length = @intCast(end - start),
-                };
-            }
+    for (0..CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) |i| {
+        for (self.light_levels.values()) |*levels| {
+            const info = levels.levels[i];
+            if (info.level == 0) continue;
+            try self.compiled_light_levels.append(worker.shared(), info);
         }
+        const end = self.compiled_light_levels.items.len;
+        self.compiled_light_lists.items[i + 1] = @intCast(end);
     }
 
     if (self.compiled_light_levels.items.len == 0) {
