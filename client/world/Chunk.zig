@@ -23,7 +23,7 @@ world: *World,
 coords: Coords,
 blocks: [CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]Block = undefined,
 neighbours: std.enums.EnumMap(Block.Direction, *Chunk) = .init(.{}),
-is_occluded: bool = false,
+is_occluded: bool = true,
 active: bool = false,
 had_light_updates: bool = false,
 
@@ -94,8 +94,9 @@ pub fn generate(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
 }
 
 pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
-    for (&self.faces.values) |*faces| faces.clearRetainingCapacity();
+    for (&self.faces.values) |*faces| faces.clearAndFree(worker.shared());
 
+    self.is_occluded = true;
     self.is_occluded &= self.next_layer_solid(.front, .{ 0, 0, CHUNK_SIZE - 1 });
     self.is_occluded &= self.next_layer_solid(.back, .{ CHUNK_SIZE - 1, 0, 0 });
     self.is_occluded &= self.next_layer_solid(.right, .{ CHUNK_SIZE - 1, 0, CHUNK_SIZE - 1 });
@@ -111,6 +112,8 @@ pub fn build_mesh(self: *Chunk, worker: *ChunkManager.Worker) OOM!void {
             }
         }
     }
+
+    for (&self.faces.values) |*faces| faces.* = try faces.clone(worker.shared());
 }
 
 pub fn set_block_and_propagate_updates(
@@ -498,7 +501,7 @@ fn mesh_block(self: *Chunk, xyz: @Vector(3, usize), worker: *ChunkManager.Worker
                     ao,
                 ));
             } else {
-                try self.faces.getPtr(side).append(worker.shared(), .init(pos, tex, face, ao));
+                try self.faces.getPtr(side).append(worker.temp(), .init(pos, tex, face, ao));
             }
         }
     }
