@@ -56,10 +56,12 @@ drawn_chunks_cnt: usize,
 shown_triangle_count: usize,
 total_triangle_count: usize,
 
-meshes: std.AutoArrayHashMapUnmanaged(Coords, *Mesh),
-lights: std.AutoArrayHashMapUnmanaged(Coords, *Lights),
+meshes: std.ArrayHashMapUnmanaged(Coords, *Mesh, CoordsHash, false),
+lights: std.ArrayHashMapUnmanaged(Coords, *Lights, CoordsHash, false),
 mesh_pool: std.heap.MemoryPool(Mesh),
 lights_pool: std.heap.MemoryPool(Lights),
+
+const CoordsHash = std.array_hash_map.AutoContext(Coords);
 
 pub fn init(world: *World) !*BlockRenderer {
     const self = try App.gpa().create(BlockRenderer);
@@ -487,7 +489,11 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
     const n = @reduce(.Mul, size);
     std.debug.assert(radius[0] == radius[2]);
 
-    const draw_order = try ring_order(App.frame_alloc(), @intCast(radius[0]), @intCast(radius[1]));
+    const draw_order = try ring_order(
+        App.frame_alloc(),
+        @intCast(radius[0]),
+        @intCast(radius[1]),
+    );
     std.debug.assert(draw_order.len == n);
 
     var indirect = std.ArrayList(Indirect).empty;
