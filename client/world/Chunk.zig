@@ -8,6 +8,7 @@ const Queue = @import("libmine").Queue;
 const App = @import("../App.zig");
 const LightList = @import("../Renderer.zig").LightList;
 const LightLevelInfo = @import("../Renderer.zig").LightLevelInfo;
+const GpuAlloc = @import("../GpuAlloc.zig");
 
 const Chunk = @This();
 const Coords = World.Coords;
@@ -33,6 +34,10 @@ faces: std.EnumArray(Block.Direction, std.ArrayList(BlockRenderer.FaceMesh)) = .
 
 compiled_light_lists: std.ArrayList(LightList) = .empty,
 compiled_light_levels: std.ArrayList(LightLevelInfo) = .empty,
+
+face_handles: std.EnumArray(Block.Direction, GpuAlloc.Handle) = .initFill(.invalid),
+light_levels_handle: GpuAlloc.Handle = .invalid,
+light_lists_handle: GpuAlloc.Handle = .invalid,
 
 const OOM = std.mem.Allocator.Error;
 pub fn init(world: *World, coords: Coords) OOM!*Chunk {

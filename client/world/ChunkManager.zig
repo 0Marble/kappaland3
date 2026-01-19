@@ -329,10 +329,10 @@ fn process_phase(self: *ChunkManager) !void {
                         if (@reduce(.And, pos >= tgt_min) and @reduce(.And, pos <= tgt_max)) {
                             continue;
                         }
-                        try self.world.renderer.destroy_chunk(pos);
 
                         const kv = self.world.chunks.fetchSwapRemove(pos).?;
                         const chunk = kv.value;
+                        try self.world.renderer.destroy_chunk_mesh_and_lights(chunk);
                         chunk.deinit(self.shared_gpa());
                         self.world.chunk_pool.destroy(chunk);
 
