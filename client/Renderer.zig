@@ -443,7 +443,7 @@ fn init_screen(self: *Renderer) !void {
     };
     self.lighting_pass = try .init(&render_sources, "lighting_pass");
     try self.lighting_pass.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
-    try self.lighting_pass.set_vec3("u_light_color", .{ 0.3, 0.3, 0.3 });
+    try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 1 });
     const light_dir_world = zm.vec.normalize(zm.Vec3f{ 1, 1, 1 });
     try self.lighting_pass.set_vec3("u_light_dir", light_dir_world);
 

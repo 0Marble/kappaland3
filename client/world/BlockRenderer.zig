@@ -349,7 +349,13 @@ pub fn upload_chunk_lights(self: *BlockRenderer, chunk: *Chunk) !void {
 }
 
 pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
-    for (&chunk.face_handles.values, &chunk.faces.values) |*handle, faces| {
+    logger.debug("{*}: upload_chunk_mesh({*}@{})", .{ self, chunk, chunk.coords });
+
+    for (
+        &chunk.face_handles.values,
+        &chunk.faces.values,
+        &chunk.uploaded_face_lengths.values,
+    ) |*handle, faces, *cnt| {
         if (handle.* != .invalid) {
             const old_range = self.faces.get_range(handle.*).?;
             const new_size = faces.items.len * @sizeOf(FaceMesh);
@@ -372,6 +378,7 @@ pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
             );
         }
 
+        cnt.* = faces.items.len;
         self.total_triangle_count += faces.items.len * 2;
 
         const range = self.faces.get_range(handle.*).?;
@@ -393,9 +400,9 @@ pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
 }
 
 pub fn destroy_chunk_mesh_and_lights(self: *BlockRenderer, chunk: *Chunk) !void {
-    for (&chunk.face_handles.values, &chunk.faces.values) |*handle, faces| {
+    for (&chunk.face_handles.values, &chunk.uploaded_face_lengths.values) |*handle, cnt| {
         if (handle.* == .invalid) continue;
-        self.total_triangle_count -= faces.items.len * 2;
+        self.total_triangle_count -= cnt * 2;
         self.faces.free(handle.*);
         handle.* = .invalid;
     }
@@ -468,17 +475,17 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
     var chunks = std.ArrayList(ChunkData).empty;
     try chunks.resize(App.frame_alloc(), n);
     var draw_id_to_chunk_idx = std.ArrayList(u32).empty;
-    var draw_id: usize = 0;
 
     const cam_chunk = cam.chunk_coords();
     self.shown_triangle_count = 0;
-    for (draw_order) |pos| {
+    outer: for (draw_order) |delta| {
+        std.debug.assert(@reduce(.And, radius + delta >= Coords{ 0, 0, 0 }));
         const chunk_idx: usize = @reduce(
             .Add,
-            @as(@Vector(3, usize), @intCast(radius + pos)) * stride,
+            @as(@Vector(3, usize), @intCast(radius + delta)) * stride,
         );
 
-        const coords = pos + center;
+        const coords = delta + center;
         const chunk_data = &chunks.items[chunk_idx];
         chunk_data.* = ChunkData{
             .x = coords[0],
@@ -489,6 +496,7 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
         };
 
         const chunk = self.world.chunks.get(coords) orelse continue;
+        std.debug.assert(@reduce(.And, chunk.coords == coords));
         if (chunk.light_levels_handle != .invalid) {
             std.debug.assert(chunk.light_lists_handle != .invalid);
 
@@ -519,22 +527,27 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
         if (do_frustum_culling and !cam.sphere_in_frustum(zm.vec.xyz(bound), bound[3]))
             continue;
 
-        try draw_id_to_chunk_idx.append(App.frame_alloc(), @intCast(chunk_idx));
-        draw_id += 1;
+        var had_iters = false;
+        for (&chunk.face_handles.values, &chunk.uploaded_face_lengths.values) |handle, cnt| {
+            if (handle == .invalid) {
+                std.debug.assert(!had_iters);
+                continue :outer;
+            }
+            had_iters = true;
 
-        for (&chunk.face_handles.values, &chunk.faces.values) |handle, faces| {
-            if (handle == .invalid) continue;
             const range = self.faces.get_range(handle).?;
             try indirect.append(App.frame_alloc(), Indirect{
                 .count = 6,
-                .instance_count = @intCast(faces.items.len),
+                .instance_count = @intCast(cnt),
                 .base_instance = @intCast(@divExact(range.offset, @sizeOf(FaceMesh))),
                 .base_vertex = 0,
                 .first_index = 0,
             });
 
-            self.shown_triangle_count += faces.items.len * 2;
+            self.shown_triangle_count += cnt * 2;
         }
+
+        try draw_id_to_chunk_idx.append(App.frame_alloc(), @intCast(chunk_idx));
     }
 
     try gl_call(gl.BindBuffer(gl.DRAW_INDIRECT_BUFFER, self.indirect_buf));
@@ -563,6 +576,7 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
     ));
 
     self.drawn_chunks_cnt = indirect.items.len / 6;
+    std.debug.assert(indirect.items.len / 6 == draw_id_to_chunk_idx.items.len);
     return indirect.items.len;
 }
 

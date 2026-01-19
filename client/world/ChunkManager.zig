@@ -29,31 +29,33 @@ phase_queue_len: usize = 0,
 phase_pool: std.heap.MemoryPool(Phase), // world.gpa
 
 tasks_per_second: util.AmountPerSecond = .{},
-chunks_to_mesh: ScheduledChunks = .empty, // world.gpa
+chunks_to_mesh: ChunkHashMap = .empty, // world.gpa
 
 full_reload: bool = true,
 cur_center: Coords = @splat(0),
 cur_radius: Coords = @splat(0),
 
-const ScheduledChunks = std.HashMapUnmanaged(
+const ChunkManager = @This();
+const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
+const ChunkHashMap = std.HashMapUnmanaged(
     Coords,
     void,
-    ChunksToMeshCtx,
+    CoordsHash,
     std.hash_map.default_max_load_percentage,
 );
 
-const ChunksToMeshCtx = struct {
-    pub fn eql(_: @This(), x: Coords, y: Coords) bool {
+const CoordsHash = struct {
+    pub fn hash(_: CoordsHash, x: Coords) u32 {
+        const y: @Vector(3, u32) = @bitCast(x);
+        const z: @Vector(3, u8) = @truncate(y);
+        const w: u32 = @intCast(@as(u24, @bitCast(z)));
+        return std.hash.int(w);
+    }
+
+    pub fn eql(_: CoordsHash, x: Coords, y: Coords) bool {
         return @reduce(.And, x == y);
     }
-    pub fn hash(_: @This(), key: Coords) u64 {
-        const a: u96 = @bitCast(key);
-        return @truncate(std.hash.int(a));
-    }
 };
-
-const ChunkManager = @This();
-const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
 
 pub const Options = struct {
     thread_count: ?usize = null,
@@ -200,7 +202,10 @@ pub fn schedule_set_block(
 
 pub fn process(self: *ChunkManager) !void {
     self.mutex.lock();
-    defer self.mutex.unlock();
+    defer {
+        self.mutex.unlock();
+        self.cond.broadcast();
+    }
 
     try self.process_phase();
     self.tasks_per_second.add(self.completed_tasks.items.len);
@@ -211,11 +216,7 @@ pub fn process(self: *ChunkManager) !void {
                 try self.world.renderer.upload_chunk_mesh(task.chunk);
                 task.chunk.active = true;
             },
-            .loading => {
-                for (Block.Neighbours(3).deltas) |d| {
-                    try self.chunks_to_mesh.put(self.world.get_gpa(), d + task.chunk.coords, {});
-                }
-            },
+            .loading => {},
             .set_block => {},
         }
         self.task_pool.destroy(task);
@@ -289,7 +290,6 @@ fn process_phase(self: *ChunkManager) !void {
                 self.chunks_to_mesh.clearRetainingCapacity();
 
                 self.tasks_left = self.pending_tasks.items.len;
-                self.cond.broadcast();
             }
 
             if (self.tasks_left == 0) {
@@ -378,11 +378,18 @@ fn process_phase(self: *ChunkManager) !void {
                                 self.shared_gpa(),
                                 task,
                             );
+
+                            for (Block.Neighbours(3).deltas) |d| {
+                                try self.chunks_to_mesh.put(
+                                    self.world.get_gpa(),
+                                    d + chunk.coords,
+                                    {},
+                                );
+                            }
                         }
                     }
                 }
 
-                self.cond.broadcast();
                 self.tasks_left = self.pending_tasks.items.len;
             }
 

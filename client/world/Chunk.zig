@@ -38,6 +38,7 @@ compiled_light_levels: std.ArrayList(LightLevelInfo) = .empty,
 face_handles: std.EnumArray(Block.Direction, GpuAlloc.Handle) = .initFill(.invalid),
 light_levels_handle: GpuAlloc.Handle = .invalid,
 light_lists_handle: GpuAlloc.Handle = .invalid,
+uploaded_face_lengths: std.EnumArray(Block.Direction, usize) = .initFill(0),
 
 const OOM = std.mem.Allocator.Error;
 pub fn init(world: *World, coords: Coords) OOM!*Chunk {
