@@ -79,8 +79,14 @@ pub fn init(world: *World, opts: Options) !*ChunkManager {
     try self.workers.ensureTotalCapacity(world.get_gpa(), thread_count + 1);
     _ = Worker.init(self);
 
-    for (self.threads) |*thread| {
+    for (self.threads, 0..) |*thread, i| {
         thread.* = try .spawn(.{}, Worker.init_and_run, .{self});
+        const name = try std.fmt.allocPrint(
+            App.static_alloc(),
+            ".chunk.{d}",
+            .{i},
+        );
+        try thread.setName(name);
     }
 
     logger.info("{*}: initialized", .{self});
@@ -548,7 +554,7 @@ fn on_imgui(self: *ChunkManager) !void {
         \\    meshes: {d}
         \\    region: {d} {}...{}
         \\Chunk Memory:
-        \\    shared: {f}
+        \\    shared: {Bi:.2}
     , .{
         std.fmt.Alt(std.DoublyLinkedList, fmt_queue){ .data = self.phase_queue },
         self.tasks_per_second.measurement,
@@ -558,17 +564,17 @@ fn on_imgui(self: *ChunkManager) !void {
         self.world.chunks.count(),
         self.cur_center - self.cur_radius,
         self.cur_center + self.cur_radius,
-        util.MemoryUsage.from_bytes(self.world.shared_gpa_base.total_requested_bytes),
+        self.world.shared_gpa_base.total_requested_bytes,
     }, 0);
 
     c.igText("%s", @as(c_str, text1));
 
     for (self.workers.values()) |*worker| {
         const text2 = try std.fmt.allocPrintSentinel(App.frame_alloc(),
-            \\    {*}: {f}
+            \\    {*}: {Bi:.2}
         , .{
             worker,
-            util.MemoryUsage.from_bytes(worker.gpa.total_requested_bytes),
+            worker.gpa.total_requested_bytes,
         }, 0);
         c.igText("%s", @as(c_str, text2));
     }

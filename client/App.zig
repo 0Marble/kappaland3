@@ -258,17 +258,17 @@ fn on_imgui(self: *App) !void {
         \\pid:     {d}
         \\runtime: {D}
         \\CPU Memory: 
-        \\    main:   {f}
-        \\    frame:  {f}
-        \\    static: {f}
+        \\    main:   {Bi:.2}
+        \\    frame:  {Bi:.2}
+        \\    static: {Bi:.2}
         \\
     , .{
         Options.build_id,
         std.os.linux.getpid(),
         (std.time.milliTimestamp() - self.frame_data.start) * std.time.ns_per_ms,
-        util.MemoryUsage.from_bytes(App.main_alloc.total_requested_bytes),
-        util.MemoryUsage.from_bytes(self.frame_memory.queryCapacity()),
-        util.MemoryUsage.from_bytes(self.static_memory.queryCapacity()),
+        App.main_alloc.total_requested_bytes,
+        self.frame_memory.queryCapacity(),
+        self.static_memory.queryCapacity(),
     });
 
     const mem_str = try buf.toOwnedSliceSentinel(App.frame_alloc(), 0);

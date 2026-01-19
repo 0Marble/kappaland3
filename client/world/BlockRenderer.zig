@@ -418,8 +418,8 @@ fn on_imgui(self: *BlockRenderer) !void {
         \\    drawn:     {d}
         \\    triangles: {d}/{d}
         \\GPU Memory:
-        \\    faces:      {Bi}
-        \\    lights:     {Bi}+{Bi}
+        \\    faces:      {Bi:.2}
+        \\    lights:     {Bi:.2}+{Bi:.2}
     ,
         .{
             self.drawn_chunks_cnt,
@@ -490,6 +490,8 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
 
         const chunk = self.world.chunks.get(coords) orelse continue;
         if (chunk.light_levels_handle != .invalid) {
+            std.debug.assert(chunk.light_lists_handle != .invalid);
+
             const light_levels_range = self.light_levels
                 .get_range(chunk.light_levels_handle).?;
             const light_lists_range = self.light_lists

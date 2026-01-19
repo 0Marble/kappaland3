@@ -13,7 +13,7 @@ pub const CHUNK_SIZE = Chunk.CHUNK_SIZE;
 chunk_manager: *ChunkManager = undefined,
 renderer: *BlockRenderer = undefined,
 chunk_pool: std.heap.MemoryPool(Chunk) = undefined,
-chunks: std.ArrayHashMapUnmanaged(Coords, *Chunk, CoordsHash, true) = .empty,
+chunks: ChunkHashMap = .empty,
 
 normal_gpa: std.mem.Allocator,
 shared_gpa_base: Gpa = .init,
@@ -23,12 +23,13 @@ load_radius: Coords = .{ Options.world_size, Options.world_height, Options.world
 
 const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
 
+const ChunkHashMap = std.ArrayHashMapUnmanaged(Coords, *Chunk, CoordsHash, true);
+
 const CoordsHash = struct {
     pub fn hash(_: CoordsHash, x: Coords) u32 {
-        const BITS = 8;
         const y: @Vector(3, u32) = @bitCast(x);
-        const z: @Vector(3, std.meta.Int(.unsigned, BITS)) = @truncate(y);
-        const w: u32 = @intCast(@as(std.meta.Int(.unsigned, BITS * 3), @bitCast(z)));
+        const z: @Vector(3, u8) = @truncate(y);
+        const w: u32 = @intCast(@as(u24, @bitCast(z)));
         return std.hash.int(w);
     }
 

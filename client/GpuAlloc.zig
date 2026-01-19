@@ -1,6 +1,5 @@
 const gl = @import("gl");
 const gl_call = @import("util.zig").gl_call;
-const MemoryUsage = @import("util.zig").MemoryUsage;
 
 const std = @import("std");
 const Options = @import("ClientOptions");
@@ -243,5 +242,5 @@ fn full_realloc(self: *GpuAlloc) !void {
     }
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
     self.size = new_size;
-    logger.info("{*}: Allocated {f} on the gpu", .{ self, MemoryUsage.from_bytes(self.size) });
+    logger.info("{*}: Allocated {Bi:.2} on the gpu", .{ self, self.size });
 }

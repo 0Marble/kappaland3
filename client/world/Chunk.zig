@@ -58,7 +58,7 @@ pub fn deinit(self: *Chunk, shared_gpa: std.mem.Allocator) void {
     while (it.next()) |entry| {
         const dir = entry.key;
         const other = entry.value.*;
-        other.neighbours.remove(dir);
+        other.neighbours.remove(dir.flip());
     }
     for (&self.faces.values) |*faces| {
         faces.deinit(shared_gpa);
