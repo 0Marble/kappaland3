@@ -15,6 +15,7 @@ const Game = @This();
 camera: Camera,
 world: *World,
 current_selected_block: Block,
+model: ModelRenderer.Model,
 
 const Instance = struct {
     var instance: Game = undefined;
@@ -47,6 +48,10 @@ fn on_attach(self: *Game) !void {
 
     logger.info("{*}: initializing world", .{self});
     self.world = try World.init(App.gpa());
+
+    try App.get_renderer().add_step(ModelRenderer.draw, .{});
+    self.model = try ModelRenderer.Model.instantiate(".models.stuff.zigga");
+    try self.model.set_transform(zm.Mat4f.translationVec3(.{ 0, 10, 0 }));
 
     logger.info("{*}: Attatched", .{self});
 }
@@ -111,6 +116,7 @@ fn on_resize(self: *Game, w: i32, h: i32) App.UnhandledError!void {
 }
 
 fn on_detach(self: *Game) void {
+    self.model.kill();
     self.camera.deinit();
     self.world.deinit();
     logger.info("{*}: Detatched", .{self});

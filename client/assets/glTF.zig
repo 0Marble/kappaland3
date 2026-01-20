@@ -34,8 +34,16 @@ pub fn init(gpa: std.mem.Allocator, file: *VFS.File) !*glTF {
     self.* = glTF{ .arena = arena };
 
     var src: [2]Shader.Source = .{
-        Shader.Source{ .name = "vert", .sources = &.{vert}, .kind = gl.VERTEX_SHADER },
-        Shader.Source{ .name = "frag", .sources = &.{frag}, .kind = gl.FRAGMENT_SHADER },
+        Shader.Source{
+            .name = "vert",
+            .sources = &.{vert},
+            .kind = gl.VERTEX_SHADER,
+        },
+        Shader.Source{
+            .name = "frag",
+            .sources = &.{frag},
+            .kind = gl.FRAGMENT_SHADER,
+        },
     };
     self.shader = try .init(&src, "gltf_pass");
     try self.upload(&parser);
@@ -162,7 +170,10 @@ fn upload(self: *glTF, parser: *Parser) !void {
 
     const gpa = self.arena.allocator();
     self.buffers = try gpa.alloc(gl.uint, parser.buffers.items.len);
-    try gl_call(gl.GenBuffers(@intCast(parser.buffers.items.len), @ptrCast(self.buffers)));
+    try gl_call(gl.GenBuffers(
+        @intCast(parser.buffers.items.len),
+        @ptrCast(self.buffers),
+    ));
 
     for (parser.buffers.items, self.buffers) |data, buf| {
         try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, buf));
@@ -766,7 +777,7 @@ const Mesh = struct {
         extra: ?Extra = null,
 
         const AttribMap = struct {
-            const Attribute = enum { POSITION, NORMAL, TEXCOORD_0 };
+            const Attribute = enum { POSITION, NORMAL, TEXCOORD_0, JOINTS_0, WEIGHTS_0 };
 
             map: std.EnumMap(Attribute, Integer),
 
@@ -870,6 +881,8 @@ const locations = std.EnumArray(Mesh.Primitive.AttribMap.Attribute, u32).init(.{
     .POSITION = 0,
     .NORMAL = 1,
     .TEXCOORD_0 = 2,
+    .JOINTS_0 = 3,
+    .WEIGHTS_0 = 4,
 });
 
 const NODE = 3;
@@ -945,11 +958,13 @@ const vert =
     \\  norm_transform[3] = vec4(0, 0, 0, 1);
     \\  norm_transform = inverse(transpose(norm_transform));
     \\
-    \\  vec4 view_norm = u_view * norm_transform * vec4(vert_norm, 0);
-    \\  vec4 view_pos = u_view * model * vec4(vert_pos, 1);
+    \\  vec4 world_norm = norm_transform * vec4(vert_norm, 0);
+    \\  vec4 world_pos = model * vec4(vert_pos, 1);
+    \\  vec4 view_norm = u_view * world_norm;
+    \\  vec4 view_pos = u_view * world_pos;
     \\  
-    \\  frag_pos = view_pos.xyz;
-    \\  frag_norm = view_norm.xyz;
+    \\  frag_pos = world_pos.xyz;
+    \\  frag_norm = world_norm.xyz;
     \\  frag_uv = vert_uv;
     \\  gl_Position = u_proj * view_pos;
     \\}

@@ -442,7 +442,7 @@ fn init_screen(self: *Renderer) !void {
         .{ .name = "render_frag", .sources = &.{lighting_frag}, .kind = gl.FRAGMENT_SHADER },
     };
     self.lighting_pass = try .init(&render_sources, "lighting_pass");
-    try self.lighting_pass.set_vec3("u_ambient", .{ 0.1, 0.1, 0.1 });
+    try self.lighting_pass.set_vec3("u_ambient", .{ 0.3, 0.3, 0.3 });
     try self.lighting_pass.set_vec3("u_light_color", .{ 1, 1, 1 });
     const light_dir_world = zm.vec.normalize(zm.Vec3f{ 1, 1, 1 });
     try self.lighting_pass.set_vec3("u_light_dir", light_dir_world);
@@ -747,7 +747,7 @@ const lighting_frag =
     \\  float ssao = texture(u_ssao_tex, frag_uv).x;
     \\  vec3 light_color = sample_light();
     \\
-    \\  vec3 ambient = (u_ambient * light_color) * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
+    \\  vec3 ambient = (u_ambient + light_color) * frag_color * (u_ssao_enabled ? (1 - ssao) : 1);
     \\
     \\  vec3 norm = normalize(frag_norm);
     \\  vec3 light_dir = u_light_dir;
