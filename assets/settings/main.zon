@@ -13,7 +13,7 @@
                         .{
                             .name = "enable",
                             .kind = .checkbox,
-                            .value = true,
+                            .value = false,
                         },
                         .{
                             .name = "blur",
@@ -45,7 +45,7 @@
                         .{
                             .name = "enable",
                             .kind = .checkbox,
-                            .value = true,
+                            .value = false,
                         },
                         .{
                             .name = "contrast",
@@ -89,6 +89,19 @@
                     .min = 0.0,
                     .max = 2.0,
                     .value = 1.5,
+                },
+            },
+        },
+        .{
+            .name = "world",
+            .kind = .section,
+            .children = .{
+                .{
+                    .name = "load_distance",
+                    .kind = .int_slider,
+                    .min = 0,
+                    .max = 64,
+                    .value = 4,
                 },
             },
         },

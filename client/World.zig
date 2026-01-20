@@ -53,6 +53,9 @@ pub fn init(gpa: std.mem.Allocator) !*World {
 
     try App.get_renderer().add_step(BlockRenderer.draw, .{self.renderer});
 
+    const evt = try App.settings().settings_change_event(".main.world.load_distance");
+    _ = try App.event_manager().add_listener(evt, on_load_distance_changed, .{self}, @src());
+
     logger.info("{*}: initialized!", .{self});
 
     return self;
@@ -128,4 +131,8 @@ pub fn to_world_coord(pos: zm.Vec3f) Coords {
 // [center - radius, center + radius]
 pub fn currently_loaded_region(self: *World) struct { Coords, Coords } {
     return .{ self.chunk_manager.cur_center, self.chunk_manager.cur_radius };
+}
+
+fn on_load_distance_changed(self: *World, new_dist: i32) void {
+    self.load_radius = .{ new_dist, Options.world_height, new_dist };
 }

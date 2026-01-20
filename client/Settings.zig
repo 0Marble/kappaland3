@@ -291,15 +291,16 @@ fn load_template_rec(
             try ctx.stack.append(App.frame_alloc(), header.name);
             defer _ = ctx.stack.pop();
             const sec = try ctx.zon.parse_node(HalfParsedSection, App.frame_alloc(), node_idx);
-            for (sec.children) |child| try self.load_template_rec(ctx, child);
+            for (sec.children, 0..) |child, i| self.load_template_rec(ctx, child) catch |err| {
+                logger.err("cound not load child {d} of section {s}: {}", .{ i, header.name, err });
+            };
         },
         inline else => |tag| {
             const T = std.meta.TagPayload(Node, tag);
             const val: T = try ctx.zon.parse_node(T, self.arena.allocator(), node_idx);
-            try self.set_value(
-                try self.concat(ctx.stack.items, header.name),
-                @unionInit(Node, @tagName(tag), val),
-            );
+            const name = try self.concat(ctx.stack.items, header.name);
+            try self.set_value(name, @unionInit(Node, @tagName(tag), val));
+            logger.info("registered setting {s}", .{name});
         },
     }
 }
