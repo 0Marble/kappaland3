@@ -83,4 +83,16 @@
         .desc = "use light debug textures",
         .default = false,
     },
+    .{
+        .type = .usize,
+        .name = "log_memory",
+        .desc = "maximum mempory used by log",
+        .default = 0x100000,
+    },
+    .{
+        .type = .usize,
+        .name = "log_lines",
+        .desc = "maximum number of log lines",
+        .default = 1000,
+    },
 }

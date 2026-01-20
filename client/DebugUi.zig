@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("c.zig").c;
 const App = @import("App.zig");
 const Options = @import("Build").Options;
+const Log = @import("Log.zig");
 
 const OOM = std.mem.Allocator.Error;
 
@@ -101,6 +102,12 @@ pub fn draw(self: *DebugUi) void {
         }
         c.igEnd();
     }
+
+    if (c.igBegin("Log", null, 0)) {
+        Log.on_imgui();
+        c.igEnd();
+    }
+
     c.igRender();
 
     self.frames = .empty;
