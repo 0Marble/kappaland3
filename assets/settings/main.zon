@@ -123,6 +123,47 @@
                     .min = 0,
                     .max = 1.0,
                 },
+                .{
+                    .name = "keys",
+                    .kind = .section,
+                    .children = .{
+                        .{
+                            .name = "front",
+                            .kind = .keybind,
+                            .value = "w",
+                        },
+                        .{
+                            .name = "back",
+                            .kind = .keybind,
+                            .value = "s",
+                        },
+                        .{
+                            .name = "left",
+                            .kind = .keybind,
+                            .value = "a",
+                        },
+                        .{
+                            .name = "right",
+                            .kind = .keybind,
+                            .value = "d",
+                        },
+                        .{
+                            .name = "up",
+                            .kind = .keybind,
+                            .value = "space",
+                        },
+                        .{
+                            .name = "down",
+                            .kind = .keybind,
+                            .value = "left shift",
+                        },
+                        .{
+                            .name = "detatch",
+                            .kind = .keybind,
+                            .value = "[",
+                        },
+                    },
+                },
             },
         },
     },

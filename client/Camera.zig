@@ -37,22 +37,12 @@ pub fn init(self: *Camera, fov: f32, aspect: f32) !void {
     try App.keys().bind_action(".main.keys.look_around", .{ .mouse_move = {} });
     try App.keys().on_action(".main.keys.look_around", look_around, .{self}, @src());
 
-    inline for (comptime std.meta.tags(Dir), .{ .W, .S, .D, .A, .SPACE, .LSHIFT }) |dir, key| {
-        const name = ".main.keys.walk." ++ @tagName(dir);
-        try App.keys().register_action(name);
-        try App.keys().bind_action(
-            name,
-            .{ .scancode = .from_sdl(@field(c, "SDL_SCANCODE_" ++ @tagName(key))) },
-        );
+    inline for (comptime std.enums.values(Dir)) |dir| {
+        const name = ".main.controls.keys." ++ @tagName(dir);
         try App.keys().on_action(name, move, .{ self, dir }, @src());
     }
+    try App.keys().on_action(".main.controls.keys.detatch", detatch, .{self}, @src());
 
-    try App.keys().register_action(".main.keys.detatch");
-    try App.keys().bind_action(
-        ".main.keys.detatch",
-        .{ .scancode = .from_sdl(c.SDL_SCANCODE_LEFTBRACKET) },
-    );
-    try App.keys().on_action(".main.keys.detatch", detatch, .{self}, @src());
     {
         const evt = try App.settings().settings_change_event(".main.renderer.fov");
         _ = try App.event_manager().add_listener(evt, Frustum.update_fov, .{&self.frustum}, @src());

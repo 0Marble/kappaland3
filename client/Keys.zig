@@ -3,6 +3,7 @@ const std = @import("std");
 const c = @import("c.zig").c;
 const EventManager = @import("libmine").EventManager;
 const OOM = std.mem.Allocator.Error;
+const logger = std.log.scoped(.keys);
 
 this_frame_pressed_keys: std.AutoHashMapUnmanaged(Scancode, void),
 prev_frame_pressed_keys: std.AutoHashMapUnmanaged(Scancode, void),
@@ -29,6 +30,19 @@ pub fn init(self: *Keys) !void {
         .key_pressed_actions = .empty,
         .mouse_move_actions = .{},
     };
+
+    for (App.settings().map.keys(), App.settings().map.values()) |name, val| {
+        if (!std.mem.startsWith(u8, name, ".main.controls.keys")) continue;
+        try self.register_action(name);
+        try self.bind_action(name, .{ .scancode = .from_sdl(val.keybind.value) });
+        const evt = try App.settings().settings_change_event(name);
+        _ = try App.event_manager().add_listener(
+            evt,
+            on_keybdind_changed,
+            .{ self, name },
+            @src(),
+        );
+    }
 }
 
 pub fn deinit(self: *Keys) void {
@@ -165,7 +179,10 @@ pub fn on_action(
     args: anytype,
     src: std.builtin.SourceLocation,
 ) !void {
-    const action = self.actions.get(name) orelse return error.NoSuchAction;
+    const action = self.actions.get(name) orelse {
+        logger.err("attempted to bind to non-existant action '{s}'", .{name});
+        return error.NoSuchAction;
+    };
     _ = try App.event_manager().add_listener(action.event, func, args, src);
 }
 
@@ -294,3 +311,11 @@ pub const MouseMove = struct {
     dx: f32,
     dy: f32,
 };
+
+fn on_keybdind_changed(
+    self: *Keys,
+    name: []const u8,
+    new_scancode: c.SDL_Scancode,
+) void {
+    self.bind_action(name, .{ .scancode = .from_sdl(new_scancode) }) catch unreachable;
+}

@@ -5,6 +5,7 @@ const c = @import("c.zig").c;
 const c_str = @import("c.zig").c_str;
 const EventManager = @import("libmine").EventManager;
 const VFS = @import("assets/VFS.zig");
+const sdl_call = @import("util.zig").sdl_call;
 
 events: std.StringHashMapUnmanaged(EventManager.Event),
 save_on_exit: bool,
@@ -51,6 +52,15 @@ pub fn load(self: *Settings) !void {
         var orig = self.map.get(name) orelse continue;
         switch (@as(Node.Tag, orig)) {
             .section => continue,
+            .keybind => {
+                const scancode = try zon.parse_node(
+                    [:0]const u8,
+                    self.arena.allocator(),
+                    root.vals.at(@intCast(idx)),
+                );
+                orig.keybind.value = try sdl_call(c.SDL_GetScancodeFromName(scancode));
+                try self.set_value(name, orig);
+            },
             inline else => |tag| {
                 const T = @FieldType(std.meta.TagPayload(Node, tag), "value");
                 const val = try zon.parse_node(T, self.arena.allocator(), root.vals.at(@intCast(idx)));
@@ -73,8 +83,22 @@ pub fn save(self: *Settings) !void {
     while (it.next()) |kv| {
         switch (@as(Node.Tag, kv.value_ptr.*)) {
             .section => {},
+            .keybind => {
+                const scancode_c_str: [*:0]const u8 = try sdl_call(
+                    c.SDL_GetScancodeName(kv.value_ptr.keybind.value),
+                );
+                const end = std.mem.indexOfSentinel(u8, 0, scancode_c_str);
+                var scancode: [:0]const u8 = undefined;
+                scancode.ptr = scancode_c_str;
+                scancode.len = end;
+                try struct_builder.field(kv.key_ptr.*, scancode, .{});
+            },
             inline else => |tag| {
-                try struct_builder.field(kv.key_ptr.*, @field(kv.value_ptr.*, @tagName(tag)).value, .{});
+                try struct_builder.field(
+                    kv.key_ptr.*,
+                    @field(kv.value_ptr.*, @tagName(tag)).value,
+                    .{},
+                );
             },
         }
     }
@@ -213,6 +237,38 @@ fn on_imgui_impl(self: *Settings) !void {
                     self.emit_on_changed(name, val);
                 }
             },
+            .keybind => {
+                c.igPushID_Ptr(name.ptr);
+                defer c.igPopID();
+
+                const keycode: [*c]const u8 = try sdl_call(
+                    c.SDL_GetScancodeName(val.keybind.value),
+                );
+                c.igText("%s: ", c_name);
+                c.igSameLine(0, 10);
+
+                const State = struct {
+                    var changing_keybind: ?[]const u8 = null;
+                };
+
+                if (@as([*]const u8, @ptrCast(State.changing_keybind)) == name.ptr) {
+                    const escape_name = try sdl_call(c.SDL_GetScancodeName(c.SDL_SCANCODE_ESCAPE));
+                    c.igText("'%s' to cancel", escape_name);
+                    var pressed_keys = App.keys().this_frame_pressed_keys.keyIterator();
+                    if (pressed_keys.next()) |key| {
+                        switch (key.scancode) {
+                            c.SDL_SCANCODE_ESCAPE => {},
+                            else => {
+                                val.keybind.value = key.scancode;
+                                self.emit_on_changed(name, val);
+                            },
+                        }
+                        State.changing_keybind = null;
+                    }
+                } else if (c.igButton(keycode, .{})) {
+                    State.changing_keybind = name;
+                }
+            },
 
             else => c.igText(
                 "%s: todo %s",
@@ -228,11 +284,13 @@ const Node = union(enum) {
     checkbox: Checkbox,
     int_slider: IntSlider,
     float_slider: FloatSlider,
+    keybind: Keybind,
 
     const Tag = std.meta.Tag(Node);
     const Checkbox = struct { value: bool };
     const IntSlider = struct { min: i32, max: i32, value: i32 };
     const FloatSlider = struct { min: f32, max: f32, value: f32 };
+    const Keybind = struct { value: c.SDL_Scancode };
 };
 
 const LoadCtx = struct {
@@ -294,6 +352,18 @@ fn load_template_rec(
             for (sec.children, 0..) |child, i| self.load_template_rec(ctx, child) catch |err| {
                 logger.err("cound not load child {d} of section {s}: {}", .{ i, header.name, err });
             };
+        },
+        .keybind => {
+            const KeybindStr = struct { value: [:0]const u8 };
+            const keybind_str = try ctx.zon.parse_node(
+                KeybindStr,
+                self.arena.allocator(),
+                node_idx,
+            );
+            const scancode: c.SDL_Scancode = try sdl_call(c.SDL_GetScancodeFromName(keybind_str.value));
+            const name = try self.concat(ctx.stack.items, header.name);
+            try self.set_value(name, .{ .keybind = .{ .value = scancode } });
+            logger.info("registered setting {s}", .{name});
         },
         inline else => |tag| {
             const T = std.meta.TagPayload(Node, tag);
