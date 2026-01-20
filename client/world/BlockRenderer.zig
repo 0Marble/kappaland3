@@ -56,6 +56,21 @@ drawn_chunks_cnt: usize,
 shown_triangle_count: usize,
 total_triangle_count: usize,
 
+chunks_with_meshes_or_lights: std.AutoArrayHashMapUnmanaged(*Chunk, void) = .empty,
+
+const CoordsHash = struct {
+    pub fn hash(_: CoordsHash, x: Coords) u32 {
+        const y: @Vector(3, u32) = @bitCast(x);
+        const z: @Vector(3, u8) = @truncate(y);
+        const w: u32 = @intCast(@as(u24, @bitCast(z)));
+        return std.hash.int(w);
+    }
+
+    pub fn eql(_: CoordsHash, x: Coords, y: Coords, _: usize) bool {
+        return @reduce(.And, x == y);
+    }
+};
+
 pub fn init(world: *World) !*BlockRenderer {
     const self = try App.gpa().create(BlockRenderer);
     self.world = world;
@@ -66,6 +81,7 @@ pub fn init(world: *World) !*BlockRenderer {
     self.drawn_chunks_cnt = 0;
     self.shown_triangle_count = 0;
     self.total_triangle_count = 0;
+    self.chunks_with_meshes_or_lights = .empty;
 
     var sources: [2]Shader.Source = .{
         Shader.Source{
@@ -229,6 +245,7 @@ pub fn deinit(self: *BlockRenderer) void {
     self.faces.deinit();
     self.light_lists.deinit();
     self.light_levels.deinit();
+    self.chunks_with_meshes_or_lights.deinit(App.gpa());
 
     gl.DeleteVertexArrays(1, @ptrCast(&self.block_vao));
     gl.DeleteBuffers(1, @ptrCast(&self.block_ibo));
@@ -346,6 +363,7 @@ pub fn upload_chunk_lights(self: *BlockRenderer, chunk: *Chunk) !void {
             @ptrCast(chunk.compiled_light_lists.items),
         ));
     }
+    try self.chunks_with_meshes_or_lights.put(App.gpa(), chunk, {});
 }
 
 pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
@@ -397,6 +415,7 @@ pub fn upload_chunk_mesh(self: *BlockRenderer, chunk: *Chunk) !void {
     }
 
     try gl_call(gl.BindBuffer(gl.ARRAY_BUFFER, 0));
+    try self.chunks_with_meshes_or_lights.put(App.gpa(), chunk, {});
 }
 
 pub fn destroy_chunk_mesh_and_lights(self: *BlockRenderer, chunk: *Chunk) !void {
@@ -416,6 +435,8 @@ pub fn destroy_chunk_mesh_and_lights(self: *BlockRenderer, chunk: *Chunk) !void 
         self.light_lists.free(chunk.light_lists_handle);
         chunk.light_lists_handle = .invalid;
     }
+
+    _ = self.chunks_with_meshes_or_lights.swapRemove(chunk);
 }
 
 fn on_imgui(self: *BlockRenderer) !void {
@@ -460,43 +481,39 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
     const two: Coords = @splat(2);
     const size: @Vector(3, usize) = @intCast(radius * two + one);
     const stride: @Vector(3, usize) = .{ size[1] * size[2], size[2], 1 };
-
     const n = @reduce(.Mul, size);
     std.debug.assert(radius[0] == radius[2]);
 
-    const draw_order = try ring_order(
-        App.frame_alloc(),
-        @intCast(radius[0]),
-        @intCast(radius[1]),
-    );
-    std.debug.assert(draw_order.len == n);
-
     var indirect = std.ArrayList(Indirect).empty;
+    try indirect.ensureTotalCapacity(
+        App.frame_alloc(),
+        6 * self.chunks_with_meshes_or_lights.count(),
+    );
+    var draw_order = std.ArrayList(usize).empty;
+    try draw_order.ensureTotalCapacity(App.frame_alloc(), n);
     var chunks = std.ArrayList(ChunkData).empty;
     try chunks.resize(App.frame_alloc(), n);
     var draw_id_to_chunk_idx = std.ArrayList(u32).empty;
 
     const cam_chunk = cam.chunk_coords();
     self.shown_triangle_count = 0;
-    outer: for (draw_order) |delta| {
+    outer: for (self.chunks_with_meshes_or_lights.keys()) |chunk| {
+        const delta = chunk.coords - center;
         std.debug.assert(@reduce(.And, radius + delta >= Coords{ 0, 0, 0 }));
         const chunk_idx: usize = @reduce(
             .Add,
             @as(@Vector(3, usize), @intCast(radius + delta)) * stride,
         );
 
-        const coords = delta + center;
         const chunk_data = &chunks.items[chunk_idx];
         chunk_data.* = ChunkData{
-            .x = coords[0],
-            .y = coords[1],
-            .z = coords[2],
+            .x = chunk.coords[0],
+            .y = chunk.coords[1],
+            .z = chunk.coords[2],
             .light_levels = 0,
             .light_lists = 0,
         };
 
-        const chunk = self.world.chunks.get(coords) orelse continue;
-        std.debug.assert(@reduce(.And, chunk.coords == coords));
         if (chunk.light_levels_handle != .invalid) {
             std.debug.assert(chunk.light_lists_handle != .invalid);
 
@@ -523,7 +540,7 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
             chunk.is_occluded)
             continue;
 
-        const bound = bounding_sphere(coords);
+        const bound = bounding_sphere(chunk.coords);
         if (do_frustum_culling and !cam.sphere_in_frustum(zm.vec.xyz(bound), bound[3]))
             continue;
 
@@ -536,7 +553,7 @@ fn compute_drawn_chunk_data(self: *BlockRenderer, cam: *Camera) !usize {
             had_iters = true;
 
             const range = self.faces.get_range(handle).?;
-            try indirect.append(App.frame_alloc(), Indirect{
+            indirect.appendAssumeCapacity(Indirect{
                 .count = 6,
                 .instance_count = @intCast(cnt),
                 .base_instance = @intCast(@divExact(range.offset, @sizeOf(FaceMesh))),
