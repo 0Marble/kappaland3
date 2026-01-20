@@ -35,7 +35,7 @@ renderer: Renderer,
 
 layers: std.ArrayList(Layer),
 
-const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true });
+const Gpa = std.heap.DebugAllocator(.{ .enable_memory_limit = true, .stack_trace_frames = 30 });
 const Arena = std.heap.ArenaAllocator;
 
 pub const UnhandledError = std.mem.Allocator.Error || util.GlError;
@@ -251,9 +251,7 @@ pub fn static_alloc() std.mem.Allocator {
 }
 
 fn on_imgui(self: *App) !void {
-    var buf: std.ArrayList(u8) = .empty;
-    const w = buf.writer(App.frame_alloc());
-    try w.print(
+    const mem_str = try std.fmt.allocPrintSentinel(App.frame_alloc(),
         \\build:   {s}
         \\pid:     {d}
         \\runtime: {D}
@@ -269,72 +267,59 @@ fn on_imgui(self: *App) !void {
         App.main_alloc.total_requested_bytes,
         self.frame_memory.queryCapacity(),
         self.static_memory.queryCapacity(),
-    });
+    }, 0);
 
-    const mem_str = try buf.toOwnedSliceSentinel(App.frame_alloc(), 0);
     c.igText("%s", mem_str.ptr);
 
     const State = struct {
         var running_perf = false;
-        var perf_pid: std.os.linux.pid_t = 0;
         var perf_started_on: i64 = 0;
+        var perf_proc: std.process.Child = undefined;
     };
 
-    if (!State.running_perf and c.igButton("run perf", .{})) blk: {
+    if (!State.running_perf and c.igButton("run perf", .{})) {
+        var buf = std.mem.zeroes([256]u8);
         const game_pid = std.os.linux.getpid();
+        const pid_str = try std.fmt.bufPrint(&buf, "{d}", .{game_pid});
 
-        State.perf_pid = std.posix.fork() catch |err| {
-            logger.warn(
-                "fork(): could not start perf-record process: {}",
-                .{err},
-            );
-            break :blk;
-        };
-        std.debug.assert(State.perf_pid != -1);
-
-        if (State.perf_pid != 0) {
-            logger.info("starting perf-record process {d}", .{State.perf_pid});
-            State.running_perf = true;
-            State.perf_started_on = app.frame_data.frame_start_time;
-            break :blk;
-        }
-
-        run_perf(game_pid) catch |err| {
-            logger.err("(perf-record): failed {}", .{err});
-        };
-        std.process.exit(0);
-    } else if (State.running_perf and c.igButton("stop perf", .{})) blk: {
-        std.posix.kill(State.perf_pid, std.posix.SIG.INT) catch |err| {
-            logger.err("could not kill perf-record: {}", .{err});
-        };
-        logger.info("waiting for perf-record to exit...", .{});
-        const waitpid = std.posix.waitpid(State.perf_pid, 0);
-        logger.info(
-            "perf-record: exited with status {d}",
-            .{waitpid.status},
+        State.perf_proc = std.process.Child.init(
+            &.{ "perf", "record", "-F", "99", "-a", "-g", "-p", pid_str },
+            App.gpa(),
         );
 
-        const child = std.posix.fork() catch |err| {
-            logger.warn(
-                "fork(): could not start perf-report process: {}",
-                .{err},
-            );
-            break :blk;
-        };
-
-        if (child != 0) {
-            State.running_perf = false;
-            logger.info("starting perf-report process {d}", .{child});
-            break :blk;
+        logger.info("starting perf-record", .{});
+        {
+            errdefer |err| logger.err("perf-record: failed to start: {}", .{err});
+            try State.perf_proc.spawn();
+            try State.perf_proc.waitForSpawn();
         }
+        logger.info("perf-record started", .{});
+        State.perf_started_on = app.frame_data.this_frame_start;
+        State.running_perf = true;
+    } else if (State.running_perf and c.igButton("stop perf", .{})) {
+        logger.info("stopping perf-record", .{});
+        const term = try State.perf_proc.kill();
+        logger.info("perf-record: exited with {}", .{term});
+        State.running_perf = false;
 
-        perf_flamegraph() catch |err| {
-            logger.err("(perf-report): failed {}", .{err});
-        };
-        std.process.exit(0);
+        logger.info("running perf-report", .{});
+        {
+            errdefer |err| logger.err("perf-report: error: {}", .{err});
+            const result = try std.process.Child.run(.{
+                .allocator = App.gpa(),
+                .argv = &.{ "perf", "script", "report", "flamegraph" },
+            });
+
+            logger.info("perf-report: exited with {}", .{result.term});
+            logger.info("perf-report: stdout: {s}", .{result.stdout});
+            logger.info("perf-report: stderr: {s}", .{result.stderr});
+            App.gpa().free(result.stdout);
+            App.gpa().free(result.stderr);
+        }
     }
+
     if (State.running_perf) {
-        c.igSameLine(0, 0);
+        c.igSameLine(0, 10.0);
         const elapsed = try std.fmt.allocPrintSentinel(
             App.frame_alloc(),
             "{D}",
@@ -343,37 +328,6 @@ fn on_imgui(self: *App) !void {
         );
         c.igText("%s", elapsed.ptr);
     }
-}
-
-fn perf_flamegraph() !void {
-    logger.info("(perf-report) starting", .{});
-    const res: std.posix.ExecveError!void = std.posix.execvpeZ(
-        "perf",
-        &.{ "perf", "script", "report", "flamegraph" },
-        &.{},
-    );
-
-    res catch |err| {
-        logger.err("(perf-report): could not start process: {}", .{err});
-        return err;
-    };
-}
-
-fn run_perf(parent: std.os.linux.pid_t) !void {
-    var buf = std.mem.zeroes([256]u8);
-    const pid_str = try std.fmt.bufPrintZ(&buf, "{d}", .{parent});
-
-    logger.info("(perf-record) starting", .{});
-    const res: std.posix.ExecveError!void = std.posix.execvpeZ(
-        "perf",
-        &.{ "perf", "record", "-F", "99", "-a", "-g", "-p", pid_str },
-        &.{},
-    );
-
-    res catch |err| {
-        logger.err("(perf-record): could not start process: {}", .{err});
-        return err;
-    };
 }
 
 pub fn run() UnhandledError!void {
